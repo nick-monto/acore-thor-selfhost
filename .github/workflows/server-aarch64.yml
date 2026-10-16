@@ -1,0 +1,106 @@
+name: server-aarch64
+
+# Builds the AzerothCore + mod-playerbots server for linux/arm64 and packages it with the
+# prebuilt client data, so the Thor never has to compile it (and no Docker is involved).
+# The arm64 runner is native, so this is a normal x86-speed build of an aarch64 target.
+#
+# First run of this workflow *is* gate G1 in docs/SERVER-STACK.md §9: it either produces the
+# tarball or tells us exactly which file fails to compile on aarch64.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["server-v*"]
+
+permissions:
+  contents: write
+
+env:
+  CORE_REPO: https://github.com/mod-playerbots/azerothcore-wotlk.git
+  CORE_COMMIT: 8a4e76eac8c4ccebf547113afe7b51d6c3e91641
+  PB_REPO: https://github.com/mod-playerbots/mod-playerbots.git
+  PB_COMMIT: d750b4b3a50effdf22bedc8032f0e8e5f7cb8091
+  DATA_URL: https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip
+  DATA_SHA256: a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+
+    steps:
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git cmake ninja-build make clang lld \
+            libboost-all-dev libssl-dev libreadline-dev zlib1g-dev \
+            libncurses-dev libmysqlclient-dev unzip zstd
+
+      - name: Fetch pinned sources
+        run: |
+          mkdir -p src && cd src
+          git init -q core && cd core
+          git remote add origin "$CORE_REPO"
+          git fetch -q --depth 1 origin "$CORE_COMMIT"
+          git checkout -q FETCH_HEAD
+          cd ..
+          git clone -q "$PB_REPO" playerbots
+          cd playerbots && git fetch -q --depth 1 origin "$PB_COMMIT" && git checkout -q FETCH_HEAD && cd ..
+          mkdir -p core/modules
+          cp -a playerbots core/modules/mod-playerbots      # path is load-bearing: DBUpdater/module SQL
+
+      - name: Configure
+        working-directory: src/core
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_INSTALL_PREFIX="$PWD/install" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAPPS_BUILD=all -DTOOLS_BUILD=all \
+            -DSCRIPTS=static -DMODULES=static \
+            -DBoost_USE_STATIC_LIBS=ON \
+            -DWITH_WARNINGS=OFF
+
+      - name: Build
+        working-directory: src/core
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Install
+        working-directory: src/core
+        run: cmake --install build
+
+      - name: Client data (dbc/maps/vmaps/mmaps)
+        run: |
+          curl -fL --retry 3 -o data.zip "$DATA_URL"
+          echo "$DATA_SHA256  data.zip" | sha256sum -c -
+          mkdir -p src/core/install/data
+          unzip -q -o data.zip -d src/core/install/data
+          rm data.zip
+
+      - name: Package
+        run: |
+          cd src/core/install
+          cp -a etc etc.dist
+          tar --zstd -cf ../../acore-server-arm64.tar.zst bin etc etc.dist data
+          cd ../..
+          ls -lh acore-server-arm64.tar.zst
+          sha256sum acore-server-arm64.tar.zst > acore-server-arm64.tar.zst.sha256
+          cat acore-server-arm64.tar.zst.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acore-server-arm64
+          path: |
+            acore-server-arm64.tar.zst
+            acore-server-arm64.tar.zst.sha256
+          retention-days: 30
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Server build $GITHUB_REF_NAME" \
+            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, linux/arm64, with client data v20.0." \
+            acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256

@@ -17,6 +17,9 @@ Design phase. Nothing here has been built or run on a Thor yet; this repo curren
 |---|---|
 | [`docs/LAUNCHER-HOSTING-DESIGN.md`](docs/LAUNCHER-HOSTING-DESIGN.md) | Can `wyattabuntjer/AYN-Thor-WoW-Launcher` support the self-hosted stack, and what exactly must change |
 | [`docs/SERVER-STACK.md`](docs/SERVER-STACK.md) | The server half: build, data, database, bots, supervision, and what of the guide transfers |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The ordered, copy-pasteable device steps (Termux + proot Ubuntu), with the gates to check as you go |
+| [`pins.toml`](pins.toml) | Exact commits, artifact hashes and ports every document refers to |
+| [`.github/workflows/server-aarch64.yml`](.github/workflows/server-aarch64.yml) | Builds the linux/arm64 server + client data on a native arm64 runner and attaches it to a release |
 
 Confidence labels: **[V]** verified against source or an artifact inspected here, **[R]** reported, **[I]** inference.
 
