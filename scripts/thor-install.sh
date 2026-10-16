@@ -1,28 +1,43 @@
 #!/usr/bin/env bash
 #
-# thor-install.sh - installs and first-boots the AzerothCore + mod-playerbots server
-#                   on an AYN Thor (Snapdragon 8 Gen 2, Android/Termux, aarch64).
+# thor-install.sh - install, repair, inspect and remove the AzerothCore + mod-playerbots
+#                   server for an AYN Thor (Snapdragon 8 Gen 2, Android/Termux, aarch64).
 #
 # Run it inside Termux as a normal user:
 #
-#     bash thor-install.sh
+#     bash thor-install.sh                 # install (see below)
+#     bash thor-install.sh --check         # report what install would do; change nothing
+#     bash thor-install.sh --status        # inspect an existing install (exit 1 if broken)
+#     bash thor-install.sh --repair        # fix what it can, then re-check
+#     bash thor-install.sh --uninstall     # stop, optionally dump the database, remove
 #
-# It installs an Ubuntu arm64 rootfs (proot-distro), then re-runs itself inside that
-# rootfs ("--inside") to install the server, initialise MySQL, write the configs,
-# populate the databases on first boot, create a GM account and generate the
-# start/stop scripts. Re-running is safe: every step checks its own state, and
-# --check reports without changing anything.
+# Everything is encapsulated: the rootfs is a plain directory, and every file this script
+# creates outside it is listed in a manifest, so removal is exact rather than "grep and hope".
 #
-# Step by step description: ../docs/RUNBOOK.md.  Pinned versions: ../pins.toml.
+#   <TERMUX_PREFIX>/var/lib/proot-distro/installed-rootfs/ubuntu   the Unix side (--purge-rootfs)
+#     /opt/acore           server: bin etc data src logs db run .thor-state   <- --root
+#     /opt/thor            this script's copy
+#   $HOME/.thor-wow        host state + manifest + database dumps
+#   $HOME/start-wow-server.sh, stop-wow-server.sh
+#
+# MySQL's data directory lives in <root>/db and its socket in <root>/run, so a removal does
+# not leave a database behind in /var/lib/mysql.
+#
+# Description of every step: ../docs/RUNBOOK.md.  Pinned versions: ../pins.toml.
 #
 # Flags:
 #   --check                 report what would happen; change nothing
+#   --status                inspect the install and exit non-zero if it needs repair
+#   --repair                check every component and fix what is broken
+#   --uninstall             remove the install (dumps the database with --keep-db)
+#   --purge-rootfs          with --uninstall: also remove the whole Ubuntu rootfs
+#   --keep-db               with --uninstall: dump the databases before removing
 #   --from-source           build the server in the rootfs instead of downloading the artifact
 #   --force                 re-download / overwrite existing server files
 #   --bots N                random bots to enable (default 50)
-#   --db-user NAME          MySQL user to create      (default acore)
+#   --db-user NAME          MySQL user                (default acore)
 #   --db-pass PASS          MySQL password            (default: generated)
-#   --account NAME          GM account to create      (default admin)
+#   --account NAME          GM account                (default admin)
 #   --account-pass PASS     GM password               (default: generated)
 #   --lan-ip IP             bind to the LAN and point the realm at IP (default: loopback only)
 #   --root DIR              install root in the rootfs (default /opt/acore)
@@ -31,11 +46,11 @@
 #   --boot-timeout SECS     first-boot wait for "World initialized" (default 1800)
 #   -h, --help              this text
 #
-# Note: the variable holding the install root is ROOT, not PREFIX, because Termux
-# already uses $PREFIX for its own usr tree.
+# Note: the install root is $ROOT, not $PREFIX, because Termux already uses $PREFIX.
 #
 set -euo pipefail
 
+SCRIPT_VERSION="2"
 CORE_REPO="https://github.com/mod-playerbots/azerothcore-wotlk"
 CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
@@ -44,6 +59,10 @@ RELEASE_URL="${THOR_RELEASE_URL:-https://github.com/nick-monto/acore-thor-selfho
 DATA_URL="https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
 DATA_SHA256="a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610"
 ROOT_DEFAULT="/opt/acore"
+ROOTFS_NAME="ubuntu"
+TERMUX_PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
+POLICY_RC_D="${POLICY_RC_D:-/usr/sbin/policy-rc.d}"     # overridable for tests
+HOST_STATE="${THOR_HOST_STATE:-$HOME/.thor-wow}"        # overridable for tests
 
 ROOT="$ROOT_DEFAULT"
 BOTS=50
@@ -54,17 +73,24 @@ ACCOUNT_PASS=""
 LAN_IP=""
 DATA_SRC="$DATA_URL"
 BOOT_TIMEOUT=1800
-MODE="host"          # host | inside
+MODE="host"            # host | inside
+ACTION="install"       # install | repair | uninstall | status
 CHECK=0
 FROM_SOURCE=0
 FORCE=0
+KEEP_DB=0
+PURGE_ROOTFS=0
 
 BIN_DIR=""
 CONF_DIR=""
 DATA_DIR=""
 SRC_DIR=""
+ARTIFACT_SHA=""
+PROBLEMS=0
+FIXES=0
 FIRST_BOOT_OK=1
 
+ORIGINAL_ARGS=("$@")
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
 
 # ---------------------------------------------------------------- output helpers
@@ -75,8 +101,10 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 note() { if [ "$CHECK" = 1 ]; then printf '  would: %s\n' "$*"; else "$@"; fi; }
+ok()   { printf 'ok    %s\n' "$*"; }
+bad()  { printf 'FAIL  %s\n' "$*"; PROBLEMS=$((PROBLEMS + 1)); }
 
-usage() { sed -n '3,32p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 2 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$SCRIPT_PATH"; }
 
 # ---------------------------------------------------------------- args
 
@@ -84,6 +112,12 @@ parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --check)        CHECK=1 ;;
+            --status)       ACTION="status" ;;
+            --repair)       ACTION="repair" ;;
+            --uninstall)    ACTION="uninstall" ;;
+            --install)      ACTION="install" ;;
+            --purge-rootfs) PURGE_ROOTFS=1 ;;
+            --keep-db)      KEEP_DB=1 ;;
             --from-source)  FROM_SOURCE=1 ;;
             --force)        FORCE=1 ;;
             --inside)       MODE="inside" ;;
@@ -105,15 +139,24 @@ parse_args() {
     case "$BOTS" in ''|*[!0-9]*) die "--bots must be a number" ;; esac
     case "$BOOT_TIMEOUT" in ''|*[!0-9]*) die "--boot-timeout must be a number" ;; esac
     case "$ROOT" in /*) ;; *) die "--root must be an absolute path" ;; esac
+    case "$ROOT" in /|/opt|/usr|/home|/etc|/var) die "--root must be a private directory, not $ROOT" ;; esac
+    refresh_paths
 }
 
-# ---------------------------------------------------------------- small helpers
+# ---------------------------------------------------------------- generic helpers
 
 random_password() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16; }
 
 sha256_file() { sha256sum "$1" | awk '{print $1}'; }
 
 human_size() { du -sh "$1" 2>/dev/null | awk '{print $1}' || true; }
+
+baked_conf_dir() { grep -aoE '/[A-Za-z0-9_./-]+/etc' "$1" 2>/dev/null | head -1 || true; }
+
+missing_libs() {   # missing_libs BINARY - runtime libraries the binary cannot find
+    have ldd || return 0
+    ldd "$1" 2>/dev/null | awk '/not found/ {print $1}' | sort -u
+}
 
 set_conf() {   # set_conf FILE KEY VALUE - replace the first live "KEY = ..." line, else append
     local file="$1" key="$2" value="$3" tmp
@@ -141,52 +184,293 @@ conf_get() {   # conf_get FILE KEY - print the live value (last uncommented defi
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
             if (key == want) { val = $0; sub(/^[^=]*=[[:space:]]*/, "", val); found = val }
         }
-        { }
         END { if (found != "") print found }
     ' "$1"
 }
 
-baked_conf_dir() { grep -aoE '/[A-Za-z0-9_./-]+/etc' "$1" 2>/dev/null | head -1 || true; }
+conf_get_unquoted() { conf_get "$1" "$2" | tr -d '"'; }
 
-missing_libs() {   # missing_libs BINARY - runtime libraries the binary cannot find
-    have ldd || return 0
-    ldd "$1" 2>/dev/null | awk '/not found/ {print $1}' | sort -u
+# ---------------------------------------------------------------- state and manifest
+
+INSIDE_SCRIPT_COPY="/opt/thor/thor-install.sh"
+
+# Paths derived from ROOT. refresh_paths() is called again whenever --root or the state file
+# changes ROOT, so --root DIR really moves the database, the socket and the state with it.
+refresh_paths() {
+    ROOTFS="$TERMUX_PREFIX/var/lib/proot-distro/installed-rootfs/$ROOTFS_NAME"
+    DB_DIR="$ROOT/db"
+    RUN_DIR="$ROOT/run"
+    SOCKET="$RUN_DIR/mysqld.sock"
+    STATE_DIR="$ROOT/.thor-state"
+}
+refresh_paths
+
+state_root() {   # where this stage keeps its state and manifest
+    if [ "$MODE" = "host" ]; then printf '%s' "$HOST_STATE"; else printf '%s' "$STATE_DIR"; fi
 }
 
-# ---------------------------------------------------------------- host stage (Termux)
+state_file() { printf '%s/state.env' "$(state_root)"; }
 
-stage_host() {
-    step "Termux preflight"
+state_save() {
+    local file; file="$(state_file)"
+    if [ "$CHECK" = 1 ]; then note "record install state in $file"; return 0; fi
+    mkdir -p "$(dirname "$file")"
+    umask 077
+    cat > "$file" <<EOF
+# Written by thor-install.sh $SCRIPT_VERSION on $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Sourced by --status, --repair and --uninstall; edit only if you know what you are doing.
+ROOT="$ROOT"
+ROOTFS="$ROOTFS"
+BIN_DIR="$BIN_DIR"
+CONF_DIR="$CONF_DIR"
+DATA_DIR="$DATA_DIR"
+SRC_DIR="$SRC_DIR"
+DB_USER="$DB_USER"
+DB_PASS="$DB_PASS"
+ACCOUNT="$ACCOUNT"
+ACCOUNT_PASS="$ACCOUNT_PASS"
+BOTS="$BOTS"
+LAN_IP="$LAN_IP"
+DATA_SRC="$DATA_SRC"
+ARTIFACT_SHA="$ARTIFACT_SHA"
+SCRIPT_VERSION="$SCRIPT_VERSION"
+EOF
+    umask 022
+    chmod 600 "$file"
+}
+
+state_load() {
+    local file; file="$(state_file)"
+    if [ ! -f "$file" ]; then
+        if [ "$ACTION" = "install" ]; then return 0; fi
+        warn "no state at $file - nothing installed here?"
+        return 1
+    fi
+    # shellcheck disable=SC1090  # generated by state_save above
+    . "$file"
+    refresh_paths
+    return 0
+}
+
+state_apply_cli() {   # CLI flags win over the state file
+    local saved=("${ORIGINAL_ARGS[@]:-}")
+    [ "${#saved[@]}" -eq 0 ] && return 0
+    parse_args "${saved[@]}" 2>/dev/null || true
+}
+
+manifest_add() {   # paths outside $ROOT created by this script
+    if [ "$CHECK" = 1 ]; then note "record $1 in the manifest"; return 0; fi
+    mkdir -p "$(state_root)"
+    printf '%s\n' "$1" >> "$(state_root)/manifest.txt"
+}
+
+manifest_paths() {
+    local file; file="$(state_root)/manifest.txt"
+    [ -f "$file" ] && sort -u "$file"
+}
+
+safe_remove() {   # never remove something that is not clearly ours
+    local path="$1" base="${2:-}"
+    case "$path" in /*) ;; *) warn "refusing to remove relative path: $path"; return 1 ;; esac
+    case "$path" in /|/opt|/usr|/etc|/var|/home|/data|"$TERMUX_PREFIX") warn "refusing to remove $path"; return 1 ;; esac
+    if [ -n "$base" ]; then
+        case "$path" in "$base"/*) ;; *) warn "refusing to remove $path (outside $base)"; return 1 ;; esac
+    fi
+    rm -rf "$path"
+}
+
+manifest_remove_all() {
+    local p removed=0
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        if safe_remove "$p"; then log "removed $p"; removed=$((removed + 1)); fi
+    done < <(manifest_paths)
+    if [ "$removed" = 0 ]; then log "nothing outside the install root was recorded"; fi
+}
+
+proot_login() {   # proot_login ARGS... - never fatal: the caller decides what a failure means
+    if [ "$CHECK" = 1 ]; then note proot-distro login "$@"; return 0; fi
+    if ! have proot-distro; then warn "proot-distro is not installed; skipping: proot-distro login $*"; return 1; fi
+    proot-distro login "$@"
+}
+
+proot_remove_rootfs() {   # proot_remove_rootfs NAME
+    if [ "$CHECK" = 1 ]; then note proot-distro remove "$1"; return 0; fi
+    if ! have proot-distro; then warn "proot-distro is not installed; skipping: proot-distro remove $1"; return 1; fi
+    proot-distro remove "$1"
+}
+
+# ---------------------------------------------------------------- mysql helpers (inside)
+
+mysql_admin() { mysql --protocol=socket --socket="$SOCKET" -uroot "$@"; }
+
+db_ping() { mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1; }
+
+db_start() {
+    mkdir -p "$RUN_DIR" "$DB_DIR" "$ROOT/logs"
+    chown mysql:mysql "$DB_DIR" "$RUN_DIR"
+    chown -R mysql:mysql "$DB_DIR"
+    if [ ! -d "$DB_DIR/mysql" ]; then
+        log "initialising the database directory $DB_DIR (first run)"
+        mysqld --initialize-insecure --user=mysql --datadir="$DB_DIR" \
+               --log-error="$ROOT/logs/mysql.err" >/dev/null 2>&1 \
+            || die "mysqld --initialize-insecure failed; see $ROOT/logs/mysql.err"
+    fi
+    db_ping && { log "mysqld already running"; return 0; }
+    log "starting mysqld (datadir $DB_DIR, socket $SOCKET)"
+    mysqld --user=mysql --datadir="$DB_DIR" --socket="$SOCKET" \
+           --bind-address=127.0.0.1 --port=3306 --skip-name-resolve \
+           --pid-file="$RUN_DIR/mysqld.pid" --log-error="$ROOT/logs/mysql.err" --daemonize \
+        || die "mysqld did not start; see $ROOT/logs/mysql.err"
+    local i
+    for i in $(seq 1 60); do
+        db_ping && return 0
+        sleep 1
+        if [ "$i" = 60 ]; then die "mysqld did not answer on $SOCKET; see $ROOT/logs/mysql.err"; fi
+    done
+}
+
+db_stop() {
+    if db_ping; then
+        mysqladmin --protocol=socket --socket="$SOCKET" shutdown 2>/dev/null || true
+    fi
+}
+
+db_query() { mysql_admin -N -B -e "$1" 2>/dev/null; }
+
+db_schema_exists() { [ "$(db_query "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$1'")" = "1" ]; }
+
+db_table_count() {
+    db_query "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$1'"
+}
+
+# ---------------------------------------------------------------- server console
+
+wait_for_log() {   # wait_for_log TIMEOUT PATTERN FILE...
+    local timeout="$1" pattern="$2"
+    shift 2
+    local i f
+    for i in $(seq 1 "$timeout"); do
+        for f in "$@"; do
+            if [ -n "$f" ] && [ -f "$f" ] && grep -qE "$pattern" "$f"; then return 0; fi
+        done
+        sleep 1
+    done
+    return 1
+}
+
+recent_logs() {   # the 3 most recently modified log files, newest first
+    find "$ROOT/logs" -type f \( -name '*.log' -o -name '*.out' \) -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | head -3 | cut -d' ' -f2-
+}
+
+world_console() {   # world_console TIMEOUT "console command" ...
+    local timeout="$1"
+    shift
+    local fifo="$ROOT/.console.fifo" wslog="$ROOT/logs/worldserver.out" aslog="$ROOT/logs/authserver.out"
+    rm -f "$fifo"
+    mkfifo "$fifo"
+    : > "$wslog"
+    : > "$aslog"
+    "$BIN_DIR/authserver" -c "$CONF_DIR/authserver.conf" > "$aslog" 2>&1 &
+    local as_pid=$!
+    "$BIN_DIR/worldserver" -c "$CONF_DIR/worldserver.conf" < "$fifo" > "$wslog" 2>&1 &
+    local ws_pid=$!
+    exec 9> "$fifo"          # completes the child's open-for-read, and keeps the console open
+
+    local -a logs=("$wslog" "$aslog")
+    mapfile -t -O 2 logs < <(recent_logs)
+    log "authserver pid $as_pid, worldserver pid $ws_pid: waiting up to ${timeout}s for the world"
+    if ! wait_for_log "$timeout" 'World initialized|ready\.\.\.' "${logs[@]}"; then
+        warn "worldserver did not report 'World initialized' within ${timeout}s - last lines of $wslog:"
+        tail -n 20 "$wslog" >&2 || true
+        exec 9>&-
+        kill "$ws_pid" "$as_pid" 2>/dev/null || true
+        rm -f "$fifo"
+        return 1
+    fi
+    log "world is up"
+    local cmd
+    for cmd in "$@"; do
+        printf '%s\n' "$cmd" >&9
+        sleep 3
+    done
+    printf 'server shutdown 1\n' >&9
+    exec 9>&-
+    local i
+    for i in $(seq 1 60); do
+        if ! kill -0 "$ws_pid" 2>/dev/null; then break; fi
+        sleep 1
+    done
+    kill "$ws_pid" "$as_pid" 2>/dev/null || true
+    wait "$ws_pid" 2>/dev/null || true
+    wait "$as_pid" 2>/dev/null || true
+    rm -f "$fifo"
+    return 0
+}
+
+realm_pin() {   # point realm 1 at the LAN address
+    if mysql_admin acore_auth -e "UPDATE realmlist SET address='$LAN_IP', localAddress='$LAN_IP' WHERE id=1;" 2>/dev/null; then
+        log "realm 1 pinned to $LAN_IP:8085"
+    else
+        warn "could not pin realm 1 (is the auth database populated?)"
+    fi
+}
+
+# ---------------------------------------------------------------- host stage
+
+write_host_wrappers() {
+    if [ "$CHECK" = 1 ]; then
+        note "write $HOME/start-wow-server.sh and $HOME/stop-wow-server.sh"
+        return 0
+    fi
+    umask 077
+    cat > "$HOME/start-wow-server.sh" <<WRAP
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock
+exec proot-distro login $ROOTFS_NAME -- $ROOT/run.sh
+WRAP
+    cat > "$HOME/stop-wow-server.sh" <<WRAP
+#!/data/data/com.termux/files/usr/bin/bash
+proot-distro login $ROOTFS_NAME -- $ROOT/stop.sh
+termux-wake-unlock
+WRAP
+    chmod +x "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"
+    umask 022
+    log "wrote $HOME/start-wow-server.sh and $HOME/stop-wow-server.sh"
+}
+
+host_preflight() {
     [ "$(uname -m)" = "aarch64" ] || die "this script targets aarch64 (got $(uname -m)); run it on the Thor"
     have pkg || die "this does not look like Termux (no 'pkg' command)"
     case "$(uname -o 2>/dev/null)" in
         Android) : ;;
         *) warn "uname -o did not say Android; continuing anyway" ;;
     esac
+}
 
+host_install() {
+    step "Termux preflight"
+    host_preflight
     local free_kb
     free_kb=$(df -Pk "$HOME" | awk 'NR == 2 {print $4}')
-    log "free space in \$HOME: $((free_kb / 1048576)) GB (server + SQL ~4 GB, client data ~1 GB, in-rootfs view)"
+    log "free space in \$HOME: $((free_kb / 1048576)) GB (server + database + SQL ~6 GB)"
     if [ "$free_kb" -lt 6000000 ]; then
-        warn "less than 6 GB free in \$HOME; the server files alone are ~4 GB"
+        warn "less than 6 GB free in \$HOME"
     fi
 
     step "Termux packages"
     note pkg update
     note pkg install -y proot-distro termux-api curl zstd
 
-    step "Keep the CPU awake while the server runs"
-    note termux-wake-lock
-
-    local rootfs="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/ubuntu"
-    step "Ubuntu arm64 rootfs"
-    if [ -d "$rootfs" ]; then
-        log "already installed: $rootfs"
+    step "Rootfs"
+    if [ -d "$ROOTFS" ]; then
+        log "already installed: $ROOTFS"
     else
-        note proot-distro install ubuntu
+        note proot-distro install "$ROOTFS_NAME"
     fi
 
-    step "Running the setup inside the rootfs"
+    step "Running the install inside the rootfs"
     local inner="/opt/thor/thor-install.sh"
     local args=(--inside --root "$ROOT" --bots "$BOTS" --db-user "$DB_USER"
                 --account "$ACCOUNT" --boot-timeout "$BOOT_TIMEOUT"
@@ -198,16 +482,134 @@ stage_host() {
     if [ "$FORCE" = 1 ]; then args+=(--force); fi
     if [ "$CHECK" = 1 ]; then args+=(--check); fi
 
-    note mkdir -p "$rootfs/opt/thor"
-    note cp "$SCRIPT_PATH" "$rootfs$inner"
-    note proot-distro login ubuntu -- bash "$inner" "${args[@]}"
+    note mkdir -p "$(dirname "$ROOTFS$inner")"
+    note cp "$SCRIPT_PATH" "$ROOTFS$inner"
+    note proot-distro login "$ROOTFS_NAME" -- bash "$inner" "${args[@]}"
 
+    step "Host side"
+    note termux-wake-lock
+    note mkdir -p "$HOST_STATE"
+    manifest_add "$HOME/start-wow-server.sh"
+    manifest_add "$HOME/stop-wow-server.sh"
+    manifest_add "$ROOTFS$inner"
+    write_host_wrappers
+
+    state_save
     step "Host side finished"
-    log "start the server from Termux with:  ~/start-wow-server.sh"
-    log "stop it with:                       ~/stop-wow-server.sh"
+    log "start with: ~/start-wow-server.sh   |   inspect with: bash thor-install.sh --status"
 }
 
-# ---------------------------------------------------------------- inside stage (Ubuntu rootfs)
+host_status() {
+    step "Termux side"
+    state_load || true
+    state_apply_cli
+    if [ -f "$(state_file)" ]; then ok "state file: $(state_file)"; else bad "no state file at $(state_file) (installed elsewhere? pass the same flags)"; fi
+    if [ -d "$ROOTFS" ]; then
+        ok "rootfs: $ROOTFS ($(human_size "$ROOTFS"))"
+    else
+        bad "rootfs missing: $ROOTFS"
+    fi
+    if [ -d "$ROOTFS$ROOT" ]; then
+        ok "install root: $ROOT ($(human_size "$ROOTFS$ROOT"))"
+    else
+        bad "install root missing: $ROOT (inside the rootfs)"
+    fi
+    local w
+    for w in "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"; do
+        if [ -x "$w" ]; then ok "wrapper: $w"; else bad "wrapper missing: $w"; fi
+    done
+    log "free space in \$HOME: $(( $(df -Pk "$HOME" | awk 'NR == 2 {print $4}') / 1048576 )) GB"
+    if [ -d "$ROOTFS" ] && [ -f "$ROOTFS$INSIDE_SCRIPT_COPY" ]; then
+        step "Inside the rootfs"
+        if ! proot_login "$ROOTFS_NAME" -- bash "$INSIDE_SCRIPT_COPY" --inside --root "$ROOT" --status; then
+            PROBLEMS=$((PROBLEMS + 1))
+        fi
+    else
+        warn "cannot inspect the inside (the script's copy is missing); run: proot-distro login $ROOTFS_NAME -- bash $INSIDE_SCRIPT_COPY --status"
+    fi
+    summary_status
+}
+
+host_repair() {
+    step "Termux side"
+    host_preflight
+    state_load || true
+    state_apply_cli
+    [ -d "$ROOTFS" ] || die "rootfs missing: $ROOTFS (install first)"
+    [ -f "$ROOTFS$INSIDE_SCRIPT_COPY" ] || die "the script's copy is missing from the rootfs: $INSIDE_SCRIPT_COPY"
+    local w
+    for w in "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"; do
+        if [ -x "$w" ]; then ok "wrapper: $w"; else warn "recreating $w"; manifest_add "$w"; fi
+    done
+    write_host_wrappers
+    step "Inside the rootfs"
+    proot_login "$ROOTFS_NAME" -- bash "$INSIDE_SCRIPT_COPY" --inside --root "$ROOT" --repair || warn "the inside repair did not run"
+    log "re-run --status to see the result"
+}
+
+host_uninstall() {
+    step "Termux side"
+    state_load || true
+    state_apply_cli
+    local purge="$PURGE_ROOTFS" keep="$KEEP_DB"
+    local dump
+    dump="$HOST_STATE/db-dump-$(date -u +%Y%m%dT%H%M%SZ).sql"
+
+    step "Stop the server"
+    if [ -f "$ROOTFS$ROOT/stop.sh" ]; then
+        proot_login "$ROOTFS_NAME" -- "$ROOT/stop.sh" || warn "could not run the stop script (already stopped?)"
+    else
+        log "no stop script at $ROOT/stop.sh (nothing to stop)"
+    fi
+
+    step "Inside cleanup"
+    if [ -f "$ROOTFS$INSIDE_SCRIPT_COPY" ]; then
+        if [ "$keep" = 1 ]; then
+            proot_login "$ROOTFS_NAME" -- bash "$INSIDE_SCRIPT_COPY" --inside --root "$ROOT" --uninstall --keep-db || warn "the inside cleanup did not run"
+        else
+            proot_login "$ROOTFS_NAME" -- bash "$INSIDE_SCRIPT_COPY" --inside --root "$ROOT" --uninstall || warn "the inside cleanup did not run"
+        fi
+        if [ "$keep" = 1 ] && [ -f "$ROOTFS$ROOT/.thor-state/db-dump.sql" ]; then
+            note mkdir -p "$HOST_STATE"
+            note mv "$ROOTFS$ROOT/.thor-state/db-dump.sql" "$dump"
+            log "database dump kept at $dump (restore: see --help notes in the file header)"
+        fi
+    else
+        log "no script copy inside the rootfs; skipping the inside cleanup"
+    fi
+
+    step "Removing the install root"
+    if [ "$CHECK" = 1 ]; then
+        note rm -rf "$ROOTFS$ROOT"
+    elif [ -d "$ROOTFS$ROOT" ]; then
+        safe_remove "$ROOTFS$ROOT" "$ROOTFS" && log "removed $ROOTFS$ROOT"
+    else
+        log "$ROOTFS$ROOT is already gone"
+    fi
+
+    step "Removing the files recorded in the host manifest"
+    manifest_remove_all
+    if [ -d "$ROOTFS/opt/thor" ]; then
+        if [ "$CHECK" = 1 ]; then note rm -rf "$ROOTFS/opt/thor"; else safe_remove "$ROOTFS/opt/thor" "$ROOTFS" && log "removed $ROOTFS/opt/thor"; fi
+    fi
+    note rm -f "$HOST_STATE/manifest.txt"
+
+    if [ "$purge" = 1 ]; then
+        step "Removing the whole rootfs"
+        proot_remove_rootfs "$ROOTFS_NAME" || warn "could not remove the rootfs; do it by hand: proot-distro remove $ROOTFS_NAME"
+    else
+        log "the Ubuntu rootfs is still there ($ROOTFS); it holds the apt packages"
+        log "remove it completely with: bash thor-install.sh --uninstall --purge-rootfs"
+    fi
+
+    step "Done"
+    log "state and any dump kept in $HOST_STATE"
+    log "if you dumped the database, restore it with:"
+    log "  proot-distro login $ROOTFS_NAME -- bash $INSIDE_SCRIPT_COPY --inside --install   # then"
+    log "  proot-distro login $ROOTFS_NAME -- mysql --protocol=socket --socket=$SOCKET -uroot < <dump>"
+}
+
+# ---------------------------------------------------------------- inside stage: install
 
 stage_inside() {
     step "Rootfs preflight"
@@ -223,18 +625,20 @@ stage_inside() {
     fetch_server
     layout_check
     ensure_client_data
-    init_db
+    db_start
     create_schema
     write_configs
     first_boot
     write_helpers
+    state_save
     summary
 }
 
 install_deps() {
     step "Ubuntu packages"
-    if [ ! -e /usr/sbin/policy-rc.d ]; then
-        note sh -c 'printf "#!/bin/sh\nexit 101\n" > /usr/sbin/policy-rc.d; chmod +x /usr/sbin/policy-rc.d'
+    if [ ! -e "$POLICY_RC_D" ]; then
+        note sh -c "printf '#!/bin/sh\nexit 101\n' > $POLICY_RC_D; chmod +x $POLICY_RC_D"
+        manifest_add "$POLICY_RC_D"
     fi
     export DEBIAN_FRONTEND=noninteractive
     note apt-get update
@@ -256,10 +660,10 @@ fetch_server() {
     if [ "$FROM_SOURCE" = 1 ]; then
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
-            log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT, cmake+install into $ROOT"
+            log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
             return 0
         fi
-        local src="/opt/acore-src"
+        local src="$ROOT/src-build"
         mkdir -p "$src/modules"
         fetch_git "$CORE_REPO" "$CORE_COMMIT" "$src"
         fetch_git "$PB_REPO" "$PB_COMMIT" "$src/modules/mod-playerbots"
@@ -285,12 +689,13 @@ fetch_server() {
     fi
     local tarball=/tmp/acore-server-arm64.tar.zst
     curl -fL --retry 3 -o "$tarball" "$RELEASE_URL" \
-        || die "download failed: $RELEASE_URL (push the repo and let the server-aarch64 workflow publish a release, or re-run with --from-source)"
+        || die "download failed: $RELEASE_URL (let the server-aarch64 workflow publish a release, or re-run with --from-source)"
     if curl -fsL -o "$tarball.sha256" "$RELEASE_URL.sha256" 2>/dev/null; then
         local want got
         want=$(awk '{print $1}' "$tarball.sha256")
         got=$(sha256_file "$tarball")
         [ "$want" = "$got" ] || die "checksum mismatch: expected $want, got $got"
+        ARTIFACT_SHA="$got"
         log "checksum ok: $got"
     else
         warn "no .sha256 beside the tarball; skipping verification"
@@ -321,6 +726,7 @@ layout_check() {
         return 0
     fi
     local candidate
+    BIN_DIR=""
     for candidate in "$ROOT/bin" "$ROOT/env/dist/bin"; do
         if [ -x "$candidate/worldserver" ]; then BIN_DIR="$candidate"; break; fi
     done
@@ -332,35 +738,32 @@ layout_check() {
     log "configs     : $CONF_DIR"
     log "client data : $DATA_DIR"
     log "sql sources : $SRC_DIR"
+    log "database    : $DB_DIR (socket $SOCKET)"
 
     local bin lib
     for bin in worldserver authserver; do
         lib=$(missing_libs "$BIN_DIR/$bin")
         if [ -n "$lib" ]; then
             warn "$bin is missing libraries: $(printf '%s' "$lib" | tr '\n' ' ')"
-            warn "  install them with: apt-get install -y <package>, then re-run --check"
+            warn "  install them, then re-run --status"
         fi
     done
+    ensure_conf_dir_link
+}
 
-    if [ ! -d "$SRC_DIR/data/sql" ]; then
-        warn "$SRC_DIR/data/sql is missing: the first boot cannot populate the databases"
-    fi
-    if [ ! -d "$SRC_DIR/modules/mod-playerbots/data/sql" ]; then
-        warn "$SRC_DIR/modules/mod-playerbots/data/sql is missing: the playerbots database cannot be created"
-    fi
-
+ensure_conf_dir_link() {   # module configs are read from the compile-time _CONF_DIR
     local baked
     baked=$(baked_conf_dir "$BIN_DIR/worldserver")
-    if [ -n "$baked" ] && [ "$baked" != "$CONF_DIR" ]; then
-        # module configs are read from the compile-time _CONF_DIR, never from -c
-        if [ -e "$baked" ]; then
-            warn "the binary reads module configs from $baked, which exists but is not $CONF_DIR"
-        else
-            log "linking $baked -> $CONF_DIR (module configs come from the build-time path)"
-            mkdir -p "$(dirname "$baked")"
-            ln -s "$CONF_DIR" "$baked"
-        fi
+    [ -n "$baked" ] || return 0
+    [ "$baked" = "$CONF_DIR" ] && return 0
+    if [ -e "$baked" ]; then
+        warn "the binary reads module configs from $baked, which exists but is not $CONF_DIR"
+        return 0
     fi
+    log "linking $baked -> $CONF_DIR (module configs come from the build-time path)"
+    mkdir -p "$(dirname "$baked")"
+    ln -s "$CONF_DIR" "$baked"
+    manifest_add "$baked"
 }
 
 ensure_client_data() {
@@ -375,7 +778,7 @@ ensure_client_data() {
     fi
     case "$DATA_SRC" in
         none)
-            warn "no client data requested; worldserver will need DataDir pointing at a directory with dbc/ and maps/"
+            warn "no client data requested; worldserver needs DataDir pointing at a directory with dbc/ and maps/"
             return 0
             ;;
         http*|ftp*)
@@ -400,34 +803,6 @@ ensure_client_data() {
     log "installed: $(human_size "$DATA_DIR")"
 }
 
-init_db() {
-    step "MySQL"
-    if [ "$CHECK" = 1 ]; then
-        log "would initialise /var/lib/mysql if empty, start mysqld on 127.0.0.1:3306 (socket /run/mysqld/mysqld.sock)"
-        return 0
-    fi
-    mkdir -p /run/mysqld
-    chown mysql:mysql /run/mysqld
-    if [ ! -d /var/lib/mysql/mysql ]; then
-        log "initialising the data directory (first run)"
-        mysqld --initialize-insecure --user=mysql --datadir=/var/lib/mysql
-    fi
-    if mysqladmin --protocol=socket ping >/dev/null 2>&1; then
-        log "mysqld already running"
-    else
-        log "starting mysqld"
-        mysqld --user=mysql --datadir=/var/lib/mysql --socket=/run/mysqld/mysqld.sock \
-               --bind-address=127.0.0.1 --port=3306 --skip-name-resolve --daemonize
-    fi
-    local i
-    for i in $(seq 1 60); do
-        if mysqladmin --protocol=socket ping >/dev/null 2>&1; then break; fi
-        sleep 1
-        if [ "$i" = 60 ]; then die "mysqld did not come up; see /var/log/mysql/error.log"; fi
-    done
-    log "server version: $(mysql --protocol=socket -N -B -e 'SELECT VERSION()')"
-}
-
 create_schema() {
     step "Databases and user"
     if [ -z "$DB_PASS" ]; then DB_PASS="$(random_password)"; fi
@@ -437,7 +812,7 @@ create_schema() {
         log "(acore_playerbots is created by the module's own updater on first boot)"
         return 0
     fi
-    mysql --protocol=socket -uroot <<SQL
+    mysql_admin <<SQL
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
@@ -449,11 +824,10 @@ GRANT ALL PRIVILEGES ON acore_characters.* TO '$DB_USER'@'127.0.0.1';
 GRANT ALL PRIVILEGES ON acore_playerbots.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
-    mysql --protocol=socket -uroot -N -B -e \
-        "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'acore%'"
+    db_query "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'acore%'"
 }
 
-conf_pair() {   # conf_pair NAME - print the live config file, creating it from NAME.conf.dist once
+conf_pair() {   # print the live config file, creating it from NAME.conf.dist once
     local dist="$CONF_DIR/$1.conf.dist" live="$CONF_DIR/$1.conf"
     if [ ! -f "$live" ]; then
         [ -f "$dist" ] || die "missing $dist (is the artifact complete?)"
@@ -466,9 +840,10 @@ conf_pair() {   # conf_pair NAME - print the live config file, creating it from 
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $ROOT/etc/{authserver,worldserver}.conf, $ROOT/etc/modules/playerbots.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/playerbots.conf and $ROOT/logs"
         return 0
     fi
+    [ -n "$BIN_DIR" ] || layout_check
     local bind_ip="$LAN_IP"
     if [ -z "$bind_ip" ]; then bind_ip="127.0.0.1"; fi
     local mysql_bin
@@ -496,7 +871,7 @@ write_configs() {
     set_conf "$as" LoginDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_auth\""
 
     mkdir -p "$ROOT/logs"
-    if [ -f "$CONF_DIR/modules/playerbots.conf.dist" ]; then
+    if [ -f "$CONF_DIR/modules/playerbots.conf.dist" ] || [ -f "$CONF_DIR/modules/playerbots.conf" ]; then
         pb="$(conf_pair modules/playerbots)"
         set_conf "$pb" Playerbots.Enabled              1
         set_conf "$pb" Playerbots.RandomBotAutologin    1
@@ -511,24 +886,6 @@ write_configs() {
     log "worldserver.conf: DataDir=$(conf_get "$ws" DataDir) BindIP=$(conf_get "$ws" BindIP)"
 }
 
-wait_for_log() {   # wait_for_log TIMEOUT PATTERN FILE...
-    local timeout="$1" pattern="$2"
-    shift 2
-    local i f
-    for i in $(seq 1 "$timeout"); do
-        for f in "$@"; do
-            if [ -n "$f" ] && [ -f "$f" ] && grep -qE "$pattern" "$f"; then return 0; fi
-        done
-        sleep 1
-    done
-    return 1
-}
-
-recent_logs() {   # recent_logs DIR - the 3 most recently modified *.log/*.out files, newest first
-    find "$1" -type f \( -name '*.log' -o -name '*.out' \) -printf '%T@ %p\n' 2>/dev/null \
-        | sort -rn | head -3 | cut -d' ' -f2-
-}
-
 first_boot() {
     step "First boot (populates the databases, then creates the GM account)"
     if [ "$CHECK" = 1 ]; then
@@ -536,98 +893,63 @@ first_boot() {
         log "then send: account create $ACCOUNT *** / account set gmlevel $ACCOUNT 3 -1 / server shutdown 1"
         return 0
     fi
-    local fifo="$ROOT/.console.fifo" wslog="$ROOT/logs/worldserver.out" aslog="$ROOT/logs/authserver.out"
-    rm -f "$fifo"
-    mkfifo "$fifo"
-    : > "$wslog"
-    : > "$aslog"
-
-    "$BIN_DIR/authserver" -c "$CONF_DIR/authserver.conf" > "$aslog" 2>&1 &
-    local as_pid=$!
-    "$BIN_DIR/worldserver" -c "$CONF_DIR/worldserver.conf" < "$fifo" > "$wslog" 2>&1 &
-    local ws_pid=$!
-    exec 9> "$fifo"     # completes the child's open-for-read, and keeps the console open
-    log "authserver pid $as_pid, worldserver pid $ws_pid: waiting up to ${BOOT_TIMEOUT}s for the world"
-
-    local -a logs=("$wslog" "$aslog")
-    mapfile -t -O 2 logs < <(recent_logs "$ROOT/logs")
-    if ! wait_for_log "$BOOT_TIMEOUT" 'World initialized|ready\.\.\.' "${logs[@]}"; then
-        warn "worldserver did not report 'World initialized' within ${BOOT_TIMEOUT}s - last lines of $wslog:"
-        tail -n 20 "$wslog" >&2 || true
-        warn "both processes are still running; leave this window open and watch $wslog, or kill them and re-run"
+    if ! world_console "$BOOT_TIMEOUT" \
+            "account create $ACCOUNT $ACCOUNT_PASS" \
+            "account set gmlevel $ACCOUNT 3 -1"; then
         FIRST_BOOT_OK=0
+        warn "the first boot did not finish; watch $ROOT/logs/worldserver.out or start the server and try again"
         return 0
     fi
-    log "world is up"
-
-    printf 'account create %s %s\n' "$ACCOUNT" "$ACCOUNT_PASS" >&9
-    sleep 3
-    printf 'account set gmlevel %s 3 -1\n' "$ACCOUNT" >&9
-    sleep 3
-    if [ -n "$LAN_IP" ]; then
-        mysql --protocol=socket -uroot acore_auth -e \
-            "UPDATE realmlist SET address='$LAN_IP', localAddress='$LAN_IP' WHERE id=1;"
-        log "realm 1 pinned to $LAN_IP:8085"
-    fi
-    if grep -qE 'Account created' "$wslog"; then
+    if grep -qE 'Account created' "$ROOT/logs/worldserver.out"; then
         log "account '$ACCOUNT' created"
     else
-        warn "could not confirm account creation; check $wslog and the account table"
+        warn "could not confirm account creation; check the account table"
     fi
-
-    printf 'server shutdown 1\n' >&9
-    exec 9>&-
-    local i
-    for i in $(seq 1 60); do
-        if ! kill -0 "$ws_pid" 2>/dev/null; then break; fi
-        sleep 1
-    done
-    kill "$ws_pid" 2>/dev/null || true
-    kill "$as_pid" 2>/dev/null || true
-    wait "$ws_pid" 2>/dev/null || true
-    wait "$as_pid" 2>/dev/null || true
-    rm -f "$fifo"
+    [ -n "$LAN_IP" ] && realm_pin
     log "first boot finished"
 }
 
 write_helpers() {
     step "Start/stop scripts"
     if [ "$CHECK" = 1 ]; then
-        log "would write $ROOT/{run.sh,stop.sh,start-db.sh,stop-db.sh,credentials.txt} and ~/start-wow-server.sh"
+        log "would write $ROOT/{run.sh,stop.sh,start-db.sh,stop-db.sh,credentials.txt}"
         return 0
     fi
     umask 077
     cat > "$ROOT/credentials.txt" <<EOF
-Created by thor-install.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
+Created by thor-install.sh $SCRIPT_VERSION on $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 database user : $DB_USER
 database pass : $DB_PASS
 gm account    : $ACCOUNT
 gm password   : $ACCOUNT_PASS
 
-MySQL root has no password over the unix socket (reachable from inside the rootfs only).
+MySQL root has no password over the unix socket $SOCKET (rootfs-local only).
+Everything this install owns lives in $ROOT; see $STATE_DIR/manifest.txt for the rest.
 EOF
     umask 022
 
     cat > "$ROOT/start-db.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld
-if ! mysqladmin --protocol=socket ping >/dev/null 2>&1; then
-    mysqld --user=mysql --datadir=/var/lib/mysql --socket=/run/mysqld/mysqld.sock \\
-           --bind-address=127.0.0.1 --port=3306 --skip-name-resolve --daemonize
+mkdir -p "$RUN_DIR" "$DB_DIR" "$ROOT/logs"
+chown mysql:mysql "$DB_DIR" "$RUN_DIR"
+if ! mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1; then
+    mysqld --user=mysql --datadir="$DB_DIR" --socket="$SOCKET" \\
+           --bind-address=127.0.0.1 --port=3306 --skip-name-resolve \\
+           --pid-file="$RUN_DIR/mysqld.pid" --log-error="$ROOT/logs/mysql.err" --daemonize
 fi
 for _ in \$(seq 1 60); do
-    mysqladmin --protocol=socket ping >/dev/null 2>&1 && exit 0
+    mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1 && exit 0
     sleep 1
 done
-echo "mysqld did not come up" >&2
+echo "mysqld did not come up; see $ROOT/logs/mysql.err" >&2
 exit 1
 EOF
 
-    cat > "$ROOT/stop-db.sh" <<'EOF'
+    cat > "$ROOT/stop-db.sh" <<EOF
 #!/usr/bin/env bash
-mysqladmin --protocol=socket shutdown 2>/dev/null || true
+mysqladmin --protocol=socket --socket="$SOCKET" shutdown 2>/dev/null || true
 EOF
 
     cat > "$ROOT/run.sh" <<EOF
@@ -658,32 +980,16 @@ while true; do
 done
 EOF
 
-    cat > "$ROOT/stop.sh" <<'EOF'
+    cat > "$ROOT/stop.sh" <<EOF
 #!/usr/bin/env bash
-pkill -f 'bin/worldserver' 2>/dev/null || true
-pkill -f 'bin/authserver' 2>/dev/null || true
-mysqladmin --protocol=socket shutdown 2>/dev/null || true
+cd "$ROOT" || exit 1
+pkill -f "$BIN_DIR/worldserver" 2>/dev/null || true
+pkill -f "$BIN_DIR/authserver" 2>/dev/null || true
+sleep 2
+"$ROOT/stop-db.sh"
 EOF
     chmod +x "$ROOT/run.sh" "$ROOT/stop.sh" "$ROOT/start-db.sh" "$ROOT/stop-db.sh"
-    log "wrote $ROOT/run.sh, $ROOT/stop.sh (and the two db helpers)"
-
-    local home="${TERMUX_HOME:-/data/data/com.termux/files/home}"
-    if [ -d "$home" ]; then
-        cat > "$home/start-wow-server.sh" <<EOF
-#!/data/data/com.termux/files/usr/bin/bash
-termux-wake-lock
-exec proot-distro login ubuntu -- $ROOT/run.sh
-EOF
-        cat > "$home/stop-wow-server.sh" <<EOF
-#!/data/data/com.termux/files/usr/bin/bash
-proot-distro login ubuntu -- $ROOT/stop.sh
-termux-wake-unlock
-EOF
-        chmod +x "$home/start-wow-server.sh" "$home/stop-wow-server.sh"
-        log "wrote $home/start-wow-server.sh and $home/stop-wow-server.sh"
-    else
-        log "not running inside Termux: skipping the ~/start-wow-server.sh wrappers"
-    fi
+    log "wrote $ROOT/run.sh, $ROOT/stop.sh (and the two database helpers)"
 }
 
 summary() {
@@ -693,32 +999,310 @@ summary() {
         return 0
     fi
     if [ "$FIRST_BOOT_OK" = 0 ]; then
-        warn "the first boot did not finish; start it again with $ROOT/run.sh and watch $ROOT/logs/worldserver.out"
+        warn "the first boot did not finish; run $ROOT/run.sh and watch $ROOT/logs/worldserver.out"
     fi
     cat <<EOF
 server      : $ROOT   (binaries $BIN_DIR, configs $CONF_DIR)
-databases   : acore_auth, acore_world, acore_characters, acore_playerbots
+database    : $DB_DIR, socket $SOCKET
 bots        : $BOTS (Playerbots.MinRandomBots / MaxRandomBots)
 gm account  : $ACCOUNT / $ACCOUNT_PASS  (also in $ROOT/credentials.txt)
 bind        : ${LAN_IP:-127.0.0.1}   (loopback unless --lan-ip was given)
 
+Manage it
+  inspect : bash thor-install.sh --status      (exit 1 when something needs repair)
+  repair  : bash thor-install.sh --repair
+  remove  : bash thor-install.sh --uninstall [--keep-db] [--purge-rootfs]
+  start   : ~/start-wow-server.sh              (stop: ~/stop-wow-server.sh)
+
 Next steps
-  1. start it from Termux:  ~/start-wow-server.sh
-  2. prove it with a PC 3.3.5a client before touching the launcher: re-run this
-     script with --lan-ip <thor-lan-ip>, set "set realmlist <thor-lan-ip>" in the
-     client's Data/<locale>/realmlist.wtf, log in, then re-run without --lan-ip.
-  3. launcher client half: docs/LAUNCHER-HOSTING-DESIGN.md section 3.
+  1. prove it with a PC 3.3.5a client before touching the launcher: re-run with
+     --lan-ip <thor-lan-ip>, set "set realmlist <thor-lan-ip>" in the client's
+     Data/<locale>/realmlist.wtf, log in, then re-run without --lan-ip.
+  2. launcher client half: docs/LAUNCHER-HOSTING-DESIGN.md section 3.
 EOF
+}
+
+# ---------------------------------------------------------------- inside stage: checks
+
+inside_status() {
+    state_load || true
+    state_apply_cli
+    echo
+    run_checks 0
+    summary_status
+}
+
+inside_repair() {
+    state_load || true
+    state_apply_cli
+    echo
+    run_checks 1
+    local repaired="$FIXES"
+    PROBLEMS=0
+    echo
+    log "re-checking after $repaired fix(es)"
+    run_checks 0
+    summary_status
+}
+
+check_needs_root() { [ "$(id -u)" = "0" ]; }
+
+run_checks() {   # run_checks FIX(0|1)
+    local fix="${1:-0}"
+    step "Components"
+    if [ -z "$BIN_DIR" ]; then layout_dirs; fi
+
+    # 1. binaries
+    local bin missing_any=0
+    for bin in worldserver authserver; do
+        if [ -x "$BIN_DIR/$bin" ]; then ok "binary: $BIN_DIR/$bin"; else bad "binary missing: $BIN_DIR/$bin"; missing_any=1; fi
+    done
+    if [ "$missing_any" = 1 ]; then
+        if [ "$fix" = 1 ]; then
+            warn "re-downloading the server (--force)"
+            FIXES=$((FIXES + 1))
+            FORCE=1
+            fetch_server || true
+            layout_dirs
+        fi
+    else
+        local bin2 lib
+        for bin2 in worldserver authserver; do
+            lib=$(missing_libs "$BIN_DIR/$bin2")
+            if [ -n "$lib" ]; then
+                bad "$bin2 needs libraries: $(printf '%s' "$lib" | tr '\n' ' ')"
+                if [ "$fix" = 1 ]; then
+                    FIXES=$((FIXES + 1))
+                    install_packages_for "$lib" || true
+                fi
+            else
+                ok "$bin2 loads its libraries"
+            fi
+        done
+    fi
+
+    # 2. configs
+    local ws="$CONF_DIR/worldserver.conf" as="$CONF_DIR/authserver.conf" pb="$CONF_DIR/modules/playerbots.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf"
+    else
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf)"
+        if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
+    fi
+    local key problems=0
+    for key in DataDir LogsDir SourceDirectory MySQLExecutable BindIP; do
+        if [ -z "$(conf_get_unquoted "$ws" "$key" 2>/dev/null)" ]; then bad "worldserver.conf: $key is empty"; problems=1; fi
+    done
+    if [ "$problems" = 0 ] && [ -f "$ws" ]; then ok "worldserver.conf: DataDir/SourceDirectory/BindIP set"; fi
+    if [ "$fix" = 1 ] && [ "$problems" = 1 ]; then write_configs || true; fi
+    if [ -f "$pb" ] && [ "$(conf_get "$pb" Playerbots.MaxRandomBots)" != "$BOTS" ]; then
+        bad "playerbots.conf bots is $(conf_get "$pb" Playerbots.MaxRandomBots), state says $BOTS"
+        if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); set_conf "$pb" Playerbots.MinRandomBots "$BOTS"; set_conf "$pb" Playerbots.MaxRandomBots "$BOTS"; ok "bots set to $BOTS"; fi
+    else
+        ok "playerbots.conf bots = ${BOTS}"
+    fi
+    ensure_conf_dir_link
+
+    # 3. client data and SQL sources
+    local d
+    for d in dbc maps vmaps mmaps; do
+        if [ -d "$DATA_DIR/$d" ]; then ok "client data: $d"; else
+            bad "client data missing: $DATA_DIR/$d"
+            if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); ensure_client_data || true; fi
+        fi
+    done
+    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql"; do
+        if [ -d "$d" ]; then ok "sql sources: $d"; else
+            bad "sql sources missing: $d (the DB updater cannot run)"
+            if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi
+        fi
+    done
+
+    # 4. database
+    if ! have mysql; then
+        bad "mysql client not found (is this the rootfs?)"
+    else
+        if db_ping; then
+            ok "mysqld answering on $SOCKET"
+        else
+            bad "mysqld is not answering on $SOCKET"
+            if [ "$fix" = 1 ]; then
+                if check_needs_root; then FIXES=$((FIXES + 1)); db_start || true; else warn "starting mysqld needs root"; fi
+            fi
+        fi
+        if db_ping; then
+            local s
+            for s in acore_auth acore_world acore_characters; do
+                if db_schema_exists "$s"; then ok "schema: $s"; else
+                    bad "schema missing: $s"
+                    if [ "$fix" = 1 ] && check_needs_root; then FIXES=$((FIXES + 1)); create_schema || true; fi
+                fi
+            done
+            local world_tables
+            world_tables=$(db_table_count acore_world)
+            if [ "${world_tables:-0}" -gt 0 ]; then
+                ok "acore_world has $world_tables tables"
+            else
+                bad "acore_world is empty: the first boot never populated it"
+                if [ "$fix" = 1 ]; then
+                    FIXES=$((FIXES + 1))
+                    warn "running the first boot again to populate the databases"
+                    first_boot || true
+                fi
+            fi
+            if [ -n "$ACCOUNT" ]; then
+                if [ "$(db_query "SELECT COUNT(*) FROM acore_auth.account WHERE username='$ACCOUNT'")" = "1" ]; then
+                    ok "account: $ACCOUNT"
+                else
+                    bad "account missing: $ACCOUNT"
+                    if [ "$fix" = 1 ] && [ "${world_tables:-0}" -gt 0 ]; then
+                        FIXES=$((FIXES + 1))
+                        if world_console 300 "account create $ACCOUNT $ACCOUNT_PASS" "account set gmlevel $ACCOUNT 3 -1"; then
+                            ok "account $ACCOUNT created"
+                        else
+                            bad "could not create $ACCOUNT"
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    # 5. processes
+    local pattern
+    for pattern in worldserver authserver; do
+        if pgrep -f "$BIN_DIR/$pattern" >/dev/null 2>&1; then ok "$pattern is running"; else log "--    $pattern is not running"; fi
+    done
+}
+
+layout_dirs() {   # recover BIN_DIR/CONF_DIR/DATA_DIR/SRC_DIR from what exists on disk
+    local candidate
+    BIN_DIR=""
+    for candidate in "$ROOT/bin" "$ROOT/env/dist/bin"; do
+        if [ -d "$candidate" ]; then BIN_DIR="$candidate"; break; fi
+    done
+    if [ -d "$ROOT/env/dist/etc" ]; then CONF_DIR="$ROOT/env/dist/etc"; else CONF_DIR="$ROOT/etc"; fi
+    DATA_DIR="$ROOT/data"
+    [ -n "$SRC_DIR" ] || SRC_DIR="$ROOT/src"
+}
+
+install_packages_for() {   # map missing sonames to Ubuntu packages where we know them
+    local libs="$1" pkg pkgs="" l
+    for l in $libs; do
+        case "$l" in
+            libssl.so.*)         pkg=libssl3 ;;
+            libreadline.so.*)    pkg=libreadline8 ;;
+            libz.so.*)           pkg=zlib1g ;;
+            libncurses.so.*)     pkg=libncurses6 ;;
+            libtinfo.so.*)       pkg=libtinfo6 ;;
+            libboost_*.so.*)     pkg=libboost-all-dev ;;
+            libmysqlclient.so.*) pkg=libmysqlclient-dev ;;
+            libstdc++.so.*)      pkg=libstdc++6 ;;
+            libgcc_s.so.*)       pkg=libgcc-s1 ;;
+            *)                   pkg="" ;;
+        esac
+        if [ -n "$pkg" ]; then pkgs="$pkgs $pkg"; else warn "do not know which package provides $l"; fi
+    done
+    [ -n "$pkgs" ] || return 0
+    warn "installing:$pkgs"
+    # shellcheck disable=SC2086  # $pkgs is a deliberate word list
+    apt-get install -y --no-install-recommends $pkgs
+}
+
+summary_status() {
+    step "Result"
+    if [ "$PROBLEMS" = 0 ]; then
+        log "everything checked out"
+        return 0
+    fi
+    if [ "$ACTION" = "repair" ]; then
+        log "$FIXES fix(es) applied, $PROBLEMS problem(s) remaining"
+        log "anything still listed as FAIL needs a manual step (see the note next to it)"
+    else
+        log "$PROBLEMS problem(s) found"
+        log "run: bash thor-install.sh --repair"
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------- inside stage: uninstall
+
+inside_uninstall() {
+    state_load || true
+    state_apply_cli
+    if [ -z "$BIN_DIR" ]; then layout_dirs; fi
+
+    step "Stopping the server"
+    if have pkill; then
+        if pkill -f "$BIN_DIR/worldserver" 2>/dev/null; then log "stopped worldserver"; else log "worldserver was not running"; fi
+        if pkill -f "$BIN_DIR/authserver" 2>/dev/null; then log "stopped authserver"; else log "authserver was not running"; fi
+    fi
+
+    if [ "$KEEP_DB" = 1 ]; then
+        step "Dumping the databases"
+        if [ "$CHECK" = 1 ]; then
+            note "mysqldump the acore_* schemas to $STATE_DIR/db-dump.sql"
+        elif have mysqldump; then
+            mkdir -p "$STATE_DIR"
+            umask 077
+            local s schemas=""
+            for s in acore_auth acore_world acore_characters acore_playerbots; do
+                if db_schema_exists "$s"; then schemas="$schemas $s"; fi
+            done
+            if [ -n "$schemas" ]; then
+                # shellcheck disable=SC2086  # $schemas is a deliberate word list
+                if mysqldump --protocol=socket --socket="$SOCKET" -uroot --single-transaction --routines --events \
+                        --databases $schemas > "$STATE_DIR/db-dump.sql"; then
+                    log "dumped$schemas to $STATE_DIR/db-dump.sql ($(human_size "$STATE_DIR/db-dump.sql"))"
+                else
+                    warn "mysqldump failed; is the database running?"
+                fi
+            else
+                warn "no acore_* schema found; nothing to dump"
+            fi
+            umask 022
+        else
+            warn "mysqldump not available; skipping the dump"
+        fi
+    fi
+
+    step "Removing files recorded in the manifest"
+    if [ "$CHECK" = 1 ]; then
+        note "remove the paths in $STATE_DIR/manifest.txt"
+    else
+        manifest_remove_all
+    fi
+
+    step "Stopping the database"
+    if [ "$KEEP_DB" = 1 ]; then
+        log "keeping $DB_DIR - the host moves the dump out and the install root is removed next"
+    fi
+    if [ "$CHECK" = 0 ] && db_ping; then db_stop; log "stopped mysqld"; fi
+
+    if [ "$KEEP_DB" = 1 ]; then
+        log "database directory $DB_DIR will be removed with the install root; the dump is what survives"
+    fi
+    log "inside cleanup done; the host stage removes $ROOT and the script copy"
 }
 
 # ---------------------------------------------------------------- entry point
 
 main() {
     parse_args "$@"
-    case "$MODE" in
-        host)   stage_host ;;
-        inside) stage_inside ;;
-        *)      die "unknown mode: $MODE" ;;
+    case "$ACTION" in
+        install)
+            if [ "$MODE" = "host" ]; then host_install; else stage_inside; fi
+            ;;
+        repair)
+            if [ "$MODE" = "host" ]; then host_repair; else inside_repair; fi
+            ;;
+        uninstall)
+            if [ "$MODE" = "host" ]; then host_uninstall; else inside_uninstall; fi
+            ;;
+        status)
+            if [ "$MODE" = "host" ]; then host_status; else inside_status; fi
+            ;;
+        *) die "unknown action: $ACTION" ;;
     esac
 }
 

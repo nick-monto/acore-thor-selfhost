@@ -22,7 +22,20 @@ It installs the rootfs, unpacks the prebuilt aarch64 server (binaries, configs, 
 
 Useful flags: `--bots N` (default 50), `--lan-ip <ip>` (bind to the LAN and pin the realm to it), `--data-zip none|<path>` (skip or supply the client data yourself), `--root DIR`, `--boot-timeout SECS`, `--force`, `--from-source`. Re-running is safe.
 
-Parts 1–9 below are exactly what that script does, in order — read them to know what to expect, or follow them by hand if you would rather drive each step.
+Afterwards:
+
+```sh
+bash thor-install.sh --status       # component-by-component report; exit 1 if something needs repair
+bash thor-install.sh --repair       # fix what it can, then re-check
+bash thor-install.sh --uninstall --keep-db   # dump the databases, then remove everything
+bash thor-install.sh --uninstall --keep-db --purge-rootfs   # ... and delete the rootfs too
+```
+
+`--status` and `--repair` read `~/.thor-wow/state.env` (Termux side) and `/opt/acore/.thor-state/state.env` (inside), so they know your bot count, account and database password without being told again.
+
+What removal does, in order: stop the server (`<root>/stop.sh`) → inside cleanup (dump if `--keep-db`, remove the manifest entries: `policy-rc.d`, the `_CONF_DIR` symlink, stop MySQL) → move the dump to `~/.thor-wow/db-dump-<utc>.sql` → `rm -rf` the install root → remove the manifest paths on the Termux side (wrappers, the script's copy) → optionally `proot-distro remove ubuntu`.
+
+Parts 1–9 below are exactly what the install does, in order — read them to know what to expect, or follow them by hand if you would rather drive each step.
 
 ---
 
@@ -89,14 +102,32 @@ The client-data download supplies `dbc/`, `maps/`, `vmaps/` and `mmaps/` — **n
 
 ## Part 3 — Database
 
-There is no systemd inside proot, so start the daemon directly:
+There is no systemd inside proot, so start the daemon directly. The install keeps the data directory **inside the install root** (`/opt/acore/db`) with its socket in `/opt/acore/run`, so removing the install removes the database with it and nothing is left in `/var/lib/mysql`:
 
 ```bash
-mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld
-mysqld --user=mysql --daemonize              # [I] verify on device; logs at /var/log/mysql/error.log
-mysql -uroot -e "SELECT VERSION();"
-mysql -uroot -e "CREATE DATABASE acore_auth; CREATE DATABASE acore_world; CREATE DATABASE acore_characters;"
-mysql -uroot -e "CREATE USER 'acore'@'127.0.0.1' IDENTIFIED BY 'changeme'; GRANT ALL ON acore_auth.* TO 'acore'@'127.0.0.1'; GRANT ALL ON acore_world.* TO 'acore'@'127.0.0.1'; GRANT ALL ON acore_characters.* TO 'acore'@'127.0.0.1'; FLUSH PRIVILEGES;"
+mkdir -p /opt/acore/run /opt/acore/db /opt/acore/logs
+chown mysql:mysql /opt/acore/db /opt/acore/run
+mysqld --initialize-insecure --user=mysql --datadir=/opt/acore/db --log-error=/opt/acore/logs/mysql.err   # first run only
+mysqld --user=mysql --datadir=/opt/acore/db --socket=/opt/acore/run/mysqld.sock \
+       --bind-address=127.0.0.1 --port=3306 --skip-name-resolve \
+       --pid-file=/opt/acore/run/mysqld.pid --log-error=/opt/acore/logs/mysql.err --daemonize
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot -e "SELECT VERSION();"
+```
+
+`--skip-name-resolve` avoids DNS lookups inside proot [I]. Then the schemas and the user (all further `mysql` calls need `--protocol=socket --socket=/opt/acore/run/mysqld.sock`):
+
+```bash
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot <<'SQL'
+CREATE DATABASE IF NOT EXISTS acore_auth;
+CREATE DATABASE IF NOT EXISTS acore_world;
+CREATE DATABASE IF NOT EXISTS acore_characters;
+CREATE USER IF NOT EXISTS 'acore'@'127.0.0.1' IDENTIFIED BY 'changeme';
+GRANT ALL PRIVILEGES ON acore_auth.*       TO 'acore'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON acore_world.*      TO 'acore'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON acore_characters.* TO 'acore'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON acore_playerbots.* TO 'acore'@'127.0.0.1';
+FLUSH PRIVILEGES;
+SQL
 ```
 
 Do **not** create `acore_playerbots` by hand: the module's updater creates and populates it when `mod-playerbots` is present [V].

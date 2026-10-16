@@ -34,6 +34,22 @@ bash thor-install.sh              # do it (server download ~1.2 GB, or --from-so
 
 Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every flag.
 
+## Manage it afterwards
+
+| Command | What it does |
+|---|---|
+| `bash thor-install.sh --status` | Checks every component (binaries + libraries, configs and their keys, client data, SQL sources, database, schemas, tables, account, bot count) and exits non-zero if something needs repair |
+| `bash thor-install.sh --repair` | Runs the same checks, fixes what it can (configs, bot count, missing libraries, database not started, empty databases, missing account), then re-checks and reports what is left |
+| `bash thor-install.sh --uninstall` | Stops everything, removes the install root and every file listed in the manifest |
+| `bash thor-install.sh --uninstall --keep-db` | The same, but dumps the `acore_*` databases to `~/.thor-wow/db-dump-<timestamp>.sql` first |
+| `bash thor-install.sh --uninstall --purge-rootfs` | Also removes the Ubuntu rootfs, i.e. deletes the apt packages too |
+
+### How removal stays exact
+
+- One rootfs directory (`$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu`) holds the Unix side; one install root (`/opt/acore`, `--root` to move it) holds the server, the configs, the client data, the SQL sources, the logs **and the MySQL data directory** (`<root>/db`) with its socket (`<root>/run`). Nothing is left in `/var/lib/mysql`.
+- Everything created *outside* those two — the two Termux wrappers, the script's copy in the rootfs, `/usr/sbin/policy-rc.d`, the `_CONF_DIR` symlink when `--root` is used — is appended to a manifest (`~/.thor-wow/manifest.txt` on the Termux side, `<root>/.thor-state/manifest.txt` inside), and removal walks that manifest, refusing any path that is not clearly owned by the install.
+- Flags and secrets are recorded in `~/.thor-wow/state.env` / `<root>/.thor-state/state.env`, so `--status`, `--repair` and `--uninstall` work without re-passing `--bots`, `--account` or `--db-pass`.
+
 Confidence labels: **[V]** verified against source or an artifact inspected here, **[R]** reported, **[I]** inference.
 
 ## Hard requirements
