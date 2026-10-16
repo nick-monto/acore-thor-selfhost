@@ -43,13 +43,23 @@ jobs:
         run: |
           sudo apt-get update
           # This set is the upstream CI list (.github/workflows/core-build-playerbots.yml:51-55)
-          # plus zlib1g-dev and ninja, cross-checked against every find_package/find_library in
-          # deps/ and src/cmake: Boost, BZip2, OpenSSL, ZLIB, Threads, Filesystem, MySQL, Readline.
-          # libbz2-dev is the one a stock runner image does not already carry.
+          # plus ninja, cross-checked against every find_package/find_library in deps/ and
+          # src/cmake: Boost, BZip2, OpenSSL, ZLIB, Threads, Filesystem, MySQL, Readline.
+          #
+          # libbz2-dev, liblzma-dev, zlib1g-dev and libzstd-dev are not optional and not implied
+          # by anything else. deps/bzip2 calls find_package(BZip2 REQUIRED) on UNIX, so
+          # libbz2-dev is needed to configure at all. The other three are the -l flags that
+          # cmake emits after libboost_iostreams.a, because the static Boost::iostreams
+          # interface links bz2, lzma, z and zstd - and libboost-iostreams1.83-dev declares
+          # only boost packages as dependencies, so libboost-all-dev never pulls them:
+          #     Depends: libboost1.83-dev, libboost-regex1.83-dev, libboost-iostreams1.83.0
+          # On x64 runner images those four happen to be preinstalled, which is why upstream CI
+          # never noticed; ubuntu-24.04-arm does not carry liblzma-dev.
+          # libicu-dev is for Boost::regex, which does declare it.
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build make gcc g++ clang lld \
-            libboost-all-dev libssl-dev libbz2-dev \
-            libreadline-dev libncurses-dev zlib1g-dev \
+            libboost-all-dev libssl-dev libbz2-dev liblzma-dev zlib1g-dev libzstd-dev \
+            libicu-dev libreadline-dev libncurses-dev \
             libmysqlclient-dev unzip zstd
 
       - name: Fetch pinned sources
@@ -80,7 +90,9 @@ jobs:
 
       - name: Build
         working-directory: src/core
-        run: cmake --build build --parallel "$(nproc)"
+        # -k 0 keeps ninja going after a failure: every target that does not link is named in
+        # one run instead of one run per missing package.
+        run: cmake --build build --parallel "$(nproc)" -- -k 0
 
       - name: Install
         working-directory: src/core

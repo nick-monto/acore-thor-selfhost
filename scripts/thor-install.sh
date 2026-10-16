@@ -1218,6 +1218,8 @@ packages_for_soname() {   # candidate packages for a soname, best first
         libreadline.so.*)           echo "libreadline8t64 libreadline8" ;;
         libbz2.so.*)                echo "libbz2-1.0" ;;
         liblzma.so.*)               echo "liblzma5" ;;
+        libzstd.so.*)               echo "libzstd1" ;;
+        libicuuc.so.*|libicui18n.so.*|libicudata.so.*) echo "libicu74" ;;
         libz.so.*)                  echo "zlib1g" ;;
         libncurses.so.*)            echo "libncurses6" ;;
         libncursesw.so.*)           echo "libncursesw6" ;;

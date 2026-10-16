@@ -66,8 +66,8 @@ Inside the rootfs:
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl unzip zstd git cmake ninja-build make gcc g++ clang lld \
-  libboost-all-dev libssl-dev libbz2-dev libreadline-dev libncurses-dev \
-  zlib1g-dev libmysqlclient-dev \
+  libboost-all-dev libssl-dev libbz2-dev liblzma-dev zlib1g-dev libzstd-dev \
+  libicu-dev libreadline-dev libncurses-dev libmysqlclient-dev \
   mysql-client mysql-server
 mysql --version        # expect 8.0.x — the arm64 package exists in noble [V]
 ```
@@ -126,6 +126,8 @@ for p in noble noble-updates noble-security; do
   curl -fsSL "http://ports.ubuntu.com/ubuntu-ports/dists/$p/main/binary-arm64/Packages.gz" | zcat | grep -qx "Package: libssl3t64" && echo "$p: yes"
 done
 ```
+
+`liblzma-dev`, `zlib1g-dev` and `libzstd-dev` are as required as `libbz2-dev`, and nothing pulls them in: the static `Boost::iostreams` link line ends in `-lbz2 -llzma -lz -lzstd`, while `libboost-iostreams1.83-dev` declares only boost packages as its dependencies [V]. `libicu-dev` comes with `libboost-regex1.83-dev` [V].
 
 Two notes on packages. `libbz2-dev` is required by every configure, not just when building: `deps/bzip2/CMakeLists.txt:15` calls `find_package(BZip2 REQUIRED)` on UNIX [V] — leaving it out is what failed the first arm64 CI run. The *runtime* libraries the prebuilt binaries need are not listed by hand anywhere: the script resolves them from `ldd` (`install_missing_libs`) because Ubuntu 24.04 renamed them (`libssl3`→`libssl3t64`, `libreadline8`→`libreadline8t64`) [V].
 
