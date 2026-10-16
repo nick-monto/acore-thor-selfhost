@@ -119,6 +119,14 @@ mysqld --user=mysql --datadir=/opt/acore/db --socket=/opt/acore/run/mysqld.sock 
 mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot -e "SELECT VERSION();"
 ```
 
+To re-verify a package name for arm64 across every pocket (do not trust `packages.ubuntu.com/<release>/arm64/<pkg>` here: it answered 200 for `libreadline8`, which the archive index shows does not exist for noble/arm64 at all):
+
+```bash
+for p in noble noble-updates noble-security; do
+  curl -fsSL "http://ports.ubuntu.com/ubuntu-ports/dists/$p/main/binary-arm64/Packages.gz" | zcat | grep -qx "Package: libssl3t64" && echo "$p: yes"
+done
+```
+
 Two notes on packages. `libbz2-dev` is required by every configure, not just when building: `deps/bzip2/CMakeLists.txt:15` calls `find_package(BZip2 REQUIRED)` on UNIX [V] — leaving it out is what failed the first arm64 CI run. The *runtime* libraries the prebuilt binaries need are not listed by hand anywhere: the script resolves them from `ldd` (`install_missing_libs`) because Ubuntu 24.04 renamed them (`libssl3`→`libssl3t64`, `libreadline8`→`libreadline8t64`) [V].
 
 `--skip-name-resolve` avoids DNS lookups inside proot [I]. Then the schemas and the user (all further `mysql` calls need `--protocol=socket --socket=/opt/acore/run/mysqld.sock`):
