@@ -117,7 +117,23 @@ jobs:
             acore-server-arm64.tar.zst.sha256
           retention-days: 14
 
-      - name: Attach to release
+      # scripts/thor-install.sh downloads
+      #   https://github.com/<owner>/<repo>/releases/latest/download/acore-server-arm64.tar.zst
+      # so *some* release has to carry the asset after every successful build, not only after a
+      # tag. Manual runs therefore refresh a rolling "server-build" release marked as latest.
+      - name: Publish the rolling release (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/server-v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view server-build >/dev/null 2>&1 || \
+            gh release create server-build --latest \
+              --title "Latest arm64 server build" \
+              --notes "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh." 
+          gh release upload server-build \
+            acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256 --clobber
+
+      - name: Publish the tagged release
         if: startsWith(github.ref, 'refs/tags/server-v')
         env:
           GH_TOKEN: ${{ github.token }}

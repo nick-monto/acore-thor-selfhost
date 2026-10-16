@@ -18,6 +18,10 @@ bash thor-install.sh --check     # preflight: rootfs, disk, release asset, no ch
 bash thor-install.sh             # do it: ~1.2 GB download, or --from-source to compile in place
 ```
 
+**Private repository?** Both the script fetch above and the artifact download need a token: fetch it with `curl -H "Authorization: Bearer $TOK"` and run the script with `--github-token "$TOK"` (or `THOR_GH_TOKEN=$TOK`). See the README for the exact commands; the flag is also recorded in the state file, so `--repair` keeps working.
+
+The artifact the script downloads comes from the rolling `server-build` release that `.github/workflows/server-aarch64.yml` refreshes on every successful run (and from a `server-v*` tag release if you cut one). `--check` probes that URL and says so if it is not there yet.
+
 It installs the rootfs, unpacks the prebuilt aarch64 server (binaries, configs, client data and the SQL sources), initialises and starts MySQL, creates the databases and the `acore` user, writes `worldserver.conf`/`authserver.conf`/`playerbots.conf` in place, boots the world once to populate the databases, creates a GM account, and writes `~/start-wow-server.sh` + `~/stop-wow-server.sh`. Passwords land in `/opt/acore/credentials.txt`.
 
 Useful flags: `--bots N` (default 50), `--lan-ip <ip>` (bind to the LAN and pin the realm to it), `--data-zip none|<path>` (skip or supply the client data yourself), `--root DIR`, `--boot-timeout SECS`, `--force`, `--from-source`. Re-running is safe.

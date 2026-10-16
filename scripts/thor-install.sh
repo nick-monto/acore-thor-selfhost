@@ -42,6 +42,8 @@
 #   --lan-ip IP             bind to the LAN and point the realm at IP (default: loopback only)
 #   --root DIR              install root in the rootfs (default /opt/acore)
 #   --release-url URL       prebuilt linux/arm64 tarball
+#   --github-token TOKEN    token for a private repository (or set THOR_GH_TOKEN); also used
+#                           to fetch the server artifact and the script itself when private
 #   --data-zip URL|PATH|none  client data (dbc/maps/vmaps/mmaps)
 #   --boot-timeout SECS     first-boot wait for "World initialized" (default 1800)
 #   -h, --help              this text
@@ -56,6 +58,7 @@ CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
 PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
 RELEASE_URL="${THOR_RELEASE_URL:-https://github.com/nick-monto/acore-thor-selfhost/releases/latest/download/acore-server-arm64.tar.zst}"
+GH_TOKEN_OPT="${THOR_GH_TOKEN:-}"
 DATA_URL="https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
 DATA_SHA256="a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610"
 ROOT_DEFAULT="/opt/acore"
@@ -129,6 +132,7 @@ parse_args() {
             --lan-ip)       LAN_IP="${2:?}"; shift ;;
             --root)         ROOT="${2:?}"; shift ;;
             --release-url)  RELEASE_URL="${2:?}"; shift ;;
+            --github-token) GH_TOKEN_OPT="${2:?}"; shift ;;
             --data-zip)     DATA_SRC="${2:?}"; shift ;;
             --boot-timeout) BOOT_TIMEOUT="${2:?}"; shift ;;
             -h|--help)      usage; exit 0 ;;
@@ -148,6 +152,14 @@ parse_args() {
 random_password() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16; }
 
 sha256_file() { sha256sum "$1" | awk '{print $1}'; }
+
+curl_gh() {   # curl_gh ARGS... - adds the token when one is set, i.e. for a private repository
+    if [ -n "$GH_TOKEN_OPT" ]; then
+        curl -H "Authorization: Bearer $GH_TOKEN_OPT" -H "Accept: application/octet-stream" "$@"
+    else
+        curl "$@"
+    fi
+}
 
 human_size() { du -sh "$1" 2>/dev/null | awk '{print $1}' || true; }
 
@@ -232,6 +244,7 @@ ACCOUNT_PASS="$ACCOUNT_PASS"
 BOTS="$BOTS"
 LAN_IP="$LAN_IP"
 DATA_SRC="$DATA_SRC"
+GH_TOKEN_OPT="$GH_TOKEN_OPT"
 ARTIFACT_SHA="$ARTIFACT_SHA"
 SCRIPT_VERSION="$SCRIPT_VERSION"
 EOF
@@ -680,17 +693,22 @@ fetch_server() {
     step "Prebuilt linux/arm64 server"
     if [ "$CHECK" = 1 ]; then
         local code
-        code=$(curl -sIL -o /dev/null -w '%{http_code}' "$RELEASE_URL" 2>/dev/null || echo "000")
+        code=$(curl_gh -sIL -o /dev/null -w '%{http_code}' "$RELEASE_URL" 2>/dev/null || echo "000")
         log "release URL: $RELEASE_URL -> HTTP $code"
         if [ "$code" != "200" ]; then
-            log "  no release asset yet: push the repo and run .github/workflows/server-aarch64.yml, or use --from-source"
+            if [ -n "$GH_TOKEN_OPT" ]; then
+                log "  not available yet: run .github/workflows/server-aarch64.yml from the Actions tab"
+            else
+                log "  not available yet, or the repository is private: run the workflow once, and if the"
+                log "  repository is private pass --github-token TOKEN (or set THOR_GH_TOKEN)"
+            fi
         fi
         return 0
     fi
     local tarball=/tmp/acore-server-arm64.tar.zst
-    curl -fL --retry 3 -o "$tarball" "$RELEASE_URL" \
-        || die "download failed: $RELEASE_URL (let the server-aarch64 workflow publish a release, or re-run with --from-source)"
-    if curl -fsL -o "$tarball.sha256" "$RELEASE_URL.sha256" 2>/dev/null; then
+    curl_gh -fL --retry 3 -o "$tarball" "$RELEASE_URL" \
+        || die "download failed: $RELEASE_URL (run the server-aarch64 workflow once to publish a release; if the repository is private, pass --github-token; or re-run with --from-source)"
+    if curl_gh -fsL -o "$tarball.sha256" "$RELEASE_URL.sha256" 2>/dev/null && [ -s "$tarball.sha256" ]; then
         local want got
         want=$(awk '{print $1}' "$tarball.sha256")
         got=$(sha256_file "$tarball")

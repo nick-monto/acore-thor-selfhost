@@ -24,13 +24,27 @@ Design phase. Nothing here has been built or run on a Thor yet; this repo curren
 
 ## Install on the Thor
 
-In Termux:
+The Thor pulls two things from GitHub: this script, and the server artifact from a release. If the repository is **private** (it is by default on this account) both need a token — or make it public, since this repo holds only recipes, pins and a script, no secrets.
+
+Public repository:
 
 ```sh
 curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
 bash thor-install.sh --check      # report what it would do, change nothing
 bash thor-install.sh              # do it (server download ~1.2 GB, or --from-source to compile)
 ```
+
+Private repository (a fine-grained token with `contents: read` on this repo):
+
+```sh
+TOK=github_pat_xxx
+curl -fsSL -H "Authorization: Bearer $TOK" -o thor-install.sh \
+  https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
+bash thor-install.sh --check --github-token "$TOK"
+bash thor-install.sh --github-token "$TOK"
+```
+
+`--github-token` (or `THOR_GH_TOKEN` in the environment) is used for the release probe, the artifact download and its checksum file, and is recorded in the mode-600 state file so `--repair` can re-download later. Copying the script over with `scp` works too.
 
 Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every flag.
 
