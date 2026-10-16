@@ -8,6 +8,24 @@ Pins: `pins.toml`. Gates referenced below: `docs/SERVER-STACK.md` §9.
 
 ---
 
+## Fast path
+
+The whole install is one script. In Termux:
+
+```sh
+curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
+bash thor-install.sh --check     # preflight: rootfs, disk, release asset, no changes
+bash thor-install.sh             # do it: ~1.2 GB download, or --from-source to compile in place
+```
+
+It installs the rootfs, unpacks the prebuilt aarch64 server (binaries, configs, client data and the SQL sources), initialises and starts MySQL, creates the databases and the `acore` user, writes `worldserver.conf`/`authserver.conf`/`playerbots.conf` in place, boots the world once to populate the databases, creates a GM account, and writes `~/start-wow-server.sh` + `~/stop-wow-server.sh`. Passwords land in `/opt/acore/credentials.txt`.
+
+Useful flags: `--bots N` (default 50), `--lan-ip <ip>` (bind to the LAN and pin the realm to it), `--data-zip none|<path>` (skip or supply the client data yourself), `--root DIR`, `--boot-timeout SECS`, `--force`, `--from-source`. Re-running is safe.
+
+Parts 1–9 below are exactly what that script does, in order — read them to know what to expect, or follow them by hand if you would rather drive each step.
+
+---
+
 ## Part 0 — What you need
 
 1. Termux from **F-Droid** (the Play Store build is deprecated) [R].
@@ -38,14 +56,16 @@ mysql --version        # expect 8.0.x — the arm64 package exists in noble [V]
 
 ## Part 2 — Get the server binaries
 
-**Preferred: use the CI artifact** (no compilation on the device):
+**Preferred: use the CI artifact** (no compilation on the device). It contains the binaries, the configs, the client data *and* the SQL sources, already laid out as the server expects them:
 
 ```bash
 curl -fLO https://github.com/nick-monto/acore-thor-selfhost/releases/latest/download/acore-server-arm64.tar.zst
 curl -fLO https://github.com/nick-monto/acore-thor-selfhost/releases/latest/download/acore-server-arm64.tar.zst.sha256
 sha256sum -c acore-server-arm64.tar.zst.sha256
-tar --zstd -xf acore-server-arm64.tar.zst -C /opt/acore      # → /opt/acore/{bin,etc,data}
+tar --zstd -xf acore-server-arm64.tar.zst -C /opt/acore   # → /opt/acore/{bin,etc,data,src}
 ```
+
+`bin/` is the server, `etc/` the config templates, `data/` the `dbc`/`maps`/`vmaps`/`mmaps` trees, and `src/` the SQL the DB updater reads (`src/data/sql`, `src/modules/mod-playerbots/data/sql`). That last part is why the artifact is not just a binary drop: `SourceDirectory` must point at a tree containing those paths (`DBUpdater.cpp:98-195`, `mod-playerbots/src/Script/Playerbots.cpp:77-78`) [V].
 
 **Fallback: build in place** (hours; the workflow exists to avoid this):
 
@@ -89,33 +109,36 @@ Edit `/opt/acore/etc/worldserver.conf` and `authserver.conf`:
 |---|---|---|
 | `DataDir` | `/opt/acore/data` | holds `dbc/maps/vmaps/mmaps` |
 | `LogsDir` | `/opt/acore/logs` | keeps logs off the rootfs' tmpfs |
-| `SourceDirectory` | `/opt/acore-src` | **must** be set: the default is the build machine's path [V] |
+| `SourceDirectory` | `/opt/acore/src` | **must** be set: the DB updater reads base SQL and updates from this tree, and the module reads its SQL from `<it>/modules/mod-playerbots/data/sql` [V]. Empty falls back to the build machine's path |
+| `MySQLExecutable` | `/usr/bin/mysql` | the updater shells out to the `mysql` client; empty falls back to the build machine's path [V] |
 | `WorldServerPort` / `RealmServerPort` | `8085` / `3724` | guide defaults |
-| `BindIP` | `127.0.0.1` | loopback-only while testing on-device (use `0.0.0.0` only for the LAN test in Part 6) |
+| `BindIP` | `127.0.0.1` | loopback-only while testing on-device (use the LAN IP only for the test in Part 6) |
 | `Updates.EnableDatabases` | `7` (world) / `1` (auth) | lets the first start populate base data |
 | Login/world/character database info | `127.0.0.1;3306;acore;changeme;acore_*` | match Part 3 |
 
-`/opt/acore/etc/modules/playerbots.conf` — the module ships `Playerbots.Enabled = 1` and **500/500** bots by default; start smaller (Part 5).
+`/opt/acore/etc/modules/playerbots.conf` — the module ships `Playerbots.Enabled = 1` and **500/500** bots by default; start smaller (Part 5). It also carries its own `PlayerbotsDatabaseInfo` (default database name `acore_playerbots`) and `Playerbots.Updates.EnableDatabases = 1` [V].
+
+One trap worth knowing before you debug a "bots do not load" symptom: **module configs are read from the compile-time `_CONF_DIR`, not from the `-c` path** (`Config.cpp:704-711`, `:766`) [V]. The artifact is built with `-DCMAKE_INSTALL_PREFIX=/opt/acore`, so `/opt/acore/etc/modules/playerbots.conf` is the file it reads. If you install the tarball somewhere else (`--root`), the script links that baked path to your `etc/` directory.
 
 ## Part 5 — First start
 
 ```bash
 cd /opt/acore
-./bin/authserver &                 # logs to LogsDir
-./bin/worldserver                  # first run imports base data: minutes, not seconds
+./bin/authserver -c /opt/acore/etc/authserver.conf &   # logs to LogsDir
+./bin/worldserver -c /opt/acore/etc/worldserver.conf   # first run imports base data: minutes, not seconds
 ```
 
-`worldserver` prints `ready...` when loaded; the guide allows up to 1800 s for the first import and polls the log every 5–10 s [R]. In the console:
+`worldserver` prints `World initialized` when loaded; the guide allows up to 1800 s for the first import and polls the log every 5–10 s [R]. In the console:
 
 ```
 account create admin changeme
 account set gmlevel admin 3 -1
 ```
 
-Then pin the realm (still needed even on loopback):
+**No realm pin is needed for on-device play**: the auth database's base SQL already seeds realm 1 as `127.0.0.1`/`localAddress 127.0.0.1`/port `8085`/build `12340`, which is exactly what a loopback client wants (`data/sql/base/db_auth/realmlist.sql:48-49`) [V]. Only the LAN test in Part 6 needs a pin:
 
 ```bash
-mysql -uroot acore_auth -e "UPDATE realmlist SET address='127.0.0.1', localAddress='127.0.0.1' WHERE id=1; SELECT id,name,address,localAddress,port FROM realmlist;"
+mysql -uroot acore_auth -e "UPDATE realmlist SET address='<thor-lan-ip>', localAddress='<thor-lan-ip>' WHERE id=1; SELECT id,name,address,localAddress,port FROM realmlist;"
 ```
 
 Bots — the guide's `AC_AI_PLAYERBOT_*` overrides **no longer work** [V]; either edit the conf or use the current names:
@@ -131,24 +154,28 @@ Keep the bot count under `PlayerLimit` (default 1000) and remember the module's 
 
 ## Part 6 — Prove it with a client before touching the launcher
 
-On a PC with the same 3.3.5a client: set `Data/<locale>/realmlist.wtf` to `set realmlist <thor-lan-ip>` (and set `BindIP = 0.0.0.0` on the server for this test), log in with the account from Part 5. This closes **G3** without any Android-specific risk.
+On a PC with the same 3.3.5a client: set `Data/<locale>/realmlist.wtf` to `set realmlist <thor-lan-ip>`, log in with the account from Part 5. This closes **G3** without any Android-specific risk.
+
+`bash thor-install.sh --lan-ip <thor-lan-ip>` does both halves of the switch for you (binds the server and pins realm 1); re-run without `--lan-ip` afterwards to go back to loopback-only. Android will prompt for the LAN permission the first time the server binds off-loopback [I].
 
 If that fails, the launcher work is pointless — fix the server first.
 
 ## Part 7 — Supervision
 
-A minimal loop, since the platform will eventually stop the processes for you:
+The install script writes these: `~/start-wow-server.sh` (wake lock + `proot-distro login ubuntu -- /opt/acore/run.sh`), `~/stop-wow-server.sh`, and inside the rootfs `/opt/acore/run.sh` (mysqld → authserver → worldserver, restarting the world if it dies, Ctrl-C stops everything), `/opt/acore/stop.sh`, `start-db.sh`, `stop-db.sh`.
+
+Start order is DB → authserver → worldserver; stop in reverse. Nothing here involves Wine.
+
+If you would rather run them by hand, the loop is the same shape:
 
 ```bash
 termux-wake-lock
 cd /opt/acore
 while true; do
-  pgrep -f 'bin/worldserver' >/dev/null || ( ./bin/worldserver >> logs/supervisor.log 2>&1 & )
+  pgrep -f 'bin/worldserver' >/dev/null || ( ./bin/worldserver -c etc/worldserver.conf >> logs/supervisor.log 2>&1 & )
   sleep 15
 done
 ```
-
-Start order is DB → authserver → worldserver; stop in reverse (`wineserver -k` is not involved here; just `kill` the two PIDs and stop `mysqld` cleanly with `mysqladmin shutdown`) [I].
 
 ## Part 8 — Measuring the bot ceiling (G4)
 

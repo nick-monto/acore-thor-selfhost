@@ -18,8 +18,21 @@ Design phase. Nothing here has been built or run on a Thor yet; this repo curren
 | [`docs/LAUNCHER-HOSTING-DESIGN.md`](docs/LAUNCHER-HOSTING-DESIGN.md) | Can `wyattabuntjer/AYN-Thor-WoW-Launcher` support the self-hosted stack, and what exactly must change |
 | [`docs/SERVER-STACK.md`](docs/SERVER-STACK.md) | The server half: build, data, database, bots, supervision, and what of the guide transfers |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The ordered, copy-pasteable device steps (Termux + proot Ubuntu), with the gates to check as you go |
+| [`scripts/thor-install.sh`](scripts/thor-install.sh) | Does the whole device install for you: Termux packages, rootfs, server files, MySQL, configs, first boot, GM account, start/stop scripts |
 | [`pins.toml`](pins.toml) | Exact commits, artifact hashes and ports every document refers to |
-| [`.github/workflows/server-aarch64.yml`](.github/workflows/server-aarch64.yml) | Builds the linux/arm64 server + client data on a native arm64 runner and attaches it to a release |
+| [`.github/workflows/server-aarch64.yml`](.github/workflows/server-aarch64.yml) | Builds the linux/arm64 server + client data + SQL sources on a native arm64 runner and attaches them to a release |
+
+## Install on the Thor
+
+In Termux:
+
+```sh
+curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
+bash thor-install.sh --check      # report what it would do, change nothing
+bash thor-install.sh              # do it (server download ~1.2 GB, or --from-source to compile)
+```
+
+Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every flag.
 
 Confidence labels: **[V]** verified against source or an artifact inspected here, **[R]** reported, **[I]** inference.
 

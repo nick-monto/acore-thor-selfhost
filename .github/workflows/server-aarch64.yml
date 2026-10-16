@@ -1,11 +1,17 @@
 name: server-aarch64
 
-# Builds the AzerothCore + mod-playerbots server for linux/arm64 and packages it with the
-# prebuilt client data, so the Thor never has to compile it (and no Docker is involved).
-# The arm64 runner is native, so this is a normal x86-speed build of an aarch64 target.
+# Builds the AzerothCore + mod-playerbots server for linux/arm64 and packages it together
+# with the client data and the SQL sources, so the Thor never has to compile anything.
+# The arm64 runner is native, so this is an ordinary-speed build of an aarch64 target.
 #
-# First run of this workflow *is* gate G1 in docs/SERVER-STACK.md §9: it either produces the
-# tarball or tells us exactly which file fails to compile on aarch64.
+# The tarball layout matches what scripts/thor-install.sh expects:
+#     bin/    authserver, worldserver (+ tools)
+#     etc/    *.conf.dist and modules/*.conf.dist   (and the built-in _CONF_DIR is /opt/acore/etc)
+#     data/   dbc/, maps/, vmaps/, mmaps/
+#     src/    data/sql/ and modules/mod-playerbots/data/sql/ - the DB updater reads these
+#
+# First run of this workflow is gate G1 in docs/SERVER-STACK.md section 9: it either produces
+# the tarball or names the file that does not compile on aarch64.
 
 on:
   workflow_dispatch:
@@ -22,6 +28,7 @@ env:
   PB_COMMIT: d750b4b3a50effdf22bedc8032f0e8e5f7cb8091
   DATA_URL: https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip
   DATA_SHA256: a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610
+  PREFIX: /opt/acore
 
 jobs:
   build:
@@ -29,6 +36,9 @@ jobs:
     timeout-minutes: 240
 
     steps:
+      - name: Disk space before the build
+        run: df -h /
+
       - name: Dependencies
         run: |
           sudo apt-get update
@@ -48,13 +58,15 @@ jobs:
           git clone -q "$PB_REPO" playerbots
           cd playerbots && git fetch -q --depth 1 origin "$PB_COMMIT" && git checkout -q FETCH_HEAD && cd ..
           mkdir -p core/modules
-          cp -a playerbots core/modules/mod-playerbots      # path is load-bearing: DBUpdater/module SQL
+          cp -a playerbots core/modules/mod-playerbots    # this path is load-bearing: module SQL, confs
 
       - name: Configure
         working-directory: src/core
         run: |
+          # CONF_DIR follows CMAKE_INSTALL_PREFIX, and _CONF_DIR is compiled in: module
+          # configs are always read from <prefix>/etc/modules, never from the -c path.
           cmake -S . -B build -G Ninja \
-            -DCMAKE_INSTALL_PREFIX="$PWD/install" \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DAPPS_BUILD=all -DTOOLS_BUILD=all \
             -DSCRIPTS=static -DMODULES=static \
@@ -67,25 +79,35 @@ jobs:
 
       - name: Install
         working-directory: src/core
-        run: cmake --install build
+        run: |
+          sudo cmake --install build
+          sudo rm -rf build                      # free the space before the big copies
+          ls -l "$PREFIX/bin"
 
       - name: Client data (dbc/maps/vmaps/mmaps)
         run: |
           curl -fL --retry 3 -o data.zip "$DATA_URL"
           echo "$DATA_SHA256  data.zip" | sha256sum -c -
-          mkdir -p src/core/install/data
-          unzip -q -o data.zip -d src/core/install/data
+          sudo mkdir -p "$PREFIX/data"
+          sudo unzip -q -o data.zip -d "$PREFIX/data"
           rm data.zip
+          sudo du -sh "$PREFIX/data"
+
+      - name: SQL sources (what the DB updater reads on first boot)
+        run: |
+          sudo mkdir -p "$PREFIX/src/modules/mod-playerbots"
+          sudo cp -a src/core/data/sql "$PREFIX/src/data/"
+          sudo cp -a src/playerbots/data/sql "$PREFIX/src/modules/mod-playerbots/data/"
+          sudo du -sh "$PREFIX/src"
 
       - name: Package
         run: |
-          cd src/core/install
-          cp -a etc etc.dist
-          tar --zstd -cf ../../acore-server-arm64.tar.zst bin etc etc.dist data
-          cd ../..
+          sudo tar --zstd -cf acore-server-arm64.tar.zst -C "$PREFIX" bin etc data src
+          sudo chown "$USER" acore-server-arm64.tar.zst
           ls -lh acore-server-arm64.tar.zst
           sha256sum acore-server-arm64.tar.zst > acore-server-arm64.tar.zst.sha256
           cat acore-server-arm64.tar.zst.sha256
+          df -h /
 
       - uses: actions/upload-artifact@v4
         with:
@@ -93,7 +115,7 @@ jobs:
           path: |
             acore-server-arm64.tar.zst
             acore-server-arm64.tar.zst.sha256
-          retention-days: 30
+          retention-days: 14
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/server-v')
@@ -102,5 +124,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --title "Server build $GITHUB_REF_NAME" \
-            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, linux/arm64, with client data v20.0." \
+            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh." \
             acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256
