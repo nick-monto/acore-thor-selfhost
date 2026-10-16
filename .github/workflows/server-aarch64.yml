@@ -42,10 +42,15 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
+          # This set is the upstream CI list (.github/workflows/core-build-playerbots.yml:51-55)
+          # plus zlib1g-dev and ninja, cross-checked against every find_package/find_library in
+          # deps/ and src/cmake: Boost, BZip2, OpenSSL, ZLIB, Threads, Filesystem, MySQL, Readline.
+          # libbz2-dev is the one a stock runner image does not already carry.
           sudo apt-get install -y --no-install-recommends \
-            git cmake ninja-build make clang lld \
-            libboost-all-dev libssl-dev libreadline-dev zlib1g-dev \
-            libncurses-dev libmysqlclient-dev unzip zstd
+            git cmake ninja-build make gcc g++ clang lld \
+            libboost-all-dev libssl-dev libbz2-dev \
+            libreadline-dev libncurses-dev zlib1g-dev \
+            libmysqlclient-dev unzip zstd
 
       - name: Fetch pinned sources
         run: |

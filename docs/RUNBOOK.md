@@ -65,9 +65,10 @@ Inside the rootfs:
 ```bash
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl unzip zstd git cmake ninja-build make clang lld \
-  libboost-all-dev libssl-dev libreadline-dev zlib1g-dev libncurses-dev \
-  libmysqlclient-dev mysql-server
+  ca-certificates curl unzip zstd git cmake ninja-build make gcc g++ clang lld \
+  libboost-all-dev libssl-dev libbz2-dev libreadline-dev libncurses-dev \
+  zlib1g-dev libmysqlclient-dev \
+  mysql-client mysql-server
 mysql --version        # expect 8.0.x — the arm64 package exists in noble [V]
 ```
 
@@ -117,6 +118,8 @@ mysqld --user=mysql --datadir=/opt/acore/db --socket=/opt/acore/run/mysqld.sock 
        --pid-file=/opt/acore/run/mysqld.pid --log-error=/opt/acore/logs/mysql.err --daemonize
 mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot -e "SELECT VERSION();"
 ```
+
+Two notes on packages. `libbz2-dev` is required by every configure, not just when building: `deps/bzip2/CMakeLists.txt:15` calls `find_package(BZip2 REQUIRED)` on UNIX [V] — leaving it out is what failed the first arm64 CI run. The *runtime* libraries the prebuilt binaries need are not listed by hand anywhere: the script resolves them from `ldd` (`install_missing_libs`) because Ubuntu 24.04 renamed them (`libssl3`→`libssl3t64`, `libreadline8`→`libreadline8t64`) [V].
 
 `--skip-name-resolve` avoids DNS lookups inside proot [I]. Then the schemas and the user (all further `mysql` calls need `--protocol=socket --socket=/opt/acore/run/mysqld.sock`):
 

@@ -637,6 +637,7 @@ stage_inside() {
     install_deps
     fetch_server
     layout_check
+    install_missing_libs || warn "some libraries could not be resolved; --status lists them"   # never aborts an install
     ensure_client_data
     db_start
     create_schema
@@ -655,11 +656,18 @@ install_deps() {
     fi
     export DEBIAN_FRONTEND=noninteractive
     note apt-get update
+    # Only the never-renamed packages are hardcoded; the libraries the prebuilt binaries
+    # actually need are resolved from ldd afterwards (install_missing_libs), because Ubuntu
+    # renamed several of them in 24.04 (libssl3 -> libssl3t64, libreadline8 -> libreadline8t64).
     note apt-get install -y --no-install-recommends ca-certificates curl unzip zstd \
-        libssl3 libreadline8 zlib1g mysql-client mysql-server
+        mysql-client mysql-server
     if [ "$FROM_SOURCE" = 1 ]; then
-        note apt-get install -y --no-install-recommends git cmake ninja-build make clang lld \
-            libboost-all-dev libssl-dev libreadline-dev zlib1g-dev libncurses-dev libmysqlclient-dev
+        # Same package set as upstream CI (.github/workflows/core-build-playerbots.yml:51-55);
+        # libbz2-dev is required by deps/bzip2/CMakeLists.txt:15 on every configure.
+        note apt-get install -y --no-install-recommends \
+            git cmake ninja-build make gcc g++ clang lld \
+            libboost-all-dev libssl-dev libbz2-dev libreadline-dev \
+            libncurses-dev zlib1g-dev libmysqlclient-dev
     fi
 }
 
@@ -1091,7 +1099,7 @@ run_checks() {   # run_checks FIX(0|1)
                 bad "$bin2 needs libraries: $(printf '%s' "$lib" | tr '\n' ' ')"
                 if [ "$fix" = 1 ]; then
                     FIXES=$((FIXES + 1))
-                    install_packages_for "$lib" || true
+                    install_missing_libs || true
                 fi
             else
                 ok "$bin2 loads its libraries"
@@ -1204,43 +1212,58 @@ layout_dirs() {   # recover BIN_DIR/CONF_DIR/DATA_DIR/SRC_DIR from what exists o
     [ -n "$SRC_DIR" ] || SRC_DIR="$ROOT/src"
 }
 
-install_packages_for() {   # map missing sonames to Ubuntu packages where we know them
-    local libs="$1" pkg pkgs="" l
-    for l in $libs; do
-        case "$l" in
-            libssl.so.*)         pkg=libssl3 ;;
-            libreadline.so.*)    pkg=libreadline8 ;;
-            libz.so.*)           pkg=zlib1g ;;
-            libncurses.so.*)     pkg=libncurses6 ;;
-            libtinfo.so.*)       pkg=libtinfo6 ;;
-            libboost_*.so.*)     pkg=libboost-all-dev ;;
-            libmysqlclient.so.*) pkg=libmysqlclient-dev ;;
-            libstdc++.so.*)      pkg=libstdc++6 ;;
-            libgcc_s.so.*)       pkg=libgcc-s1 ;;
-            *)                   pkg="" ;;
-        esac
-        if [ -n "$pkg" ]; then pkgs="$pkgs $pkg"; else warn "do not know which package provides $l"; fi
-    done
-    [ -n "$pkgs" ] || return 0
-    warn "installing:$pkgs"
-    # shellcheck disable=SC2086  # $pkgs is a deliberate word list
-    apt-get install -y --no-install-recommends $pkgs
+packages_for_soname() {   # candidate packages for a soname, best first
+    case "$1" in
+        libssl.so.*|libcrypto.so.*) echo "libssl3t64 libssl3" ;;
+        libreadline.so.*)           echo "libreadline8t64 libreadline8" ;;
+        libbz2.so.*)                echo "libbz2-1.0" ;;
+        liblzma.so.*)               echo "liblzma5" ;;
+        libz.so.*)                  echo "zlib1g" ;;
+        libncurses.so.*)            echo "libncurses6" ;;
+        libncursesw.so.*)           echo "libncursesw6" ;;
+        libtinfo.so.*)              echo "libtinfo6" ;;
+        libcrypt.so.*)              echo "libcrypt1" ;;
+        libboost_*.so.*)            echo "libboost-all-dev" ;;
+        libmysqlclient.so.*)        echo "libmysqlclient21 libmysqlclient-dev" ;;
+        libstdc++.so.*)             echo "libstdc++6" ;;
+        libgcc_s.so.*)              echo "libgcc-s1" ;;
+        *)                          echo "" ;;
+    esac
 }
 
-summary_status() {
-    step "Result"
-    if [ "$PROBLEMS" = 0 ]; then
-        log "everything checked out"
-        return 0
-    fi
-    if [ "$ACTION" = "repair" ]; then
-        log "$FIXES fix(es) applied, $PROBLEMS problem(s) remaining"
-        log "anything still listed as FAIL needs a manual step (see the note next to it)"
-    else
-        log "$PROBLEMS problem(s) found"
-        log "run: bash thor-install.sh --repair"
-    fi
+install_for_soname() {   # first candidate that apt accepts wins; silent per-candidate failures
+    local soname="$1" candidate
+    for candidate in $(packages_for_soname "$soname"); do
+        if [ "$CHECK" = 1 ]; then
+            note "apt-get install -y --no-install-recommends $candidate   # for $soname"
+            return 0
+        fi
+        if apt-get install -y --no-install-recommends "$candidate" >/dev/null 2>&1; then
+            log "installed $candidate for $soname"
+            return 0
+        fi
+    done
     return 1
+}
+
+install_missing_libs() {   # what the binaries cannot load, resolved from ldd not from guesswork
+    local bin libs soname unresolved=""
+    for bin in worldserver authserver; do
+        libs=$(missing_libs "$BIN_DIR/$bin")
+        [ -n "$libs" ] || continue
+        for soname in $libs; do
+            if install_for_soname "$soname"; then
+                ok "$bin: package installed for $soname"
+            else
+                unresolved="$unresolved $soname"
+            fi
+        done
+    done
+    if [ -n "$unresolved" ]; then
+        warn "no known package for:$unresolved - install them by hand, then re-run --status"
+        return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------- inside stage: uninstall
