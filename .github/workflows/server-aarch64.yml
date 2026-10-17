@@ -126,7 +126,11 @@ jobs:
           cat acore-server-arm64.tar.zst.sha256
           df -h /
 
-      - uses: actions/upload-artifact@v4
+      # v4 targets Node 20, which the runners force onto Node 24 and then warn about.
+      # v5 still runs on Node 20 by default; v6 and v7 are the node24 majors. v7 wants a runner
+      # of at least 2.327.1, which only concerns self-hosted runners. name/path/retention-days
+      # are unchanged; v7's new inputs (archive, overwrite) are opt-in.
+      - uses: actions/upload-artifact@v7
         with:
           name: acore-server-arm64
           path: |
