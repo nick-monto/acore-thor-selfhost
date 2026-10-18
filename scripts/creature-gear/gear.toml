@@ -19,9 +19,12 @@ exclude_entries = []
 # (1274 creatures under the pinned base dumps); set a number to generate a smaller slice.
 max_creatures = 0
 
-# Variants per creature in creature_equip_template. The core resolves
-# creature.equipment_id = -1 by picking one of the IDs 1..n, so the IDs must stay
-# contiguous; roles cycle 0 = two-hander, 1 = one-hander + shield/holdable, 2 = ranged.
+# Maximum number of weapon roles emitted per creature in creature_equip_template. The class's
+# roles are tried in order - 0 = two-hander, 1 = one-hander + shield/holdable, 2 = ranged - and only
+# those whose main-hand or ranged pool has a class-appropriate candidate are emitted, so a class
+# with no ranged proficiency gets no ranged row. The core resolves creature.equipment_id = -1 by
+# picking one of the IDs 1..n, so the emitted IDs must stay contiguous; the generator numbers them
+# from 1 and this key caps how many there can be.
 pool_size = 3
 
 # Variants per creature for the five armour slots that vary per spawn point: HEAD, CHEST, LEGS,
@@ -43,20 +46,131 @@ required_level_margin = 3
 # Highest item Quality a candidate may have (2 = uncommon).
 quality_max = 2
 
+# ---------------------------------------------------------------------------------------------
+# Class rules: a creature's gear must fit creature_template.unit_class, which is the creature's
+# ChrClasses id. These tables key on that id (e.g. [classes.1] is the warrior).
+#
+# weapons: the item_template.subclass ids (item class 2) the class may use, named in the comment
+#   above each row: 0 axe1h, 1 axe2h, 2 bow, 3 gun, 4 mace1h, 5 mace2h, 6 polearm, 7 sword1h,
+#   8 sword2h, 10 staff, 13 fist, 15 dagger, 16 thrown, 18 crossbow, 19 wand. Thrown has no
+#   classMask in the client's SkillLineAbility.dbc (it is granted by race), so the classes that
+#   threw in 3.3.5 keep it.
+# armour: the class's armour chain, most protective first, each entry [item_template.subclass,
+#   minimum creature level]: 1 cloth, 2 leather, 3 mail, 4 plate. The generator wears the first
+#   chain entry whose minimum level the creature satisfies and which has a candidate in every
+#   armour slot; if no entry covers every slot it takes the first eligible one that covers at
+#   least one, and a slot that entry cannot fill falls back along the rest of the chain (so a
+#   level-10 leather creature's empty HEAD falls back to cloth). Plate items start at
+#   RequiredLevel 40 in the base item_template, hence the 40; mail is gated at 40 too, which is
+#   the class-progression rule rather than a supply limit.
+# shield: whether the class may carry a shield (item class 4 subclass 6) in its off hand.
+#   Shields are AllowableClass -1 in this data, so this flag is the only thing that keeps one out
+#   of a mage's ItemID2.
+# focus: the class's stat focus. melee drops items carrying any caster-group stat; caster drops
+#   items carrying any melee-group stat; either drops nothing.
+#
+# A creature whose unit_class has no table here (or is 0) falls back to the warrior row.
+# ---------------------------------------------------------------------------------------------
+
+# warrior
+[classes.1]
+weapons = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 15, 16, 18]
+armour = [[4, 40], [3, 40], [2, 1], [1, 1]]
+shield = true
+focus = "melee"
+
+# paladin
+[classes.2]
+weapons = [0, 1, 4, 5, 6, 7, 8]
+armour = [[4, 40], [3, 40], [2, 1], [1, 1]]
+shield = true
+focus = "either"
+
+# hunter
+[classes.3]
+weapons = [0, 1, 2, 3, 6, 7, 8, 10, 13, 15, 16, 18]
+armour = [[3, 40], [2, 1], [1, 1]]
+shield = false
+focus = "melee"
+
+# rogue
+[classes.4]
+weapons = [2, 3, 4, 7, 13, 15, 16, 18]
+armour = [[2, 1], [1, 1]]
+shield = false
+focus = "melee"
+
+# priest
+[classes.5]
+weapons = [4, 10, 15, 19]
+armour = [[1, 1]]
+shield = false
+focus = "caster"
+
+# death knight
+[classes.6]
+weapons = [0, 1, 4, 5, 6, 7, 8]
+armour = [[4, 40], [3, 40], [2, 1], [1, 1]]
+shield = false
+focus = "melee"
+
+# shaman
+[classes.7]
+weapons = [0, 1, 4, 5, 6, 10, 13, 15]
+armour = [[3, 40], [2, 1], [1, 1]]
+shield = true
+focus = "either"
+
+# mage
+[classes.8]
+weapons = [7, 10, 15, 19]
+armour = [[1, 1]]
+shield = false
+focus = "caster"
+
+# warlock
+[classes.9]
+weapons = [7, 10, 15, 19]
+armour = [[1, 1]]
+shield = false
+focus = "caster"
+
+# druid
+[classes.11]
+weapons = [4, 5, 6, 10, 13, 15]
+armour = [[2, 1], [1, 1]]
+shield = false
+focus = "either"
+
+# The two stat groups the focus rule works on, as item_template.stat_type ids (the core's
+# ItemModType, src/server/game/Entities/Item/ItemTemplate.h). Only the melee- and spell-specific
+# ratings are listed: the *generic* ratings - hit (31), crit (32), haste (36) - plus stamina (7),
+# resilience (35), mana/health (0, 1), health regen (46) and the whole "taken" family (22-27, 33,
+# 34) are neutral: they never disqualify an item and never count as the class's focus stat.
+# melee: agility (3), strength (4), defense (12), dodge (13), parry (14), block (15), melee hit
+# (16), ranged hit (17), melee crit (19), ranged crit (20), melee haste (28), ranged haste (29),
+# expertise (37), attack power (38), ranged attack power (39), armor penetration (44),
+# block value (48).
+# caster: intellect (5), spirit (6), spell hit (18), spell crit (21), spell haste (30),
+# spell healing (41), spell damage (42), mana regen (43), spell power (45), spell penetration (47).
+[stat_groups]
+melee = [3, 4, 12, 13, 14, 15, 16, 17, 19, 20, 28, 29, 37, 38, 39, 44, 48]
+caster = [5, 6, 18, 21, 30, 41, 42, 43, 45, 47]
+
 # Lowest share of the selected creatures whose worn gear includes a bind-on-equip item: a creature
-# counts when at least one of its three pool variants carries a bonding = 2 item among ItemID1..3,
-# or one of its eleven outfit entries is BoE. Only those items may drop while
+# counts when at least one of its pool rows carries a bonding = 2 item among ItemID1..3, or one of
+# its eleven outfit entries is BoE. Only those items may drop while
 # CreatureGear.Drop.RequireBindOnEquip = 1 (the shipped default). Read by check_creature_gear.py,
 # which falls back to 0.70 when the key is absent.
 #
-# The shipped dataset measures 72.29% (921 of 1274 creatures). The measure is set by the candidate
+# The shipped dataset measures 73.39% (935 of 1274 creatures). The measure is set by the candidate
 # rules, not by the BoE-first ordering the generator applies: with the whole 1-80 level range
-# selected, bands whose quality <= 2 candidate pool holds no BoE item cap the ratio - ordering
-# candidates bind-on-equip first moves it to only 72.37%, while quality_max is what moves it far
-# (31.24% at 1, 87.68% at 3). The 0.89 this key carried while the dataset stopped at 400 entries
-# was that slice's own ceiling and no longer describes the shipped data.
+# selected, bands whose quality <= 2 candidate pool holds no BoE item cap the ratio - the class
+# filter is nearly free (73.47% with every class on focus = either), while quality_max is what moves
+# it far (31.63% at 1, 88.93% at 3). The 0.89 this key carried while the dataset stopped at 400
+# entries was that slice's own ceiling and no longer describes the shipped data.
 #
-# 0.70 sits under the measured value and well above the 31.24% a rules change that strips BoE
+# 0.70 sits under the measured value and well above the 31.63% a rules change that strips BoE
 # supply (quality_max = 1) produces, so the gate still fails on a collapse instead of pinning the
 # current value at its exact measurement.
 min_boe_coverage = 0.70
