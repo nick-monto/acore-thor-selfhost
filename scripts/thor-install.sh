@@ -14,7 +14,10 @@
 # Everything is encapsulated: the rootfs is a plain directory, and every file this script
 # creates outside it is listed in a manifest, so removal is exact rather than "grep and hope".
 #
-#   <TERMUX_PREFIX>/var/lib/proot-distro/installed-rootfs/ubuntu   the Unix side (--purge-rootfs)
+#   <TERMUX_PREFIX>/var/lib/proot-distro/...   the Unix side (--purge-rootfs). proot-distro keeps that
+#                                              filesystem either in containers/ubuntu/rootfs or, on
+#                                              older installations, in installed-rootfs/ubuntu, so the
+#                                              script probes for it - see THOR_ROOTFS_DIR below
 #     /opt/acore           server: bin etc data src logs db run .thor-state   <- --root
 #     /opt/thor            this script's copy
 #   $HOME/.thor-wow        host state + manifest + database dumps
@@ -46,6 +49,9 @@
 #                           to fetch the server artifact and the script itself when private
 #   --data-zip URL|PATH|none  client data (dbc/maps/vmaps/mmaps)
 #   --boot-timeout SECS     first-boot wait for "World initialized" (default 1800)
+#   THOR_ROOTFS_DIR DIR     the rootfs directory, if proot-distro stores it somewhere this script
+#                           does not probe - a wrong rootfs puts the script's copy where the guest
+#                           cannot see it
 #   -h, --help              this text
 #
 # Note: the install root is $ROOT, not $PREFIX, because Termux already uses $PREFIX.
@@ -211,10 +217,42 @@ conf_get_unquoted() { conf_get "$1" "$2" | tr -d '"'; }
 
 INSIDE_SCRIPT_COPY="/opt/thor/thor-install.sh"
 
+# proot-distro has kept the guest filesystem in more than one place. The newer layout is
+# containers/<name>/rootfs with a manifest beside it; older installations put it straight in
+# installed-rootfs/<name>, and a device that has been through the change can carry both, the old one
+# left behind. Guessing is not harmless: a wrong rootfs is still a directory, so the install runs to
+# the point where the guest's own bash reports "No such file or directory" for the script's copy.
+# So probe for a directory that looks like a filesystem, and let THOR_ROOTFS_DIR settle it if a
+# future proot-distro moves things again.
+rootfs_candidates() {
+    printf '%s\n' \
+        "${THOR_ROOTFS_DIR:-}" \
+        "$TERMUX_PREFIX/var/lib/proot-distro/containers/$ROOTFS_NAME/rootfs" \
+        "$TERMUX_PREFIX/var/lib/proot-distro/installed-rootfs/$ROOTFS_NAME/rootfs" \
+        "$TERMUX_PREFIX/var/lib/proot-distro/installed-rootfs/$ROOTFS_NAME"
+}
+
+resolve_rootfs() {
+    local candidate
+    while read -r candidate; do
+        [ -n "$candidate" ] || continue
+        if [ -d "$candidate" ]; then ROOTFS="$candidate"; return 0; fi
+    done < <(rootfs_candidates)
+    # Not installed yet: follow the layout this proot-distro uses, so that the directory is found
+    # again after "proot-distro install".
+    if [ -n "${THOR_ROOTFS_DIR:-}" ]; then
+        ROOTFS="$THOR_ROOTFS_DIR"
+    elif [ -d "$TERMUX_PREFIX/var/lib/proot-distro/containers" ]; then
+        ROOTFS="$TERMUX_PREFIX/var/lib/proot-distro/containers/$ROOTFS_NAME/rootfs"
+    else
+        ROOTFS="$TERMUX_PREFIX/var/lib/proot-distro/installed-rootfs/$ROOTFS_NAME"
+    fi
+}
+
 # Paths derived from ROOT. refresh_paths() is called again whenever --root or the state file
 # changes ROOT, so --root DIR really moves the database, the socket and the state with it.
 refresh_paths() {
-    ROOTFS="$TERMUX_PREFIX/var/lib/proot-distro/installed-rootfs/$ROOTFS_NAME"
+    resolve_rootfs
     DB_DIR="$ROOT/db"
     RUN_DIR="$ROOT/run"
     SOCKET="$RUN_DIR/mysqld.sock"
@@ -310,6 +348,20 @@ proot_login() {   # proot_login ARGS... - never fatal: the caller decides what a
     if [ "$CHECK" = 1 ]; then note proot-distro login "$@"; return 0; fi
     if ! have proot-distro; then warn "proot-distro is not installed; skipping: proot-distro login $*"; return 1; fi
     proot-distro login "$@"
+}
+
+guest_has_path() {   # guest_has_path PATH - does the guest that "login" starts actually see PATH?
+    if [ "$CHECK" = 1 ]; then note "test -f $1 inside the rootfs"; return 0; fi
+    have proot-distro || return 0        # without it there is no guest to ask; the caller already warned
+    proot-distro login "$ROOTFS_NAME" -- test -f "$1"
+}
+
+die_path_invisible() {   # die_path_invisible PATH - the rootfs on disk is not the one being booted
+    die "$1 is not visible inside the '$ROOTFS_NAME' rootfs, so the filesystem proot-distro boots is
+       not $ROOTFS. See what is there:
+         ls -d $TERMUX_PREFIX/var/lib/proot-distro/*/*/
+       then name the right directory:
+         THOR_ROOTFS_DIR=<directory> bash $SCRIPT_PATH"
 }
 
 proot_remove_rootfs() {   # proot_remove_rootfs NAME
@@ -486,6 +538,12 @@ host_install() {
         log "already installed: $ROOTFS"
     else
         note proot-distro install "$ROOTFS_NAME"
+        if [ "$CHECK" != 1 ]; then
+            # "proot-distro install" decides which layout to create, so look again rather than
+            # trusting the guess made before it ran.
+            resolve_rootfs
+            log "rootfs: $ROOTFS"
+        fi
     fi
 
     step "Running the install inside the rootfs"
@@ -502,6 +560,13 @@ host_install() {
 
     note mkdir -p "$(dirname "$ROOTFS$inner")"
     note cp "$SCRIPT_PATH" "$ROOTFS$inner"
+    if [ "$CHECK" != 1 ]; then
+        [ -f "$ROOTFS$inner" ] || die "could not put the script into the rootfs: $ROOTFS$inner"
+        # The guest sees the copy only if this is the filesystem proot-distro boots. Asking from
+        # inside costs one proot start and turns a bare "No such file or directory" from the guest's
+        # bash into a statement of what is actually wrong.
+        guest_has_path "$inner" || die_path_invisible "$inner"
+    fi
     note proot-distro login "$ROOTFS_NAME" -- bash "$inner" "${args[@]}"
 
     step "Host side"
@@ -543,7 +608,7 @@ host_status() {
             PROBLEMS=$((PROBLEMS + 1))
         fi
     else
-        warn "cannot inspect the inside (the script's copy is missing); run: proot-distro login $ROOTFS_NAME -- bash $INSIDE_SCRIPT_COPY --status"
+        warn "cannot inspect the inside (no script copy at $ROOTFS$INSIDE_SCRIPT_COPY); if the rootfs on disk is not the one this distro boots, name it with THOR_ROOTFS_DIR (see --help)"
     fi
     summary_status
 }
@@ -554,7 +619,14 @@ host_repair() {
     state_load || true
     state_apply_cli
     [ -d "$ROOTFS" ] || die "rootfs missing: $ROOTFS (install first)"
-    [ -f "$ROOTFS$INSIDE_SCRIPT_COPY" ] || die "the script's copy is missing from the rootfs: $INSIDE_SCRIPT_COPY"
+    if [ ! -f "$ROOTFS$INSIDE_SCRIPT_COPY" ]; then
+        # This copy is the one thing the host stage owns, and --repair exists to put things back.
+        warn "the script's copy is missing; writing it again"
+        mkdir -p "$(dirname "$ROOTFS$INSIDE_SCRIPT_COPY")"
+        cp "$SCRIPT_PATH" "$ROOTFS$INSIDE_SCRIPT_COPY"
+        manifest_add "$ROOTFS$INSIDE_SCRIPT_COPY"
+    fi
+    guest_has_path "$INSIDE_SCRIPT_COPY" || die_path_invisible "$INSIDE_SCRIPT_COPY"
     local w
     for w in "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"; do
         if [ -x "$w" ]; then ok "wrapper: $w"; else warn "recreating $w"; manifest_add "$w"; fi

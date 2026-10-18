@@ -278,6 +278,7 @@ Four tests, in this order — each one is a gate:
 
 | Failure | Next thing to try |
 |---|---|
+| `bash: /opt/thor/thor-install.sh: no such file or directory` after "Running the install inside the rootfs" | the script's copy went to a directory that is not the filesystem proot-distro boots: current releases store containers in `containers/ubuntu/rootfs`, older ones in `installed-rootfs/ubuntu`. `thor-install.sh` probes both and checks from inside; if it still fails, `ls -d $PREFIX/var/lib/proot-distro/*/*/` and re-run with `THOR_ROOTFS_DIR=<the right one>` |
 | 32-bit exe will not start | bundle a 32-bit DXVK component (the shipped one has no `syswow64`), or port `wow-mobile`'s box64+glibc container configuration |
 | `mysqld` unstable under proot | native Termux MariaDB (the `≥ 8.0` configure check passes numerically [V]) or a pre-initialised database file restored into the rootfs |
 | Aarch64 build fails in CI | the failing file is the answer: the core has no Android-specific code, so an aarch64 portability break is a bug report against the fork |

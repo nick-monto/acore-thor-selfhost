@@ -59,7 +59,7 @@ Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every fla
 
 ### How removal stays exact
 
-- One rootfs directory (`$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu`) holds the Unix side; one install root (`/opt/acore`, `--root` to move it) holds the server, the configs, the client data, the SQL sources, the logs **and the MySQL data directory** (`<root>/db`) with its socket (`<root>/run`). Nothing is left in `/var/lib/mysql`.
+- One rootfs directory holds the Unix side: proot-distro keeps that filesystem in `$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs`, older installations in `installed-rootfs/ubuntu`, and the script probes for whichever is there (`THOR_ROOTFS_DIR` names it explicitly). One install root (`/opt/acore`, `--root` to move it) holds the server, the configs, the client data, the SQL sources, the logs **and the MySQL data directory** (`<root>/db`) with its socket (`<root>/run`). Nothing is left in `/var/lib/mysql`.
 - Everything created *outside* those two — the two Termux wrappers, the script's copy in the rootfs, `/usr/sbin/policy-rc.d`, the `_CONF_DIR` symlink when `--root` is used — is appended to a manifest (`~/.thor-wow/manifest.txt` on the Termux side, `<root>/.thor-state/manifest.txt` inside), and removal walks that manifest, refusing any path that is not clearly owned by the install.
 - Flags and secrets are recorded in `~/.thor-wow/state.env` / `<root>/.thor-state/state.env`, so `--status`, `--repair` and `--uninstall` work without re-passing `--bots`, `--account` or `--db-pass`.
 
