@@ -41,7 +41,7 @@
 #   --db-user NAME          MySQL user                (default acore)
 #   --db-pass PASS          MySQL password            (default: generated)
 #   --account NAME          GM account                (default admin)
-#   --account-pass PASS     GM password               (default: generated)
+#   --account-pass PASS     GM password               (default: password)
 #   --lan-ip IP             bind to the LAN and point the realm at IP (default: loopback only)
 #   --root DIR              install root in the rootfs (default /opt/acore)
 #   --release-url URL       prebuilt linux/arm64 tarball
@@ -167,6 +167,15 @@ random_password() {
     # with no output whatsoever. "The install exits at Databases and user" was this: generating the
     # passwords is the first thing create_schema does after printing its header.
     ( set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16 )
+}
+
+# The credentials the install uses when none were given. Called from main() rather than from
+# create_schema(), because a resumed install skips that step and first_boot still needs the GM
+# password to create the account. The database user gets a generated password (it is only ever
+# read by the servers); the GM account defaults to password so the client login is predictable.
+default_credentials() {
+    if [ -z "$DB_PASS" ]; then DB_PASS="$(random_password)"; fi
+    if [ -z "$ACCOUNT_PASS" ]; then ACCOUNT_PASS="password"; fi
 }
 
 sha256_file() { sha256sum "$1" | awk '{print $1}'; }
@@ -988,8 +997,7 @@ ensure_client_data() {
 
 create_schema() {
     step "Databases and user"
-    if [ -z "$DB_PASS" ]; then DB_PASS="$(random_password)"; fi
-    if [ -z "$ACCOUNT_PASS" ]; then ACCOUNT_PASS="$(random_password)"; fi
+    # DB_PASS and ACCOUNT_PASS were settled by default_credentials() in main().
     if [ "$CHECK" = 1 ]; then
         log "would create acore_auth, acore_world, acore_characters and the MySQL user '$DB_USER'"
         log "(acore_playerbots is created by the module's own updater on first boot)"
@@ -1534,6 +1542,7 @@ inside_uninstall() {
 
 main() {
     parse_args "$@"
+    default_credentials
     case "$ACTION" in
         install)
             if [ "$MODE" = "host" ]; then host_install; else stage_inside; fi
