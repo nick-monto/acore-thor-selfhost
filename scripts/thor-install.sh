@@ -555,9 +555,34 @@ WRAP
 proot-distro login $ROOTFS_NAME -- $ROOT/stop.sh
 command -v termux-wake-unlock >/dev/null && termux-wake-unlock
 WRAP
-    chmod +x "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"
+    cat > "$HOME/wow-server.sh" <<WRAP
+#!/data/data/com.termux/files/usr/bin/bash
+# Control for the self-hosted realm, for the launcher and for you:
+#   wow-server.sh start | stop | bots [N]
+# The launcher sends these through Termux's RUN_COMMAND service; running it by hand is the same.
+set -uo pipefail
+STATE="$HOST_STATE/state.env"
+[ -f "\$STATE" ] || { echo "no \$STATE: run thor-install.sh first" >&2; exit 1; }
+state() { grep -E "^\$1=" "\$STATE" | tail -1 | cut -d= -f2-; }
+ROOTFS="\$(state ROOTFS)"; ROOT="\$(state ROOT)"; CONF_DIR="\$(state CONF_DIR)"
+action="\${1:-}"; shift 2>/dev/null || true
+case "\$action" in
+    start) exec "$HOME/start-wow-server.sh" ;;
+    stop)  exec "$HOME/stop-wow-server.sh" ;;
+    bots)
+        proot-distro login "\$ROOTFS" -- "\$ROOT/set-bots.sh" "\$CONF_DIR/modules/playerbots.conf" "\$@"
+        if [ "\$#" -ge 1 ]; then
+            # --status compares its own record of the bot count against the config, so a change made
+            # here has to land there too or the next --status would report a mismatch.
+            sed -i -E "s|^BOTS=.*|BOTS=\$1|" "\$STATE"
+        fi
+        ;;
+    *) echo "usage: wow-server.sh start|stop|bots [N]" >&2; exit 2 ;;
+esac
+WRAP
+    chmod +x "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh" "$HOME/wow-server.sh"
     umask 022
-    log "wrote $HOME/start-wow-server.sh and $HOME/stop-wow-server.sh"
+    log "wrote $HOME/start-wow-server.sh, $HOME/stop-wow-server.sh and $HOME/wow-server.sh"
 }
 
 host_preflight() {
@@ -1226,8 +1251,33 @@ pkill -f "$BIN_DIR/authserver" 2>/dev/null || true
 sleep 2
 "$ROOT/stop-db.sh"
 EOF
-    chmod +x "$ROOT/run.sh" "$ROOT/stop.sh" "$ROOT/start-db.sh" "$ROOT/stop-db.sh"
-    log "wrote $ROOT/run.sh, $ROOT/stop.sh (and the two database helpers)"
+    cat > "$ROOT/set-bots.sh" <<EOF
+#!/usr/bin/env bash
+# set-bots.sh CONF [N] - read or set the random bot count in a playerbots.conf.
+# Min and Max move together: the launcher offers one number, and a narrower window would only change
+# how the population drifts after startup. The world reads it at its next start.
+set -euo pipefail
+conf="\${1:?usage: set-bots.sh CONF [N]}"
+n="\${2:-}"
+[ -f "\$conf" ] || { echo "no \$conf: the artifact was built without the module" >&2; exit 1; }
+read_key() { grep -E "^[[:space:]]*Playerbots\.\$1[[:space:]]*=" "\$conf" | tail -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*#.*\$//'; }
+if [ -z "\$n" ]; then
+    echo "min=\$(read_key MinRandomBots) max=\$(read_key MaxRandomBots)"
+    exit 0
+fi
+case "\$n" in *[!0-9]*) echo "refusing '\$n': the bot count is a number" >&2; exit 2 ;; esac
+[ "\$n" -le 2000 ] || { echo "refusing \$n: the range is 0-2000" >&2; exit 2; }
+for key in MinRandomBots MaxRandomBots; do
+    if grep -qE "^[[:space:]]*#?[[:space:]]*Playerbots\.\$key[[:space:]]*=" "\$conf"; then
+        sed -i -E "s|^[[:space:]]*#?[[:space:]]*(Playerbots\.\$key)[[:space:]]*=.*|\1 = \$n|" "\$conf"
+    else
+        printf 'Playerbots.%s = %s\n' "\$key" "\$n" >> "\$conf"
+    fi
+done
+echo "min=\$(read_key MinRandomBots) max=\$(read_key MaxRandomBots)"
+EOF
+    chmod +x "$ROOT/run.sh" "$ROOT/stop.sh" "$ROOT/start-db.sh" "$ROOT/stop-db.sh" "$ROOT/set-bots.sh"
+    log "wrote $ROOT/run.sh, $ROOT/stop.sh, $ROOT/set-bots.sh (and the two database helpers)"
 }
 
 summary() {
@@ -1251,6 +1301,7 @@ Manage it
   repair  : bash thor-install.sh --repair
   remove  : bash thor-install.sh --uninstall [--keep-db] [--purge-rootfs]
   start   : ~/start-wow-server.sh              (stop: ~/stop-wow-server.sh)
+  control : ~/wow-server.sh start|stop|bots N  (what the launcher calls)
 
 Next steps
   1. prove it with a PC 3.3.5a client before touching the launcher: re-run with
