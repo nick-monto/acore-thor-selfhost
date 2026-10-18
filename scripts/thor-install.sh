@@ -457,17 +457,9 @@ db_table_count() {
 
 # ---------------------------------------------------------------- server console
 
-wait_for_log() {   # wait_for_log TIMEOUT PATTERN FILE...
-    local timeout="$1" pattern="$2"
-    shift 2
-    local i f
-    for i in $(seq 1 "$timeout"); do
-        for f in "$@"; do
-            if [ -n "$f" ] && [ -f "$f" ] && grep -qE "$pattern" "$f"; then return 0; fi
-        done
-        sleep 1
-    done
-    return 1
+process_gone() {   # process_gone PID - true once it has exited; a zombie counts as gone
+    [ -d "/proc/$1" ] || return 0
+    [ "$(awk '{print $3}' "/proc/$1/stat" 2>/dev/null)" = Z ]
 }
 
 recent_logs() {   # the 3 most recently modified log files, newest first
@@ -490,14 +482,27 @@ world_console() {   # world_console TIMEOUT "console command" ...
     local as_pid=$!
     "$BIN_DIR/worldserver" -c "$CONF_DIR/worldserver.conf" < "$fifo" > "$wslog" 2>&1 &
     local ws_pid=$!
-    exec 9> "$fifo"          # completes the child's open-for-read, and keeps the console open
+    exec 9<> "$fifo"         # read-write, so this cannot block when the server failed to start
+                             # (opening for write alone waits for a reader that a dead process never opens)
 
     local -a logs=("$wslog" "$aslog")
     mapfile -t -O 2 logs < <(recent_logs)
     log "authserver pid $as_pid, worldserver pid $ws_pid: waiting up to ${timeout}s for the world"
-    if ! wait_for_log "$timeout" 'World initialized|ready\.\.\.' "${logs[@]}"; then
-        warn "worldserver did not report 'World initialized' within ${timeout}s - last lines of $wslog:"
-        tail -n 20 "$wslog" >&2 || true
+    local waited=0 why=""
+    while [ "$waited" -lt "$timeout" ]; do
+        if grep -qE 'World initialized|ready\.\.\.' "${logs[@]}" 2>/dev/null; then break; fi
+        # Waiting on a process that has already died is how a first boot that failed during the SQL
+        # import used to burn the whole timeout looking like an import still in progress.
+        if process_gone "$ws_pid"; then why="worldserver exited before the world came up"; break; fi
+        sleep 1; waited=$((waited + 1))
+    done
+    if [ -z "$why" ] && ! grep -qE 'World initialized|ready\.\.\.' "${logs[@]}" 2>/dev/null; then
+        why="worldserver did not report 'World initialized' within ${timeout}s"
+    fi
+    if [ -n "$why" ]; then
+        warn "$why - last lines of $wslog:"
+        tail -n 40 "$wslog" >&2 || true
+        if [ -s "$aslog" ]; then warn "last lines of $aslog:"; tail -n 20 "$aslog" >&2 || true; fi
         exec 9>&-
         kill "$ws_pid" "$as_pid" 2>/dev/null || true
         rm -f "$fifo"
