@@ -1096,6 +1096,18 @@ Next steps
 EOF
 }
 
+summary_status() {   # the last line of a check run: exit 1 when anything needs repair
+    if [ "$PROBLEMS" -gt 0 ]; then
+        printf '\nFAIL  %d problem(s) found\n' "$PROBLEMS"
+        exit 1
+    fi
+    if [ "$FIXES" -gt 0 ]; then
+        printf '\nok    all checks pass (%d fix(es) applied)\n' "$FIXES"
+    else
+        printf '\nok    all checks pass\n'
+    fi
+}
+
 # ---------------------------------------------------------------- inside stage: checks
 
 inside_status() {
