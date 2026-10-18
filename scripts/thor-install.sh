@@ -986,7 +986,7 @@ create_schema() {
         log "(acore_playerbots is created by the module's own updater on first boot)"
         return 0
     fi
-    mysql_admin <<SQL
+    if ! mysql_admin <<SQL
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
@@ -998,7 +998,19 @@ GRANT ALL PRIVILEGES ON acore_characters.* TO '$DB_USER'@'127.0.0.1';
 GRANT ALL PRIVILEGES ON acore_playerbots.* TO '$DB_USER'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
-    db_query "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'acore%'"
+    then
+        tail -5 "$ROOT/logs/mysql.err" >&2 || true
+        die "mysql rejected the schema setup above; the tail of $ROOT/logs/mysql.err follows it"
+    fi
+    # This query is the step's last command, so a failure here used to end the install with no output
+    # at all - db_query sends the client's error to /dev/null. Say what happened instead.
+    local schemas
+    if ! schemas="$(db_query "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'acore%'")"; then
+        db_ping || warn "mysqld is not answering on $SOCKET any more"
+        tail -5 "$ROOT/logs/mysql.err" >&2 || true
+        die "the databases were created but the check query failed; the log tail is above (docs/RUNBOOK.md Part 10)"
+    fi
+    log "databases: $(printf '%s' "$schemas" | tr '\n' ' ')"
 }
 
 conf_pair() {   # print the live config file, creating it from NAME.conf.dist once
