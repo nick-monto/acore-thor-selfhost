@@ -1,0 +1,44 @@
+[core]
+repo = "https://github.com/mod-playerbots/azerothcore-wotlk"
+branch = "Playerbot"
+commit = "8a4e76eac8c4ccebf547113afe7b51d6c3e91641"   # inspected 2026-10-16
+# The guide clones branch HEAD with no pin; we pin both repos so a build is reproducible.
+
+[module.playerbots]
+repo = "https://github.com/mod-playerbots/mod-playerbots"
+commit = "d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"   # master, 2026-10-16
+path = "modules/mod-playerbots"                        # DBUpdater loads module SQL from this path
+
+[module.creature_gear]
+repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
+path = "modules/mod-creature-gear"                          # DBUpdater loads module SQL from this path
+ref = "main"                                                # SELF_REF in thor-install.sh (overridable)
+# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-creature-gear
+# out of its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a
+# tarball from SELF_REPO ($SELF_REF, default main). No third-party hash to keep in step.
+
+[data.client_data]
+url = "https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
+size = 1196168257
+sha256 = "a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610"
+provides = ["dbc", "maps", "vmaps", "mmaps"]           # no WoW client needed for the server side
+
+[database]
+engine = "mysql-server 8.0.46 (Ubuntu noble arm64)"    # MySQL's own APT repo is amd64/i386 only
+schemas = ["acore_auth", "acore_world", "acore_characters", "acore_playerbots"]
+ports = { db = 3306, auth = 3724, world = 8085, soap = 7878 }   # SOAP disabled by default
+
+[launcher]
+repo = "https://github.com/wyattabuntjer/AYN-Thor-WoW-Launcher"
+version = "2.6.0"
+commit = "f02be3b"                                     # shallow clone 2026-10-16
+# Target of the client-side change list in docs/LAUNCHER-HOSTING-DESIGN.md §3.
+
+[launcher_components]
+proton = { name = "proton-11.0-90624-arm64ec.wcp", sha256 = "137807f4145b1b440075f83b2b1b3501d19c4eb618784b1a28418652cae3db03" }
+dxvk = { name = "dxvk-2.4.1-wow-aarch64-test.wcp", sha256 = "f660b5c6422b3f93cec65664f309718942e58581b5b96fa2902d55d63ce1db8a" }
+
+[reference_guide]
+repo = "https://github.com/DadsMmoLab/dads-mmo-lab"
+path = "guides/wow-wotlk"
+fetched = "2026-10-16"

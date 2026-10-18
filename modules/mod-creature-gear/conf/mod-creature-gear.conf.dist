@@ -1,0 +1,108 @@
+###################################################################################################
+#  mod-creature-gear
+#  Humanoids that visibly wear gear, whose gear can drop when they die.
+#
+#  This file is installed to <prefix>/etc/modules/mod-creature-gear.conf.dist and is read as
+#  <prefix>/etc/modules/mod-creature-gear.conf (thor-install.sh copies it once). The
+#  CreatureGear.* keys are read by the module's WorldScript::OnAfterConfigLoad, so
+#  `.reload config` applies changes without a restart.
+#
+#  Three independent halves, each switchable on its own:
+#    A  worn weapons  - creature_equip_template pools + creature.equipment_id = -1 (pure SQL data,
+#                      installed by the module's data/sql/world/base/*.sql; the module only
+#                      re-rolls the pool on respawn when asked to).
+#    B  drops         - a creature can drop the gear it is wearing (items come from the worn weapon
+#                      slots and from mod_creature_gear_outfit).
+#    C  appearance    - the eleven armour display slots are shown on the creature through the
+#                      mirror-image packet; needs no client data and no client patch.
+###################################################################################################
+
+# Whole module: 0 disables every half.
+CreatureGear.Enable = 1
+
+# Extra logging (one line per injected drop / applied appearance / skipped entry).
+# Note: the module logs these at debug level, so worldserver.conf also needs
+# `Logger.module=5,Console Server` - the shipped value is 4 (Info), which filters them out.
+CreatureGear.Debug = 0
+
+###################################################################################################
+#  A. Worn weapons
+###################################################################################################
+
+# 1 = re-roll the pool every time the creature enters the world (which includes respawn), for
+# every creature entry covered by the module's outfit/weapon-pool data; delete that entry's
+# `mod_creature_gear_outfit` row to opt it out of re-rolling.
+# 0 = stock behaviour, one roll per spawn point per server run.
+# Only those entries are affected because the core resolves `creature.equipment_id = -1` in place
+# once per worldserver start (ObjectMgr:LoadCreatureData writes the rolled variant back), so the
+# `-1` sentinel is no longer visible from Creature::GetOriginalEquipmentId() afterwards.
+CreatureGear.Weapons.RerollOnRespawn = 1
+
+###################################################################################################
+#  B. Drop what it wears
+###################################################################################################
+
+CreatureGear.Drop.Enable = 1
+
+# Percent chance, per corpse, that a drop is injected. 5.0 = one in twenty.
+CreatureGear.Drop.Chance = 5.0
+
+# Highest item quality that may drop. 0 poor, 1 common, 2 uncommon, 3 rare, 4 epic.
+# 2 keeps drops inside the "uncommon or worse" band the design calls for.
+CreatureGear.Drop.MaxQuality = 2
+
+# 1 = only bind-on-equip items drop (item_template.bonding = 2), so wearing a dropped item
+# never binds it to the mob's killer by accident.
+CreatureGear.Drop.RequireBindOnEquip = 1
+
+# 1 = also drop for creatures without a loot template (creature_template.lootid = 0). Those corpses
+# are never filled by the core, so the module sets the lootable flag itself, and playerbots ignore
+# them as grind targets (GrindTargetValue). 0 = only creatures with a real loot table.
+#
+# Caveat the core imposes: for such a creature Unit::Kill decides the corpse state before the module
+# sees the death, finds no loot and shortens the corpse timer as if it had been looted. The drop is
+# still there and lootable, the corpse just respawns sooner than a normal unlooted one.
+CreatureGear.Drop.IncludeNoLootTemplate = 1
+
+# At most this many items injected per corpse, on top of the normal loot table.
+#
+# The injection is distinct from the creature's own loot table: the table rolls first, and a worn
+# item the table already produced for that corpse is left out rather than added a second time, so
+# every injected item is one the player would not otherwise have got from that corpse. The drop is
+# also the gear of that spawn point's armour variant, not an unrelated random item.
+CreatureGear.Drop.MaxItemsPerCorpse = 1
+
+# An item may drop when its RequiredLevel is at most (creature level + this margin).
+CreatureGear.Drop.LevelMargin = 3
+
+###################################################################################################
+#  C. Appearance (eleven armour slots over the mirror-image packet)
+###################################################################################################
+
+# The outfit itself has two data sources. `mod_creature_gear_outfit` is one row per creature entry
+# and holds all eleven slots; `mod_creature_gear_outfit_variant` holds one row per variant and
+# overrides five of them - HEAD, CHEST, LEGS, FEET and HANDS (helm, body armour, pants, boots,
+# gloves). The module picks a variant per spawn point (spawn id mod variant count) and uses the
+# same pick for the creature's drop, so each spawn point of an entry shows and drops its own set of
+# those five pieces while the other six slots stay the entry's. Unlike the weapon re-roll in
+# section A, this pick does not change on respawn: a spawn point keeps its variant.
+
+# 0 = creatures keep their stock model and never show the outfit stored in mod_creature_gear_outfit.
+#
+# Only creatures whose model is a player-race model can be outfitted: the eleven display slots hang
+# off CreatureDisplayInfo -> CreatureDisplayInfoExtra, and ChrRaces.model_m/model_f is the only base
+# model the client accepts here. A creature whose displays carry no CreatureDisplayInfoExtra row
+# (most beast-like humanoid art) keeps its stock model and simply never shows an outfit - it still
+# drops its gear when drops are enabled, because visibility and the drop data are independent.
+CreatureGear.Appearance.Enable = 1
+
+# 1 = give each spawn of an outfitted entry its own face, hair style and hair colour, sampled from
+# the values the pinned client data actually contains for that race and gender (CharSections.dbc:
+# 10-24 hair styles, 10-13 hair colours, 10-30 faces and 4-25 skin colours per race/gender).
+# The choice is derived from the spawn point's own id, so one spawn point keeps one face across
+# respawns and restarts while different spawn points of the same entry differ. A non-zero
+# Skin/Face/HairStyle/HairColor/FacialHair column of the entry's mod_creature_gear_outfit row pins
+# that field for the whole entry and wins over the sampling.
+# 0 = every instance of an entry shows the row's values (all 0 unless the dataset sets them), which
+# is one and the same face for every mob of that entry.
+CreatureGear.Appearance.VaryPerSpawn = 1
