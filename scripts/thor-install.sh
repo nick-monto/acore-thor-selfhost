@@ -77,6 +77,7 @@ ROOTFS_NAME="ubuntu"
 TERMUX_PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
 POLICY_RC_D="${POLICY_RC_D:-/usr/sbin/policy-rc.d}"     # overridable for tests
 HOST_STATE="${THOR_HOST_STATE:-$HOME/.thor-wow}"        # overridable for tests
+DB_PROBE_TIMEOUT="${DB_PROBE_TIMEOUT:-30}"              # seconds a write probe may take (tests shorten it)
 
 ROOT="$ROOT_DEFAULT"
 BOTS=50
@@ -376,28 +377,53 @@ mysql_admin() { mysql --protocol=socket --socket="$SOCKET" -uroot "$@"; }
 
 db_ping() { mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1; }
 
+# "ping" only proves the server accepts connections. The first statement that writes goes through
+# InnoDB's I/O path instead, and under proot that path has no real io_setup/io_submit, so the write
+# never returns: the server still answers ping, every later step hangs behind it, and nothing is
+# printed. A bounded write probe turns that into a message.
+db_writable() {
+    # The client is spelled out rather than called through mysql_admin(): timeout is an external
+    # binary, so it execs its argument and cannot run a shell function.
+    timeout "$DB_PROBE_TIMEOUT" mysql --protocol=socket --socket="$SOCKET" -uroot -e \
+        "CREATE DATABASE IF NOT EXISTS _thor_probe; DROP DATABASE _thor_probe;" >/dev/null 2>&1
+}
+
 db_start() {
     mkdir -p "$RUN_DIR" "$DB_DIR" "$ROOT/logs"
     chown mysql:mysql "$DB_DIR" "$RUN_DIR"
     chown -R mysql:mysql "$DB_DIR"
+    # --innodb-use-native-aio=0 throughout: proot does not implement libaio's io_setup/io_submit, so
+    # with native AIO on, InnoDB's first write never completes. The server comes up, answers ping, and
+    # then hangs the statement that touches a table.
     if [ ! -d "$DB_DIR/mysql" ]; then
         log "initialising the database directory $DB_DIR (first run)"
         mysqld --initialize-insecure --user=mysql --datadir="$DB_DIR" \
+               --innodb-use-native-aio=0 \
                --log-error="$ROOT/logs/mysql.err" >/dev/null 2>&1 \
             || die "mysqld --initialize-insecure failed; see $ROOT/logs/mysql.err"
     fi
-    db_ping && { log "mysqld already running"; return 0; }
-    log "starting mysqld (datadir $DB_DIR, socket $SOCKET)"
-    mysqld --user=mysql --datadir="$DB_DIR" --socket="$SOCKET" \
-           --bind-address=127.0.0.1 --port=3306 --skip-name-resolve \
-           --pid-file="$RUN_DIR/mysqld.pid" --log-error="$ROOT/logs/mysql.err" --daemonize \
-        || die "mysqld did not start; see $ROOT/logs/mysql.err"
-    local i
-    for i in $(seq 1 60); do
-        db_ping && return 0
-        sleep 1
-        if [ "$i" = 60 ]; then die "mysqld did not answer on $SOCKET; see $ROOT/logs/mysql.err"; fi
-    done
+    if db_ping; then
+        log "mysqld already running"
+    else
+        log "starting mysqld (datadir $DB_DIR, socket $SOCKET)"
+        mysqld --user=mysql --datadir="$DB_DIR" --socket="$SOCKET" \
+               --bind-address=127.0.0.1 --port=3306 --skip-name-resolve \
+               --innodb-use-native-aio=0 \
+               --pid-file="$RUN_DIR/mysqld.pid" --log-error="$ROOT/logs/mysql.err" --daemonize \
+            || die "mysqld did not start; see $ROOT/logs/mysql.err"
+        local i
+        for i in $(seq 1 60); do
+            db_ping && break
+            if [ "$i" = 60 ]; then die "mysqld did not answer on $SOCKET; see $ROOT/logs/mysql.err"; fi
+            sleep 1
+        done
+    fi
+    # A server left over from an earlier run is reused, so check that it can actually write before the
+    # install builds on it - otherwise every later step hangs behind the same wedged server.
+    db_writable || die "mysqld answers on $SOCKET but a write did not finish in ${DB_PROBE_TIMEOUT}s.
+       If an earlier run wedged it, stop it and re-run:
+         mysqladmin --protocol=socket --socket=$SOCKET -uroot shutdown    # or: pkill -9 mysqld
+       Otherwise read $ROOT/logs/mysql.err and docs/RUNBOOK.md Part 10."
 }
 
 db_stop() {
@@ -1099,9 +1125,12 @@ EOF
 set -euo pipefail
 mkdir -p "$RUN_DIR" "$DB_DIR" "$ROOT/logs"
 chown mysql:mysql "$DB_DIR" "$RUN_DIR"
-if ! mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1; then
+    if ! mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1; then
+    # --innodb-use-native-aio=0: proot has no libaio, and with native AIO on InnoDB's first write
+    # hangs while the server still answers ping (see docs/RUNBOOK.md Part 10).
     mysqld --user=mysql --datadir="$DB_DIR" --socket="$SOCKET" \\
            --bind-address=127.0.0.1 --port=3306 --skip-name-resolve \\
+           --innodb-use-native-aio=0 \\
            --pid-file="$RUN_DIR/mysqld.pid" --log-error="$ROOT/logs/mysql.err" --daemonize
 fi
 for _ in \$(seq 1 60); do
