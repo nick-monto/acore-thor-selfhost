@@ -18,6 +18,8 @@ bash thor-install.sh --check     # preflight: rootfs, disk, release asset, no ch
 bash thor-install.sh             # do it: ~1.2 GB download, or --from-source to compile in place
 ```
 
+This runs for an hour or more — apt, the client-data download, then a first boot that imports the base SQL and updates and waits up to `--boot-timeout` (1800 s by default). Keep Termux in the foreground with the screen on while it runs: it takes a wake lock before entering the rootfs, but Android can still freeze or kill a backgrounded Termux, and a frozen install stops with no further output, which looks like a crash. `--check` first if you want to know what it will do without the wait.
+
 **Private repository?** Both the script fetch above and the artifact download need a token: fetch it with `curl -H "Authorization: Bearer $TOK"` and run the script with `--github-token "$TOK"` (or `THOR_GH_TOKEN=$TOK`). See the README for the exact commands; the flag is also recorded in the state file, so `--repair` keeps working.
 
 The artifact the script downloads comes from the rolling `server-build` release that `.github/workflows/server-aarch64.yml` refreshes on every successful run (and from a `server-v*` tag release if you cut one). `--check` probes that URL and says so if it is not there yet.
@@ -278,6 +280,7 @@ Four tests, in this order — each one is a gate:
 
 | Failure | Next thing to try |
 |---|---|
+| The install goes quiet mid-way and never prints again | almost always Android freezing or killing a backgrounded Termux, not the script: check from a second Termux session with `ps -A -o pid,stat,args \| grep -E 'thor-install\|mysqld'` — a `T` state means frozen (`kill -CONT <pid>`, or just bring Termux to the front). Re-running is safe: every step is idempotent. If `mysqld` is alive but does not answer `mysqladmin --protocol=socket --socket=/opt/acore/run/mysqld.sock ping`, that is the documented proot instability — stop it (`~/stop-wow-server.sh`) and re-run |
 | `bash: /opt/thor/thor-install.sh: no such file or directory` after "Running the install inside the rootfs" | the script's copy went to a directory that is not the filesystem proot-distro boots: current releases store containers in `containers/ubuntu/rootfs`, older ones in `installed-rootfs/ubuntu`. `thor-install.sh` probes both and checks from inside; if it still fails, `ls -d $PREFIX/var/lib/proot-distro/*/*/` and re-run with `THOR_ROOTFS_DIR=<the right one>` |
 | 32-bit exe will not start | bundle a 32-bit DXVK component (the shipped one has no `syswow64`), or port `wow-mobile`'s box64+glibc container configuration |
 | `mysqld` unstable under proot | native Termux MariaDB (the `≥ 8.0` configure check passes numerically [V]) or a pre-initialised database file restored into the rootfs |

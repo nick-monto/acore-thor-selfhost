@@ -497,13 +497,14 @@ write_host_wrappers() {
     umask 077
     cat > "$HOME/start-wow-server.sh" <<WRAP
 #!/data/data/com.termux/files/usr/bin/bash
-termux-wake-lock
+# The wake lock is what keeps Android from freezing the server; it comes from the Termux:API app.
+command -v termux-wake-lock >/dev/null && termux-wake-lock
 exec proot-distro login $ROOTFS_NAME -- $ROOT/run.sh
 WRAP
     cat > "$HOME/stop-wow-server.sh" <<WRAP
 #!/data/data/com.termux/files/usr/bin/bash
 proot-distro login $ROOTFS_NAME -- $ROOT/stop.sh
-termux-wake-unlock
+command -v termux-wake-unlock >/dev/null && termux-wake-unlock
 WRAP
     chmod +x "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"
     umask 022
@@ -558,6 +559,16 @@ host_install() {
     if [ "$FORCE" = 1 ]; then args+=(--force); fi
     if [ "$CHECK" = 1 ]; then args+=(--check); fi
 
+    # This stage runs for an hour or more: apt, the client-data download, and a first boot that waits
+    # up to --boot-timeout. Android freezes a backgrounded Termux, which stops the script and mysqld
+    # alike and looks exactly like the install giving up, so take the wake lock before it starts. The
+    # command comes from the Termux:API app, so warn instead of failing the install when it is absent.
+    if have termux-wake-lock; then
+        note termux-wake-lock
+    else
+        warn "termux-wake-lock is not available (it comes from the Termux:API app); keep Termux in the foreground while this runs"
+    fi
+
     note mkdir -p "$(dirname "$ROOTFS$inner")"
     note cp "$SCRIPT_PATH" "$ROOTFS$inner"
     if [ "$CHECK" != 1 ]; then
@@ -570,7 +581,6 @@ host_install() {
     note proot-distro login "$ROOTFS_NAME" -- bash "$inner" "${args[@]}"
 
     step "Host side"
-    note termux-wake-lock
     note mkdir -p "$HOST_STATE"
     manifest_add "$HOME/start-wow-server.sh"
     manifest_add "$HOME/stop-wow-server.sh"
