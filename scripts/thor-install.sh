@@ -161,7 +161,13 @@ parse_args() {
 
 # ---------------------------------------------------------------- generic helpers
 
-random_password() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16; }
+random_password() {
+    # head closes this pipe after 16 bytes, so tr dies of SIGPIPE with 141 - and under pipefail that
+    # 141 is the substitution's status, which fails the assignment and, with set -e, ends the script
+    # with no output whatsoever. "The install exits at Databases and user" was this: generating the
+    # passwords is the first thing create_schema does after printing its header.
+    ( set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16 )
+}
 
 sha256_file() { sha256sum "$1" | awk '{print $1}'; }
 
@@ -456,8 +462,11 @@ wait_for_log() {   # wait_for_log TIMEOUT PATTERN FILE...
 }
 
 recent_logs() {   # the 3 most recently modified log files, newest first
-    find "$ROOT/logs" -type f \( -name '*.log' -o -name '*.out' \) -printf '%T@ %p\n' 2>/dev/null \
-        | sort -rn | head -3 | cut -d' ' -f2-
+    # Same trap as random_password: head closes the pipe early, and pipefail would report sort's 141
+    # as a failure of the check that is only trying to show log tails.
+    ( set +o pipefail
+      find "$ROOT/logs" -type f \( -name '*.log' -o -name '*.out' \) -printf '%T@ %p\n' 2>/dev/null \
+          | sort -rn | head -3 | cut -d' ' -f2- )
 }
 
 world_console() {   # world_console TIMEOUT "console command" ...
