@@ -561,7 +561,16 @@ host_repair() {
     done
     write_host_wrappers
     step "Inside the rootfs"
-    proot_login "$ROOTFS_NAME" -- bash "$INSIDE_SCRIPT_COPY" --inside --root "$ROOT" --repair || warn "the inside repair did not run"
+    # The inside stage exits 0 when everything passes, 1 when the checks still have problems (which
+    # is also what die() uses), and anything else when it could not start at all - so the code is
+    # reported instead of guessing which of the two happened.
+    local rc=0
+    proot_login "$ROOTFS_NAME" -- bash "$INSIDE_SCRIPT_COPY" --inside --root "$ROOT" --repair || rc=$?
+    if [ "$rc" = 0 ]; then
+        ok "the inside repair finished"
+    else
+        warn "the inside repair exited $rc: the report above says why (it could not start, or problems remain)"
+    fi
     log "re-run --status to see the result"
 }
 
