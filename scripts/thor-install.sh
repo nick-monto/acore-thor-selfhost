@@ -1211,6 +1211,16 @@ EOF
     cat > "$ROOT/stop.sh" <<EOF
 #!/usr/bin/env bash
 cd "$ROOT" || exit 1
+# run.sh restarts the world when it dies, so the loop has to go first: its INT/TERM trap stops both
+# servers and then the database. Killing the binaries on their own just makes the loop bring them
+# straight back, which is what "stop" used to do.
+if pgrep -f "$ROOT/run.sh" >/dev/null 2>&1; then
+    pkill -f "$ROOT/run.sh" 2>/dev/null || true
+    for i in \$(seq 1 20); do
+        pgrep -f "$ROOT/run.sh" >/dev/null 2>&1 || break
+        sleep 1
+    done
+fi
 pkill -f "$BIN_DIR/worldserver" 2>/dev/null || true
 pkill -f "$BIN_DIR/authserver" 2>/dev/null || true
 sleep 2
