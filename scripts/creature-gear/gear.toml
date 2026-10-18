@@ -15,7 +15,9 @@ skip_nonzero_npcflag = true
 exclude_entries = []
 
 # Upper bound on how many creatures end up in the generated SQL, ascending entry order.
-max_creatures = 400
+# 0 means no bound: every creature the rules above admit. The shipped dataset is uncapped
+# (1274 creatures under the pinned base dumps); set a number to generate a smaller slice.
+max_creatures = 0
 
 # Variants per creature in creature_equip_template. The core resolves
 # creature.equipment_id = -1 by picking one of the IDs 1..n, so the IDs must stay
@@ -45,13 +47,16 @@ quality_max = 2
 # counts when at least one of its three pool variants carries a bonding = 2 item among ItemID1..3,
 # or one of its eleven outfit entries is BoE. Only those items may drop while
 # CreatureGear.Drop.RequireBindOnEquip = 1 (the shipped default). Read by check_creature_gear.py,
-# which falls back to 0.9 when the key is absent.
+# which falls back to 0.70 when the key is absent.
 #
-# The key was expected to sit at 0.9, but the pinned base data does not reach it comfortably under
-# the frozen candidate rules (level band, RequiredLevel margin, Quality cap): the measure tops out at
-# 90.00% (360 of 400), because item_template has no BoE armour below ItemLevel 10 — so almost every
-# level 1-2 creature can never wear one — and levels 70-72 have none inside the quality <= 2 band.
-# 0.89 sits under that ceiling yet above the 88.0% measured for a dataset without the BoE-first
-# ordering and the class 4 off-hand candidates, so the gate still fails if either fix regresses
-# instead of merely pinning the current value at its exact ceiling.
-min_boe_coverage = 0.89
+# The shipped dataset measures 72.29% (921 of 1274 creatures). The measure is set by the candidate
+# rules, not by the BoE-first ordering the generator applies: with the whole 1-80 level range
+# selected, bands whose quality <= 2 candidate pool holds no BoE item cap the ratio - ordering
+# candidates bind-on-equip first moves it to only 72.37%, while quality_max is what moves it far
+# (31.24% at 1, 87.68% at 3). The 0.89 this key carried while the dataset stopped at 400 entries
+# was that slice's own ceiling and no longer describes the shipped data.
+#
+# 0.70 sits under the measured value and well above the 31.24% a rules change that strips BoE
+# supply (quality_max = 1) produces, so the gate still fails on a collapse instead of pinning the
+# current value at its exact measurement.
+min_boe_coverage = 0.70

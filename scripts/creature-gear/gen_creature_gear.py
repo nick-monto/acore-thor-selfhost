@@ -362,7 +362,7 @@ def load_rules(path: Path) -> dict:
         "max_level": 80,
         "skip_nonzero_npcflag": True,
         "exclude_entries": [],
-        "max_creatures": 400,
+        "max_creatures": 0,
         "pool_size": 3,
         "armour_variants": 4,
         "item_level_window": 8,
@@ -370,13 +370,15 @@ def load_rules(path: Path) -> dict:
         "quality_max": 2,
         # Consumed by check_creature_gear.py, not by this generator; accepted here so the two
         # scripts can share one rules file.
-        "min_boe_coverage": 0.9,
+        "min_boe_coverage": 0.70,
     }
     for key, value in defaults.items():
         rules.setdefault(key, value)
     unknown = set(rules) - set(defaults)
     if unknown:
         raise SystemExit(f"FAIL: unknown keys in {path}: {', '.join(sorted(unknown))}")
+    if rules["max_creatures"] < 0:
+        raise SystemExit("FAIL: max_creatures must be 0 or more (0 = every creature the rules admit)")
     if not 1 <= rules["pool_size"] <= 3:
         raise SystemExit("FAIL: pool_size must be 1..3 (the core's random picker indexes IDs 1..n)")
     if not 1 <= rules["armour_variants"] <= 255:
@@ -453,7 +455,8 @@ def select_entries(templates: dict[int, dict], spawns: dict[int, dict], rules: d
             continue
         selected.append(entry)
     selected.sort()
-    return selected[: rules["max_creatures"]]
+    cap = rules["max_creatures"]
+    return selected[:cap] if cap else selected
 
 
 def index_items(columns: list[str], rows: list[list[str]], classes: tuple[int, ...]) -> dict[tuple[int, int], list[tuple[int, int, int, int, int]]]:

@@ -114,7 +114,7 @@ def load_rules(path: Path) -> dict:
     with path.open("rb") as fh:
         rules = tomllib.load(fh)
     defaults = {
-        "min_boe_coverage": 0.9,
+        "min_boe_coverage": 0.70,
         "item_level_window": 8,
         "required_level_margin": 3,
         "quality_max": 2,

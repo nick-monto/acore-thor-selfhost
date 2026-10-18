@@ -221,7 +221,7 @@ grep -E "Unknown item \(ID=|is not equipable in a hand" /opt/acore/logs/Server.l
 ```
 
 - (1) prints the file. If it is missing, the artifact was built without the module (Part 2) — creatures keep their stock gear.
-- (2) prints a non-zero `outfit_rows` (the shipped dataset is 400 outfit rows, one per creature) and `variant_rows` (1600 = 400 creatures x 4 armour variants).
+- (2) prints a non-zero `outfit_rows` (the shipped dataset is 1274 outfit rows, one per creature) and `variant_rows` (5096 = 1274 creatures x 4 armour variants).
 - (3) prints `clean`. Those two strings are the load-time rejections the core logs for bad `creature_equip_template` rows (`ObjectMgr.cpp:1522-1550`); any hit means a phase A pool row references an item the server does not know or cannot hold in a hand.
 
 The module's own detail (`mod-creature-gear: loaded N outfit row(s) and M variant row(s) for K creature(s)`, the per-variant / per-drop / per-morph lines) is `LOG_DEBUG`, and `worldserver.conf.dist` ships `Logger.module=4,Console Server` (Info), which filters debug out — set `Logger.module=5` in `worldserver.conf` to see those lines at all. `CreatureGear.Debug` only gates the module's own lines; the logger level gates the channel.
