@@ -90,7 +90,7 @@ The portable shape is the pattern, not the code: start (DB → auth → world), 
 
 ## 9. Gates to verify on hardware
 
-- **G1** aarch64 build of core + module succeeds (no upstream arm64 CI exists): record the exact toolchain, flags and build time.
+- **G1** aarch64 build of core + module succeeds (no upstream arm64 CI exists): record the exact toolchain, flags and build time. **Passed 2026-10-19** (run 39297183319): `ubuntu-24.04-arm`, `RelWithDebInfo`, static Boost, `-k 0`; build + install 49 min; artifact 159 MiB with `lib/libmysqlclient.so.21` bundled and `$ORIGIN/../lib` on the binaries.
 - **G2** the database daemon (MySQL 8 in a rootfs, or Termux MariaDB with the configure check patched) initialises, survives backgrounding, and recovers after a kill.
 - **G3** authserver + worldserver reach `ready...` on device; a real 3.3.5a client logs in on `127.0.0.1` and the realm pin is visible.
 - **G4** bot scaling: tick time and RSS at 50 / 150 / 300 online bots; confirm `PlayerLimit` headroom.
