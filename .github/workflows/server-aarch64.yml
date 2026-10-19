@@ -93,12 +93,17 @@ jobs:
         run: |
           # CONF_DIR follows CMAKE_INSTALL_PREFIX, and _CONF_DIR is compiled in: module
           # configs are always read from <prefix>/etc/modules, never from the -c path.
+          #
+          # The rpath is for the libraries whose soname is tied to this Ubuntu release: they are
+          # copied beside the binaries by the "Bundle the libraries" step below, and $ORIGIN is
+          # what finds them in a rootfs shipping a different version of the same library.
           cmake -S . -B build -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DAPPS_BUILD=all -DTOOLS_BUILD=all \
             -DSCRIPTS=static -DMODULES=static \
             -DBoost_USE_STATIC_LIBS=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
             -DWITH_WARNINGS=OFF
 
       - name: Build
@@ -121,6 +126,32 @@ jobs:
           ls -l "$PREFIX/bin"
           du -sh "$PREFIX/bin" "$PREFIX/etc"
 
+      - name: Bundle the libraries whose soname is tied to this release
+        run: |
+          # worldserver links libmysqlclient.so.21 (MySQL 8.0) and ICU 74. A rootfs from a later
+          # Ubuntu has 8.4 and ICU 76 under different sonames, and then the binary does not load
+          # at all: apt cannot satisfy it no matter what it installs. Neither library is in the
+          # install tree, so ship them beside the binaries and let the rpath find them.
+          #
+          # Nothing from glibc, libstdc++ or OpenSSL is copied: their sonames are stable across
+          # the releases this targets, and pinning glibc would break a newer rootfs instead.
+          sudo mkdir -p "$PREFIX/lib"
+          for pattern in 'libmysqlclient.so.21*' 'libicuuc.so.74*' 'libicui18n.so.74*' 'libicudata.so.74*'; do
+            sudo cp -av "/usr/lib/aarch64-linux-gnu/$pattern" "$PREFIX/lib/"
+          done
+          sudo du -sh "$PREFIX/lib"
+          # A silent loss of the rpath would leave the Thor needing exactly the library that is
+          # now bundled, so check the installed binary rather than the flag.
+          if ! readelf -d "$PREFIX/bin/worldserver" | grep -q 'ORIGIN/../lib'; then
+            echo "::error::worldserver has no \$ORIGIN/../lib rpath; the bundled libraries would not be found"
+            exit 1
+          fi
+          if ldd "$PREFIX/bin/worldserver" | grep -q "not found"; then
+            echo "::error::worldserver still has unresolved libraries"
+            ldd "$PREFIX/bin/worldserver" | grep "not found"
+            exit 1
+          fi
+
       - name: SQL sources (what the DB updater reads on first boot)
         run: |
           sudo mkdir -p "$PREFIX/src/modules/mod-playerbots"
@@ -134,7 +165,7 @@ jobs:
         run: |
           # zstd -19 costs a minute on a payload this size and saves the Thor the difference.
           sudo tar --use-compress-program="zstd -19 -T0" -cf acore-server-arm64.tar.zst \
-            -C "$PREFIX" bin etc src
+            -C "$PREFIX" bin etc lib src
           sudo chown "$USER" acore-server-arm64.tar.zst
           ls -lh acore-server-arm64.tar.zst
           size=$(stat -c %s acore-server-arm64.tar.zst)
