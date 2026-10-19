@@ -154,7 +154,18 @@ jobs:
           # releases this targets, and pinning glibc would break a newer rootfs instead.
 
           sudo mkdir -p "$PREFIX/lib"
-          binaries=("$PREFIX/bin/"*)
+          # bin/ holds mmaps-config.yaml beside the executables, and patchelf - like readelf -
+          # only means anything for an ELF file: run 39285821353 failed here with no annotation at
+          # all, because patchelf refused the YAML and set -e took the step down. Select by magic.
+          binaries=()
+          for f in "$PREFIX/bin/"*; do
+            if [ "$(head -c 4 "$f" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]; then
+              binaries+=("$f")
+            else
+              echo "not an ELF file, leaving it alone: $(basename "$f")"
+            fi
+          done
+          [ "${#binaries[@]}" -gt 0 ] || { echo "::error::no ELF files under $PREFIX/bin"; exit 1; }
 
           # The core's CMake installs the binaries with the absolute $PREFIX/lib on their rpath
           # (CMakeLists.txt:34-36) and shadows the -D value from configure, so rewrite it here:
@@ -182,8 +193,10 @@ jobs:
 
           while read -r soname; do
             [ -n "$soname" ] || continue
-            path=$(ldconfig -p 2>/dev/null | awk -v s="$soname" '$1 == s {print $NF; exit}')
-            [ -n "$path" ] || path=$(find /usr/lib/aarch64-linux-gnu -maxdepth 1 -name "$soname" -print -quit 2>/dev/null)
+            # Both directories are searched, and only those: the link resolved the soname a moment
+            # ago, so it is in the loader's path here. No ldconfig call, which is one less thing
+            # this can depend on in an environment where nobody can see stderr.
+            path=$(find /lib/aarch64-linux-gnu /usr/lib/aarch64-linux-gnu -maxdepth 1 -name "$soname" -print -quit 2>/dev/null)
             if [ -z "$path" ]; then
               # The link succeeded, so this image had the file a moment ago; a soname that is now
               # unresolvable is worth failing on rather than shipping a bundle with a hole in it.
@@ -224,10 +237,17 @@ jobs:
           # aside, everything the binaries need has to resolve out of $PREFIX/lib through that
           # rpath. Put them back whichever way the check goes.
           hidden=$(mktemp -d)
-          sudo mv /usr/lib/aarch64-linux-gnu/libmysqlclient*.so.* \
-                  /usr/lib/aarch64-linux-gnu/libmariadb*.so.* \
-                  /usr/lib/aarch64-linux-gnu/libicu*.so.* "$hidden/" 2>/dev/null || true
-          moved=$(ls -1 "$hidden" 2>/dev/null | wc -l)
+          # One file at a time: with the three patterns on a single mv, a pattern that matches
+          # nothing (this image has no libmariadb) makes mv fail as a whole, so nothing would be
+          # moved and the check would pass without testing anything.
+          moved=0
+          for f in /usr/lib/aarch64-linux-gnu/libmysqlclient*.so.* \
+                   /usr/lib/aarch64-linux-gnu/libmariadb*.so.* \
+                   /usr/lib/aarch64-linux-gnu/libicu*.so.*; do
+            [ -e "$f" ] || continue
+            if sudo mv "$f" "$hidden/"; then moved=$((moved + 1)); fi
+          done
+          echo "moved aside: $moved file(s)"
           [ "$moved" -gt 0 ] ||
             echo "::warning::this image had nothing to move aside, so the check below proves nothing"
           missing=$(ldd "$PREFIX/bin/worldserver" 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
