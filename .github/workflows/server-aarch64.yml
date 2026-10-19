@@ -72,7 +72,7 @@ jobs:
             git cmake ninja-build make gcc g++ clang lld \
             libboost-all-dev libssl-dev libbz2-dev liblzma-dev zlib1g-dev libzstd-dev \
             libicu-dev libreadline-dev libncurses-dev \
-            libmysqlclient-dev unzip zstd
+            libmysqlclient-dev unzip zstd patchelf
 
       - name: Fetch pinned sources
         run: |
@@ -94,16 +94,18 @@ jobs:
           # CONF_DIR follows CMAKE_INSTALL_PREFIX, and _CONF_DIR is compiled in: module
           # configs are always read from <prefix>/etc/modules, never from the -c path.
           #
-          # The rpath is for the libraries whose soname is tied to this Ubuntu release: they are
-          # copied beside the binaries by the "Bundle the libraries" step below, and $ORIGIN is
-          # what finds them in a rootfs shipping a different version of the same library.
+          # No -DCMAKE_INSTALL_RPATH here: the core's CMakeLists sets it itself
+          # (set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib"), lines 34-36), and a plain
+          # set() shadows any -D value, so the installed binaries got the absolute
+          # /opt/acore/lib instead. The "Bundle the libraries" step rewrites them to
+          # $ORIGIN/../lib after install, which is what finds the bundled libraries wherever
+          # the tarball is unpacked.
           cmake -S . -B build -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DAPPS_BUILD=all -DTOOLS_BUILD=all \
             -DSCRIPTS=static -DMODULES=static \
             -DBoost_USE_STATIC_LIBS=ON \
-            -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
             -DWITH_WARNINGS=OFF
 
       - name: Build
@@ -153,6 +155,16 @@ jobs:
 
           sudo mkdir -p "$PREFIX/lib"
           binaries=("$PREFIX/bin/"*)
+
+          # The core's CMake installs the binaries with the absolute $PREFIX/lib on their rpath
+          # (CMakeLists.txt:34-36) and shadows the -D value from configure, so rewrite it here:
+          # $ORIGIN/../lib is what makes the bundled libraries findable in a rootfs that unpacked
+          # the server anywhere other than /opt/acore.
+          for bin in "${binaries[@]}"; do
+            sudo patchelf --set-rpath '$ORIGIN/../lib' "$bin"
+          done
+          echo "--- rpath on the installed binaries ---"
+          readelf -d "$PREFIX/bin/worldserver" | grep -E 'RPATH|RUNPATH' || true
 
           echo "--- what the binaries recorded at link time ---"
           readelf -d "${binaries[@]}" | grep -E 'NEEDED.*(mysql|mariadb|icu)' || true
@@ -221,8 +233,10 @@ jobs:
           missing=$(ldd "$PREFIX/bin/worldserver" 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
           sudo mv "$hidden"/*.so.* /usr/lib/aarch64-linux-gnu/ 2>/dev/null || true
           if [ -n "$missing" ]; then
-            echo "::error::the bundle is not self-sufficient; the Thor would fail to load these:"
-            echo "$missing"
+            echo "::error::the bundle is not self-sufficient; the Thor would fail to load these"
+            # One annotation per library: an annotation carries one line, and that list is where
+            # a fix has to start.
+            while read -r lib; do echo "::error::missing from the bundle: $lib"; done <<< "$missing"
             ldd "$PREFIX/bin/worldserver" | head -30
             exit 1
           fi
@@ -230,11 +244,27 @@ jobs:
 
       - name: SQL sources (what the DB updater reads on first boot)
         run: |
-          sudo mkdir -p "$PREFIX/src/modules/mod-playerbots"
-          sudo cp -a src/core/data/sql "$PREFIX/src/data/"
-          sudo cp -a src/playerbots/data/sql "$PREFIX/src/modules/mod-playerbots/data/"
-          sudo mkdir -p "$PREFIX/src/modules/mod-creature-gear"
-          sudo cp -a src/core/modules/mod-creature-gear/data/sql "$PREFIX/src/modules/mod-creature-gear/data/"
+          # cp -a does not create the parents of its destination, and the trailing-slash form used
+          # here before failed with "cannot create directory ... No such file or directory" the
+          # first time this step actually ran, because $PREFIX/src/data did not exist yet. Name
+          # the destinations outright and create what they need.
+          sudo mkdir -p "$PREFIX/src/data" \
+                        "$PREFIX/src/modules/mod-playerbots/data" \
+                        "$PREFIX/src/modules/mod-creature-gear/data"
+          sudo cp -a src/core/data/sql "$PREFIX/src/data/sql"
+          sudo cp -a src/playerbots/data/sql "$PREFIX/src/modules/mod-playerbots/data/sql"
+          sudo cp -a src/core/modules/mod-creature-gear/data/sql "$PREFIX/src/modules/mod-creature-gear/data/sql"
+
+          # thor-install.sh:1416 reads exactly these three paths, so check the layout instead of
+          # trusting the copies: one level wrong here and the DB updater finds nothing to apply.
+          for d in data/sql modules/mod-playerbots/data/sql modules/mod-creature-gear/data/sql; do
+            n=$(find "$PREFIX/src/$d" -name '*.sql' | wc -l)
+            echo "$d: $n .sql files"
+            if [ "$n" -eq 0 ]; then
+              echo "::error::$PREFIX/src/$d has no .sql files"
+              exit 1
+            fi
+          done
           sudo du -sh "$PREFIX/src"
 
       - name: Package
