@@ -1091,6 +1091,9 @@ write_configs() {
     set_conf "$ws" MySQLExecutable        "\"$mysql_bin\""
     set_conf "$ws" BindIP                 "\"$bind_ip\""
     set_conf "$ws" WorldServerPort        8085
+    # The realm is started headless by run.sh; the CLI prompt is readline, and at end of input it
+    # reprints "AC>" in a loop. GM commands go in-game. Set 1 and start under tmux to get it back.
+    set_conf "$ws" Console.Enable         0
     set_conf "$ws" Updates.EnableDatabases 7
     set_conf "$ws" Updates.AutoSetup      1
     set_conf "$ws" PlayerLimit            1000
