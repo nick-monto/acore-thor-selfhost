@@ -1100,6 +1100,9 @@ write_configs() {
     set_conf "$ws" LoginDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_auth\""
     set_conf "$ws" WorldDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_world\""
     set_conf "$ws" CharacterDatabaseInfo  "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_characters\""
+    set_conf "$as" LogsDir                "\"$ROOT/logs\""
+    set_conf "$as" SourceDirectory        "\"$SRC_DIR\""
+    set_conf "$as" MySQLExecutable        "\"$mysql_bin\""
     set_conf "$as" BindIP                 "\"$bind_ip\""
     set_conf "$as" RealmServerPort        3724
     set_conf "$as" Updates.EnableDatabases 1
