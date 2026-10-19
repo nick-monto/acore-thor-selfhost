@@ -188,20 +188,18 @@ jobs:
           sudo du -sh "$PREFIX/lib"
           ls -l "$PREFIX/lib"
 
-          # This bundle is the reason the Thor can run the build at all, so the families that have
-          # to be in it are named rather than assumed. ICU's message catalogues and data can be
-          # folded into libicuuc by a newer release, so only the client library and libicuuc are
-          # hard requirements.
-          for family in 'libmysqlclient|libmariadb' libicuuc; do
-            if ! ls "$PREFIX/lib" | grep -qE "^($family)\.so\."; then
-              echo "::error::no $family in $PREFIX/lib; this step's family list no longer matches the link"
-              exit 1
-            fi
-          done
-          for family in libicui18n libicudata; do
-            ls "$PREFIX/lib" | grep -qE "^($family)\.so\." ||
-              echo "::warning::$family is not in the bundle; fine if the build does not need it"
-          done
+          # One family has to be in the bundle, and it is the one the link actually pulls in: the
+          # MySQL client. ICU appears in no binary - Boost is static here and the build references
+          # no ICU symbol, so ldd reports none of it, whatever the comment this step replaced
+          # claimed about ICU 74. That is the reason the accounting is left to the check below
+          # instead of a list of families written down here: run 39269283834 failed on a list that
+          # demanded libicuuc and the link had none, and a guard that fires on a wrong premise is
+          # only useful if its premise is corrected. The ldd filter above still collects ICU by
+          # name, so a build that begins to link it ships it.
+          if ! ls "$PREFIX/lib" | grep -qE '^(libmysqlclient|libmariadb)\.so\.'; then
+            echo "::error::no MySQL client library in $PREFIX/lib, though the link resolved one"
+            exit 1
+          fi
 
           # A silent loss of the rpath would leave the Thor needing exactly the library that is
           # now bundled, so check the installed binary rather than the flag.
