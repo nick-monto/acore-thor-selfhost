@@ -128,29 +128,107 @@ jobs:
 
       - name: Bundle the libraries whose soname is tied to this release
         run: |
-          # worldserver links libmysqlclient.so.21 (MySQL 8.0) and ICU 74. A rootfs from a later
-          # Ubuntu has 8.4 and ICU 76 under different sonames, and then the binary does not load
-          # at all: apt cannot satisfy it no matter what it installs. Neither library is in the
-          # install tree, so ship them beside the binaries and let the rpath find them.
+          # The binaries link a MySQL client library and ICU, and neither is in the install tree.
+          # Both are release-coupled: ubuntu-24.04, which this builds on, has MySQL 8.0's
+          # libmysqlclient.so.21 and ICU 74, while 25.04 and 25.10 have MySQL 8.4's
+          # libmysqlclient.so.24 and ICU 76 - same libraries, different sonames - so a rootfs from
+          # one of those cannot load this binary at all, whatever apt installs there. The libraries
+          # therefore travel beside the binaries and the $ORIGIN/../lib rpath finds them.
+          # thor-install.sh carries the device-side soname-to-package map (packages_for_soname,
+          # reference_deb_for_soname) for anything this bundle does not cover.
           #
-          # Nothing from glibc, libstdc++ or OpenSSL is copied: their sonames are stable across
-          # the releases this targets, and pinning glibc would break a newer rootfs instead.
+          # Which files to copy is read off the built binaries with ldd, and their DT_NEEDED entries
+          # are printed first so the log says what the build actually linked. The step this replaced
+          # named the sonames instead and copied them with cp -av "/usr/lib/aarch64-linux-gnu/$pattern",
+          # where $pattern held the '*': quoting suppresses the expansion, so cp was handed a literal
+          # path ending in an asterisk and failed - that asterisk is visible in the message,
+          # "cannot stat '/usr/lib/aarch64-linux-gnu/libmysqlclient.so.21*': No such file or
+          # directory", which is the tell. Run 39191578317 was the first ever to reach this step, so
+          # nothing had exercised that line. Reading the names off the binaries is what makes the
+          # copy independent of both the release and that mistake.
+          # The family names are the contract; the soname inside a family is not.
+          #
+          # Nothing from glibc, libstdc++ or OpenSSL is copied: their sonames are stable across the
+          # releases this targets, and pinning glibc would break a newer rootfs instead.
+
           sudo mkdir -p "$PREFIX/lib"
-          for pattern in 'libmysqlclient.so.21*' 'libicuuc.so.74*' 'libicui18n.so.74*' 'libicudata.so.74*'; do
-            sudo cp -av "/usr/lib/aarch64-linux-gnu/$pattern" "$PREFIX/lib/"
-          done
+          binaries=("$PREFIX/bin/"*)
+
+          echo "--- what the binaries recorded at link time ---"
+          readelf -d "${binaries[@]}" | grep -E 'NEEDED.*(mysql|mariadb|icu)' || true
+          echo "--- and what the loader makes of that here ---"
+          ldd "${binaries[@]}" 2>/dev/null | grep -E 'mysql|mariadb|icu' || true
+
+          # Every soname of interest, as the loader names it: a path when it can resolve one, the
+          # bare soname when it cannot.
+          sonames=$(ldd "${binaries[@]}" 2>/dev/null \
+                    | awk '/=>/ {print ($3 == "not" ? $1 : $3)} !/=>/ {print $1}' \
+                    | sed -e 's#^.*/##' | sort -u \
+                    | grep -E '^(libmysqlclient|libmariadb|libicuuc|libicui18n|libicudata)\.so\.' || true)
+          echo "--- coupled sonames ---"
+          echo "$sonames"
+
+          while read -r soname; do
+            [ -n "$soname" ] || continue
+            path=$(ldconfig -p 2>/dev/null | awk -v s="$soname" '$1 == s {print $NF; exit}')
+            [ -n "$path" ] || path=$(find /usr/lib/aarch64-linux-gnu -maxdepth 1 -name "$soname" -print -quit 2>/dev/null)
+            if [ -z "$path" ]; then
+              # The link succeeded, so this image had the file a moment ago; a soname that is now
+              # unresolvable is worth failing on rather than shipping a bundle with a hole in it.
+              echo "::error::$soname is linked but this image no longer has a file for it"
+              dpkg -l | grep -E 'lib(mysqlclient|mariadb|icu)' || true
+              find /usr/lib /lib -maxdepth 3 \( -name 'libmysqlclient*' -o -name 'libmariadb*' \) 2>/dev/null | head -20 || true
+              exit 1
+            fi
+            # -L, because what the loader looks up is the soname: ship a real file under that name
+            # rather than the symlink chain the development package leaves behind.
+            sudo cp -Lv "$path" "$PREFIX/lib/$soname"
+          done <<< "$sonames"
+
           sudo du -sh "$PREFIX/lib"
+          ls -l "$PREFIX/lib"
+
+          # This bundle is the reason the Thor can run the build at all, so the families that have
+          # to be in it are named rather than assumed. ICU's message catalogues and data can be
+          # folded into libicuuc by a newer release, so only the client library and libicuuc are
+          # hard requirements.
+          for family in 'libmysqlclient|libmariadb' libicuuc; do
+            if ! ls "$PREFIX/lib" | grep -qE "^($family)\.so\."; then
+              echo "::error::no $family in $PREFIX/lib; this step's family list no longer matches the link"
+              exit 1
+            fi
+          done
+          for family in libicui18n libicudata; do
+            ls "$PREFIX/lib" | grep -qE "^($family)\.so\." ||
+              echo "::warning::$family is not in the bundle; fine if the build does not need it"
+          done
+
           # A silent loss of the rpath would leave the Thor needing exactly the library that is
           # now bundled, so check the installed binary rather than the flag.
           if ! readelf -d "$PREFIX/bin/worldserver" | grep -q 'ORIGIN/../lib'; then
             echo "::error::worldserver has no \$ORIGIN/../lib rpath; the bundled libraries would not be found"
             exit 1
           fi
-          if ldd "$PREFIX/bin/worldserver" | grep -q "not found"; then
-            echo "::error::worldserver still has unresolved libraries"
-            ldd "$PREFIX/bin/worldserver" | grep "not found"
+
+          # The Thor's situation, checked rather than assumed: with this image's own copies moved
+          # aside, everything the binaries need has to resolve out of $PREFIX/lib through that
+          # rpath. Put them back whichever way the check goes.
+          hidden=$(mktemp -d)
+          sudo mv /usr/lib/aarch64-linux-gnu/libmysqlclient*.so.* \
+                  /usr/lib/aarch64-linux-gnu/libmariadb*.so.* \
+                  /usr/lib/aarch64-linux-gnu/libicu*.so.* "$hidden/" 2>/dev/null || true
+          moved=$(ls -1 "$hidden" 2>/dev/null | wc -l)
+          [ "$moved" -gt 0 ] ||
+            echo "::warning::this image had nothing to move aside, so the check below proves nothing"
+          missing=$(ldd "$PREFIX/bin/worldserver" 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
+          sudo mv "$hidden"/*.so.* /usr/lib/aarch64-linux-gnu/ 2>/dev/null || true
+          if [ -n "$missing" ]; then
+            echo "::error::the bundle is not self-sufficient; the Thor would fail to load these:"
+            echo "$missing"
+            ldd "$PREFIX/bin/worldserver" | head -30
             exit 1
           fi
+          echo "the bundle is self-sufficient: every coupled library resolves through \$ORIGIN/../lib"
 
       - name: SQL sources (what the DB updater reads on first boot)
         run: |
