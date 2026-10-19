@@ -1488,6 +1488,63 @@ layout_dirs() {   # recover BIN_DIR/CONF_DIR/DATA_DIR/SRC_DIR from what exists o
     [ -n "$SRC_DIR" ] || SRC_DIR="$ROOT/src"
 }
 
+# The prebuilt server is linked against ubuntu-24.04-arm (see .github/workflows/server-aarch64.yml),
+# so a library it needs has to come from that release when the rootfs is a newer one. MySQL is the
+# case that bites: 24.04 ships 8.0 with soname libmysqlclient.so.21, 25.04 moved to 8.4, and ICU went
+# from .so.74 to .so.76 - same library, different soname, so apt in the newer release cannot satisfy
+# a binary built against the older one no matter which package it installs.
+REFERENCE_RELEASE="noble"
+REFERENCE_VERSION="24.04"
+PORTS_MIRROR="${THOR_PORTS_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}"
+
+reference_deb_for_soname() {   # pool path of the deb in $REFERENCE_RELEASE that carries the soname
+    case "$1" in
+        libmysqlclient.so.21)
+            echo "main/m/mysql-8.0/libmysqlclient21_8.0.36-2ubuntu3_arm64.deb" ;;
+        libicuuc.so.74|libicui18n.so.74|libicudata.so.74)
+            echo "main/i/icu/libicu74_74.2-1ubuntu3.1_arm64.deb" ;;
+        *)  echo "" ;;
+    esac
+}
+
+soname_resolves() {   # soname_resolves SONAME - can the loader find it *now*?
+    local soname="$1" dir
+    if have ldconfig && ldconfig -p 2>/dev/null | grep -q "[[:space:]]$soname[[:space:]]"; then
+        return 0
+    fi
+    # No ldconfig, or its cache is stale: look where the loader looks.
+    for dir in /lib /usr/lib /lib/aarch64-linux-gnu /usr/lib/aarch64-linux-gnu; do
+        [ -e "$dir/$soname" ] && return 0
+    done
+    return 1
+}
+
+refresh_ld_cache() {   # dpkg's triggers do this, but they are easily skipped inside proot
+    have ldconfig && ldconfig >/dev/null 2>&1 || true
+}
+
+install_reference_deb() {   # install_reference_deb SONAME - take that library from $REFERENCE_RELEASE
+    local soname="$1" path deb
+    path=$(reference_deb_for_soname "$soname")
+    [ -n "$path" ] || return 1
+    [ "$(uname -m)" = "aarch64" ] || return 1    # the pool paths above are arm64
+    have curl || return 1
+    have dpkg || return 1
+    deb="/tmp/${path##*/}"
+    if [ "$CHECK" = 1 ]; then
+        note "curl -fsSL $PORTS_MIRROR/$path -o $deb && dpkg -i $deb && ldconfig   # for $soname"
+        return 0
+    fi
+    log "taking ${path##*/} from Ubuntu $REFERENCE_VERSION, which is what the server was built against"
+    if curl -fsSL --retry 3 -o "$deb" "$PORTS_MIRROR/$path" && dpkg -i "$deb" >/dev/null 2>&1; then
+        rm -f "$deb"
+        refresh_ld_cache
+        return 0
+    fi
+    rm -f "$deb"
+    return 1
+}
+
 packages_for_soname() {   # candidate packages for a soname, best first
     case "$1" in
         libssl.so.*|libcrypto.so.*) echo "libssl3t64 libssl3" ;;
@@ -1502,25 +1559,35 @@ packages_for_soname() {   # candidate packages for a soname, best first
         libtinfo.so.*)              echo "libtinfo6" ;;
         libcrypt.so.*)              echo "libcrypt1" ;;
         libboost_*.so.*)            echo "libboost-all-dev" ;;
-        libmysqlclient.so.*)        echo "libmysqlclient21 libmysqlclient-dev" ;;
+        libmysqlclient.so.*)        echo "libmysqlclient21 libmysqlclient-dev mysql-client-core-8.0" ;;
         libstdc++.so.*)             echo "libstdc++6" ;;
         libgcc_s.so.*)              echo "libgcc-s1" ;;
         *)                          echo "" ;;
     esac
 }
 
-install_for_soname() {   # first candidate that apt accepts wins; silent per-candidate failures
+install_for_soname() {   # first candidate apt accepts *and* which leaves the soname loadable
     local soname="$1" candidate
     for candidate in $(packages_for_soname "$soname"); do
         if [ "$CHECK" = 1 ]; then
             note "apt-get install -y --no-install-recommends $candidate   # for $soname"
             return 0
         fi
-        if apt-get install -y --no-install-recommends "$candidate" >/dev/null 2>&1; then
+        apt-get install -y --no-install-recommends "$candidate" >/dev/null 2>&1 || continue
+        refresh_ld_cache
+        # apt succeeding is not the answer to the question. On a release that renamed the library
+        # the package installs a *different* soname, the binary keeps failing to load, and the
+        # install has to keep looking rather than report success.
+        if soname_resolves "$soname"; then
             log "installed $candidate for $soname"
             return 0
         fi
+        log "$candidate does not provide $soname on this release"
     done
+    if install_reference_deb "$soname" && soname_resolves "$soname"; then
+        ok "$soname: installed from Ubuntu $REFERENCE_VERSION"
+        return 0
+    fi
     return 1
 }
 
