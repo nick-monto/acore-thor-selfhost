@@ -1225,7 +1225,10 @@ cleanup() {
 }
 trap cleanup INT TERM
 while true; do
-    "$BIN_DIR/worldserver" -c "$CONF_DIR/worldserver.conf" &
+    # stdin is held open on purpose: a backgrounded job gets /dev/null, and the console then reads
+    # EOF in a loop and reprints its "AC>" prompt forever. The pipeline's last element is the
+    # server, so $! and wait still refer to it.
+    tail -f /dev/null | "$BIN_DIR/worldserver" -c "$CONF_DIR/worldserver.conf" &
     WS_PID=\$!
     wait \$WS_PID
     echo "worldserver exited with \$?; restarting in 10s (Ctrl-C to stop)"
