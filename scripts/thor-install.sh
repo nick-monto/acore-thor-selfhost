@@ -1500,9 +1500,9 @@ PORTS_MIRROR="${THOR_PORTS_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}"
 reference_deb_for_soname() {   # pool path of the deb in $REFERENCE_RELEASE that carries the soname
     case "$1" in
         libmysqlclient.so.21)
-            echo "main/m/mysql-8.0/libmysqlclient21_8.0.36-2ubuntu3_arm64.deb" ;;
+            echo "pool/main/m/mysql-8.0/libmysqlclient21_8.0.36-2ubuntu3_arm64.deb" ;;
         libicuuc.so.74|libicui18n.so.74|libicudata.so.74)
-            echo "main/i/icu/libicu74_74.2-1ubuntu3.1_arm64.deb" ;;
+            echo "pool/main/i/icu/libicu74_74.2-1ubuntu3.1_arm64.deb" ;;
         *)  echo "" ;;
     esac
 }
@@ -1524,25 +1524,36 @@ refresh_ld_cache() {   # dpkg's triggers do this, but they are easily skipped in
 }
 
 install_reference_deb() {   # install_reference_deb SONAME - take that library from $REFERENCE_RELEASE
-    local soname="$1" path deb
+    local soname="$1" path deb out
     path=$(reference_deb_for_soname "$soname")
     [ -n "$path" ] || return 1
     [ "$(uname -m)" = "aarch64" ] || return 1    # the pool paths above are arm64
     have curl || return 1
-    have dpkg || return 1
+    have apt-get || return 1
     deb="/tmp/${path##*/}"
     if [ "$CHECK" = 1 ]; then
-        note "curl -fsSL $PORTS_MIRROR/$path -o $deb && dpkg -i $deb && ldconfig   # for $soname"
+        note "curl -fsSL $PORTS_MIRROR/$path -o $deb && apt-get install -y ./$deb   # for $soname"
         return 0
     fi
     log "taking ${path##*/} from Ubuntu $REFERENCE_VERSION, which is what the server was built against"
-    if curl -fsSL --retry 3 -o "$deb" "$PORTS_MIRROR/$path" && dpkg -i "$deb" >/dev/null 2>&1; then
+    rm -f "$deb"
+    if ! curl -fsSL --retry 3 -o "$deb" "$PORTS_MIRROR/$path" || [ ! -s "$deb" ]; then
+        warn "could not download $PORTS_MIRROR/$path"
+        return 1
+    fi
+    # apt, not dpkg: the deb declares dependencies that a later release may only carry under
+    # another name, and only apt fetches them. Its output is kept rather than discarded, because
+    # swallowing it is what turns a fixable dependency into a bare "cannot open shared object
+    # file" with nothing after it.
+    if ! out=$(cd /tmp && apt-get install -y "./${path##*/}" 2>&1); then
+        warn "installing ${path##*/} failed:"
+        while IFS= read -r line; do warn "  $line"; done <<< "$(printf '%s\n' "$out" | tail -5)"
         rm -f "$deb"
-        refresh_ld_cache
-        return 0
+        return 1
     fi
     rm -f "$deb"
-    return 1
+    refresh_ld_cache
+    return 0
 }
 
 packages_for_soname() {   # candidate packages for a soname, best first
