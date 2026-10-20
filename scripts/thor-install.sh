@@ -568,13 +568,14 @@ set -uo pipefail
 STATE="$HOST_STATE/state.env"
 [ -f "\$STATE" ] || { echo "no \$STATE: run thor-install.sh first" >&2; exit 1; }
 state() { grep -E "^\$1=" "\$STATE" | tail -1 | cut -d= -f2-; }
-ROOTFS="\$(state ROOTFS)"; ROOT="\$(state ROOT)"; CONF_DIR="\$(state CONF_DIR)"
+ROOT="\$(state ROOT)"; CONF_DIR="\$(state CONF_DIR)"
 action="\${1:-}"; shift 2>/dev/null || true
 case "\$action" in
     start) exec "$HOME/start-wow-server.sh" ;;
     stop)  exec "$HOME/stop-wow-server.sh" ;;
     bots)
-        proot-distro login "\$ROOTFS" -- "\$ROOT/set-bots.sh" "\$CONF_DIR/modules/playerbots.conf" "\$@"
+        # login takes the distro name, not ROOTFS (the container's directory on disk).
+        proot-distro login $ROOTFS_NAME -- "\$ROOT/set-bots.sh" "\$CONF_DIR/modules/playerbots.conf" "\$@"
         if [ "\$#" -ge 1 ]; then
             # --status compares its own record of the bot count against the config, so a change made
             # here has to land there too or the next --status would report a mismatch.
