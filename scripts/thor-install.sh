@@ -81,6 +81,10 @@ DB_PROBE_TIMEOUT="${DB_PROBE_TIMEOUT:-30}"              # seconds a write probe 
 
 ROOT="$ROOT_DEFAULT"
 BOTS=50
+# Solo default: only a handful of the random bots stay near the real player; the rest keep the
+# normal world-wide distribution, so the total population is unchanged without crowding.
+NEAR_BOTS=8
+NEAR_RADIUS=80.0
 DB_USER="acore"
 DB_PASS=""
 ACCOUNT="admin"
@@ -835,7 +839,7 @@ install_deps() {
         # Same package set as upstream CI (.github/workflows/core-build-playerbots.yml:51-55);
         # libbz2-dev is required by deps/bzip2/CMakeLists.txt:15 on every configure.
         note apt-get install -y --no-install-recommends \
-            git cmake ninja-build make gcc g++ clang lld \
+            git cmake ninja-build make gcc g++ clang lld patch \
             libboost-all-dev libssl-dev libbz2-dev libreadline-dev \
             libncurses-dev zlib1g-dev libmysqlclient-dev
     fi
@@ -852,14 +856,16 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
         mkdir -p "$src/modules"
         fetch_git "$CORE_REPO" "$CORE_COMMIT" "$src"
         fetch_git "$PB_REPO" "$PB_COMMIT" "$src/modules/mod-playerbots"
-        fetch_self_module "$src/modules"
+        fetch_self_module "$src/modules" "$src/data/sql"
+        apply_playerbots_patch "$src/modules/mod-playerbots" \
+            "$src/.thor-patches/playerbots-player-centric.patch"
         cmake -S "$src" -B "$src/build" -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$ROOT" -DCONF_DIR="$ROOT/etc" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo -DAPPS_BUILD=all -DTOOLS_BUILD=all \
@@ -917,8 +923,17 @@ fetch_git() {   # fetch_git REPO COMMIT DEST
     log "source at $dest: $(git -C "$dest" rev-parse --short HEAD)"
 }
 
-fetch_self_module() {   # fetch_self_module DEST-PARENT - this repo's modules/mod-creature-gear tree
-    local parent="$1"
+apply_playerbots_patch() {   # apply_playerbots_patch MODULE-DIR PATCH-FILE
+    local dest="$1" patch_file="$2"
+    have patch || die "patch is needed to apply the player-centric bot distribution"
+    [ -f "$patch_file" ] || die "missing player-centric bot patch: $patch_file"
+    patch -p1 --batch -d "$dest" < "$patch_file" >/dev/null \
+        || die "cannot apply $patch_file to $dest (upstream pin changed?)"
+    log "applied player-centric bot distribution patch"
+}
+
+fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's module and custom SQL
+    local parent="$1" sql_parent="${2:-}"
     have curl || die "curl is needed to fetch the module source (apt-get install curl)"
     mkdir -p "$parent"
     if [ -n "$GH_TOKEN_OPT" ]; then
@@ -926,8 +941,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT - this repo's modules/mo
     else
         log "fetching $SELF_REPO@$SELF_REF as a tarball"
     fi
-    # No git here: the module is one directory inside a repository that carries the installer, the
-    # workflow and the design docs too, and a tarball fetch needs no history and no checkout.
+    # No git here: the module and the custom SQL are two directories inside a repository that
+    # carries the installer, the workflow and the design docs too, and a tarball fetch needs no
+    # history and no checkout.
     local tarball
     tarball="$(mktemp)"
     curl_gh -fL --retry 3 -o "$tarball" "https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF" \
@@ -935,10 +951,33 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT - this repo's modules/mo
     # --strip-components=2 removes "<repo>-<ref>/modules/" so the tree lands as $parent/mod-creature-gear.
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" '*/modules/mod-creature-gear*' \
         || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear out of $SELF_REPO@$SELF_REF"; }
+    if [ -n "$sql_parent" ]; then
+        # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
+        # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
+        # database already registers.
+        mkdir -p "$sql_parent"
+        tar -xzf "$tarball" --wildcards --strip-components=2 -C "$sql_parent" '*/sql/custom*' \
+            || { rm -f "$tarball"; die "cannot extract sql/custom/db_world out of $SELF_REPO@$SELF_REF"; }
+        local n
+        n=$(find "$sql_parent/custom/db_world" -maxdepth 1 -name '*.sql' 2>/dev/null | wc -l || true)
+        [ -d "$sql_parent/custom/db_world" ] && [ "$n" -gt 0 ] \
+            || { rm -f "$tarball"; die "$SELF_REPO@$SELF_REF carries no sql/custom/db_world/*.sql (wrong SELF_REF?)"; }
+    fi
+    # Keep the source patches outside modules/: the core's build scans modules/* as modules.
+    # --strip-components=2 turns "<repo>-<ref>/patches/<name>" into "<patch_parent>/<name>".
+    local patch_parent
+    patch_parent="$(dirname "$parent")/.thor-patches"
+    mkdir -p "$patch_parent"
+    tar -xzf "$tarball" --wildcards --strip-components=2 -C "$patch_parent" '*/patches/*' \
+        || { rm -f "$tarball"; die "cannot extract patches/ out of $SELF_REPO@$SELF_REF"; }
+    [ -f "$patch_parent/playerbots-player-centric.patch" ] \
+        || { rm -f "$tarball"; die "$SELF_REPO@$SELF_REF carries no patches/playerbots-player-centric.patch"; }
     rm -f "$tarball"
     [ -d "$parent/mod-creature-gear" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-gear (wrong SELF_REF?)"
     log "source at $parent/mod-creature-gear"
+    [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
+    return 0
 }
 
 layout_check() {
@@ -1116,6 +1155,15 @@ write_configs() {
         set_conf "$pb" Playerbots.RandomBotAutologin    1
         set_conf "$pb" Playerbots.MinRandomBots         "$BOTS"
         set_conf "$pb" Playerbots.MaxRandomBots         "$BOTS"
+        # Solo-friendly default: keep the bot population level-appropriate for and physically
+        # near real players instead of spreading it over the whole world. The keys are ignored by
+        # an unpatched playerbots build, so an older artifact still starts normally.
+        set_conf "$pb" Playerbots.RandomBotNearPlayers              1
+        set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange    5
+        set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
+        set_conf "$pb" Playerbots.RandomBotNearPlayersRadius        "$NEAR_RADIUS"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction   1
+        set_conf "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer  "$NEAR_BOTS"
         set_conf "$pb" PlayerbotsDatabaseInfo           "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_playerbots\""
         set_conf "$pb" Playerbots.Updates.EnableDatabases 1
         log "playerbots.conf: enabled=$(conf_get "$pb" Playerbots.Enabled) bots=$(conf_get "$pb" Playerbots.MaxRandomBots)"
@@ -1412,6 +1460,23 @@ run_checks() {   # run_checks FIX(0|1)
     else
         ok "playerbots.conf bots = ${BOTS}"
     fi
+    if [ -f "$pb" ]; then
+        if grep -qE '^[[:space:]]*Playerbots\.RandomBotNearPlayers[[:space:]]*=' "$pb"; then
+            ok "playerbots.conf: near-player distribution = $(conf_get "$pb" Playerbots.RandomBotNearPlayers)"
+        else
+            bad "playerbots.conf: RandomBotNearPlayers missing (artifact built without the player-centric patch?)"
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                set_conf "$pb" Playerbots.RandomBotNearPlayers 1
+                set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange 5
+                set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
+                set_conf "$pb" Playerbots.RandomBotNearPlayersRadius "$NEAR_RADIUS"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction 1
+                set_conf "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer "$NEAR_BOTS"
+                ok "near-player distribution keys added"
+            fi
+        fi
+    fi
     ensure_conf_dir_link
 
     # 3. client data and SQL sources
@@ -1428,6 +1493,14 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi
         fi
     done
+    local loot_sql
+    loot_sql="$(find "$SRC_DIR/data/sql/custom/db_world" -maxdepth 1 -name 'loot_bags_*.sql' -print -quit 2>/dev/null || true)"
+    if [ -n "$loot_sql" ]; then
+        ok "sql sources: loot-bag patch ($(basename "$loot_sql"))"
+    else
+        bad "loot-bag patch missing: $SRC_DIR/data/sql/custom/db_world/loot_bags_*.sql"
+        if [ "$fix" = 1 ]; then warn "re-run the install to restore it: bash thor-install.sh --force"; fi
+    fi
 
     # 4. database
     if ! have mysql; then

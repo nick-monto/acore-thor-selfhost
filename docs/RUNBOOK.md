@@ -85,7 +85,7 @@ sha256sum -c acore-server-arm64.tar.zst.sha256
 tar --zstd -xf acore-server-arm64.tar.zst -C /opt/acore   # → /opt/acore/{bin,etc,lib,src}
 ```
 
-`bin/` is the stripped server, `etc/` the config templates, and `src/` the SQL the DB updater reads (`src/data/sql`, `src/modules/mod-playerbots/data/sql`). That last part is why the artifact is not just a binary drop: `SourceDirectory` must point at a tree containing those paths (`DBUpdater.cpp:98-195`, `mod-playerbots/src/Script/Playerbots.cpp:77-78`) [V].
+`bin/` is the stripped server, `etc/` the config templates, and `src/` the SQL the DB updater reads (`src/data/sql`, `src/modules/mod-playerbots/data/sql`, `src/modules/mod-creature-gear/data/sql` and the loot-bag patch in `src/data/sql/custom/db_world`). That last part is why the artifact is not just a binary drop: `SourceDirectory` must point at a tree containing those paths (`DBUpdater.cpp:98-195`, `mod-playerbots/src/Script/Playerbots.cpp:77-78`) [V].
 
 **Fallback: build in place** (hours; the workflow exists to avoid this):
 
@@ -166,7 +166,7 @@ Edit `/opt/acore/etc/worldserver.conf` and `authserver.conf`:
 | `Updates.EnableDatabases` | `7` (world) / `1` (auth) | lets the first start populate base data |
 | Login/world/character database info | `127.0.0.1;3306;acore;changeme;acore_*` | match Part 3 |
 
-`/opt/acore/etc/modules/playerbots.conf` — the module ships `Playerbots.Enabled = 1` and **500/500** bots by default; start smaller (Part 5). It also carries its own `PlayerbotsDatabaseInfo` (default database name `acore_playerbots`) and `Playerbots.Updates.EnableDatabases = 1` [V].
+`/opt/acore/etc/modules/playerbots.conf` — the module ships `Playerbots.Enabled = 1` and **500/500** bots by default; start smaller (Part 5). It also carries its own `PlayerbotsDatabaseInfo` (default database name `acore_playerbots`) and `Playerbots.Updates.EnableDatabases = 1` [V]. The installer sets `Playerbots.RandomBotNearPlayers = 1` with a +/-5 level window, an 80-yard radius and at most 8 bots near each player; the rest stay normally distributed. Re-running the installer rewrites those keys to the same defaults. See `docs/BOT-DISTRIBUTION-DESIGN.md` [V].
 
 One trap worth knowing before you debug a "bots do not load" symptom: **module configs are read from the compile-time `_CONF_DIR`, not from the `-c` path** (`Config.cpp:704-711`, `:766`) [V]. The artifact is built with `-DCMAKE_INSTALL_PREFIX=/opt/acore`, so `/opt/acore/etc/modules/playerbots.conf` is the file it reads. If you install the tarball somewhere else (`--root`), the script links that baked path to your `etc/` directory.
 

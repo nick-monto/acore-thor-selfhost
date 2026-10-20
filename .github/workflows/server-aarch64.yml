@@ -7,8 +7,9 @@ name: server-aarch64
 # The tarball layout matches what scripts/thor-install.sh expects:
 #     bin/    authserver, worldserver (+ tools), stripped
 #     etc/    *.conf.dist and modules/*.conf.dist   (and the built-in _CONF_DIR is /opt/acore/etc)
-#     src/    data/sql/, modules/mod-playerbots/data/sql/ and
-#             modules/mod-creature-gear/data/sql/ - the DB updater reads these
+#     src/    data/sql/, modules/mod-playerbots/data/sql/,
+#             modules/mod-creature-gear/data/sql/ and
+#             data/sql/custom/db_world/ (the loot-bag patch) - the DB updater reads these
 #
 # No data/ in the tarball. GitHub refuses release assets of 2 GiB or more, and the
 # dbc/maps/vmaps/mmaps trees are around 1.2 GiB on their own, which is what pushed the first
@@ -69,7 +70,7 @@ jobs:
           # never noticed; ubuntu-24.04-arm does not carry liblzma-dev.
           # libicu-dev is for Boost::regex, which does declare it.
           sudo apt-get install -y --no-install-recommends \
-            git cmake ninja-build make gcc g++ clang lld \
+            git cmake ninja-build make gcc g++ clang lld patch \
             libboost-all-dev libssl-dev libbz2-dev liblzma-dev zlib1g-dev libzstd-dev \
             libicu-dev libreadline-dev libncurses-dev \
             libmysqlclient-dev unzip zstd patchelf
@@ -87,6 +88,10 @@ jobs:
           mkdir -p core/modules
           cp -a playerbots core/modules/mod-playerbots    # this path is load-bearing: module SQL, confs
           cp -a "$GITHUB_WORKSPACE/modules/mod-creature-gear" core/modules/mod-creature-gear
+          # The player-centric distribution mode lives on top of the pinned module commit. The
+          # patch is maintained here so the upstream pin stays exact; a bad patch fails the build.
+          patch -p1 -d core/modules/mod-playerbots < "$GITHUB_WORKSPACE/patches/playerbots-player-centric.patch"
+          grep -q "Playerbots.RandomBotNearPlayers" core/modules/mod-playerbots/conf/playerbots.conf.dist
 
       - name: Configure
         working-directory: src/core
@@ -274,10 +279,15 @@ jobs:
           sudo cp -a src/core/data/sql "$PREFIX/src/data/sql"
           sudo cp -a src/playerbots/data/sql "$PREFIX/src/modules/mod-playerbots/data/sql"
           sudo cp -a src/core/modules/mod-creature-gear/data/sql "$PREFIX/src/modules/mod-creature-gear/data/sql"
+          # The CUSTOM slot is already registered in the base database
+          # (data/sql/base/db_world/updates_include.sql), so these files ride in
+          # under the core's own data/sql/custom/db_world directory.
+          sudo mkdir -p "$PREFIX/src/data/sql/custom/db_world"
+          sudo cp -a "$GITHUB_WORKSPACE/sql/custom/db_world/." "$PREFIX/src/data/sql/custom/db_world/"
 
-          # thor-install.sh:1416 reads exactly these three paths, so check the layout instead of
-          # trusting the copies: one level wrong here and the DB updater finds nothing to apply.
-          for d in data/sql modules/mod-playerbots/data/sql modules/mod-creature-gear/data/sql; do
+          # check the layout instead of trusting the copies: one level wrong here and the DB
+          # updater finds nothing to apply.
+          for d in data/sql modules/mod-playerbots/data/sql modules/mod-creature-gear/data/sql data/sql/custom/db_world; do
             n=$(find "$PREFIX/src/$d" -name '*.sql' | wc -l)
             echo "$d: $n .sql files"
             if [ "$n" -eq 0 ]; then
@@ -337,7 +347,7 @@ jobs:
           gh release view server-build -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create server-build -R "$GITHUB_REPOSITORY" --latest \
               --title "Latest arm64 server build" \
-              --notes "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh."
+              --notes "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear, the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh."
           gh release upload server-build -R "$GITHUB_REPOSITORY" \
             acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256 --clobber
 
@@ -348,5 +358,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
             --title "Server build $GITHUB_REF_NAME" \
-            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh." \
+            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear, the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh." \
             acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256

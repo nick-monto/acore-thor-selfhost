@@ -1,0 +1,499 @@
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 19d4c8e..52a8e60 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -747,6 +747,42 @@ Playerbots.SyncLevelWithPlayers = 0
+ # Default: 0 (disabled)
+ Playerbots.RandomBotConcentrateInPlayerZone = 0
+ 
++# Keep randombots around real players instead of spreading them across the whole world.
++# Each randombot is assigned to a real (non-GM) open-world player; its level is kept within
++# +/- RandomBotNearPlayersLevelRange of that player, and it is moved to that player's zone when
++# it drifts away. Bots grouped with a real player, in instances, battlegrounds or flight are left
++# alone. Falls back to normal randombot behaviour when no eligible player is online.
++#
++# This supersedes Playerbots.SyncLevelWithPlayers for level selection and
++# Playerbots.RandomBotConcentrateInPlayerZone for teleport target. Do not enable
++# Playerbots.LevelBrackets.Enabled at the same time: both features change bot levels and would
++# fight each other.
++# Default: 0 (disabled)
++Playerbots.RandomBotNearPlayers = 0
++
++# Maximum number of levels a randombot may be above or below its assigned player.
++# Default: 5
++Playerbots.RandomBotNearPlayersLevelRange = 5
++
++# How often (in seconds) a bot that has drifted away from its assigned player is moved back.
++# Default: 120
++Playerbots.RandomBotNearPlayersFollowInterval = 120
++
++# Preferred distance (in yards) from the assigned player when placing a bot. The actual distance
++# is randomized between roughly a third of this value and the value itself.
++# Default: 60.0
++Playerbots.RandomBotNearPlayersRadius = 60.0
++
++# Restrict each bot to players of its own faction. Disable to let both factions gather around
++# the same player (the bot AI may then treat the player as a PvP target).
++# Default: 1 (enabled)
++Playerbots.RandomBotNearPlayersSameFaction = 1
++
++# Maximum number of randombots assigned to one player. 0 distributes bots evenly across all
++# eligible players without a cap.
++# Default: 0
++Playerbots.RandomBotNearPlayersMaxPerPlayer = 0
++
+ # Mark many quests ≤ bot level as complete (slows down bot creation)
+ # Default: 0 (disabled)
+ Playerbots.PreQuests = 0
+diff --git a/src/Bot/RandomBotLevelMgr.cpp b/src/Bot/RandomBotLevelMgr.cpp
+index d3ecf11..5fe4ecf 100644
+--- a/src/Bot/RandomBotLevelMgr.cpp
++++ b/src/Bot/RandomBotLevelMgr.cpp
+@@ -562,6 +562,11 @@ void RandomBotLevelMgr::ProcessFactionDistribution(TeamId team, uint32 totalBots
+ // for a pending reset into under-populated ones (per faction, via ProcessFactionDistribution).
+ void RandomBotLevelMgr::RunLevelBracketsDistribution()
+ {
++    // Player-centric distribution owns level selection when it is enabled. Running the bracket
++    // pass too would immediately pull those bots back out of the player's level window.
++    if (sPlayerbotAIConfig.RandomBotNearPlayers)
++        return;
++
+     auto const& allPlayers = ObjectAccessor::GetPlayers();
+ 
+     LoadSocialFriendList();
+diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
+index 2a92e58..259de95 100644
+--- a/src/Bot/RandomPlayerbotMgr.cpp
++++ b/src/Bot/RandomPlayerbotMgr.cpp
+@@ -309,6 +309,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
+     }
+ 
+     GetBots();
++
++    if (sPlayerbotAIConfig.RandomBotNearPlayers)
++        UpdatePlayerCentricBots();
++
+     // Copied deliberately: ProcessBot() erases from currentBots while this is
+     // being iterated below, so the loops must run over a snapshot.
+     std::unordered_set<uint32> availableBots = currentBots;
+@@ -1833,6 +1837,17 @@ void RandomPlayerbotMgr::RandomTeleportForLevel(Player* bot)
+     if (bot->InBattleground())
+         return;
+ 
++    if (sPlayerbotAIConfig.RandomBotNearPlayers)
++    {
++        Player* target = GetPlayerCentricTarget(bot);
++        if (target && TeleportBotNearPlayer(bot, target))
++        {
++            playerCentricFollowAt[bot->GetGUID().GetCounter()] =
++                static_cast<uint32>(time(nullptr)) + sPlayerbotAIConfig.RandomBotNearPlayersFollowInterval;
++            return;
++        }
++    }
++
+     if (bot->GetLevel() >= 10 && urand(0, 100) < sPlayerbotAIConfig.ProbTeleToBankers * 100)
+     {
+         std::vector<WorldLocation> locs = sTravelMgr.GetCityLocations(bot);
+@@ -1924,6 +1939,278 @@ std::vector<WorldLocation> RandomPlayerbotMgr::GetPlayerZoneTeleportLocations(st
+     return filtered;
+ }
+ 
++// A real player is a valid player-centric anchor when it is online in the open world, awake, and
++// not in an instance, battleground, arena or on a transport. Bots never anchor to GMs.
++bool RandomPlayerbotMgr::IsPlayerCentricTargetValid(Player* player, Player* bot)
++{
++    if (!player || !bot || !player->IsInWorld() || player->IsGameMaster() || player->isDead())
++        return false;
++
++    // Only real players anchor bots; self-bots and other playerbot-driven characters do not.
++    if (GET_PLAYERBOT_AI(player))
++        return false;
++
++    if (player->IsBeingTeleported() || player->IsInFlight() || player->IsFlying() || player->InBattleground() ||
++        player->InArena() || player->IsInWater())
++        return false;
++
++    if (player->GetTransport())
++        return false;
++
++    Map* map = player->GetMap();
++    if (!map || map->Instanceable())
++        return false;
++
++    if (std::find(sPlayerbotAIConfig.RandomBotMaps.begin(), sPlayerbotAIConfig.RandomBotMaps.end(), map->GetId()) ==
++        sPlayerbotAIConfig.RandomBotMaps.end())
++        return false;
++
++    if (sPlayerbotAIConfig.RandomBotNearPlayersSameFaction && player->GetTeamId() != bot->GetTeamId())
++        return false;
++
++    // A Death Knight cannot be placed within the requested range of a low-level player, so leave
++    // that bot on the normal distribution instead of creating an out-of-range level 55 bot.
++    if (bot->getClass() == CLASS_DEATH_KNIGHT)
++    {
++        uint8 dkMinLevel = sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL);
++        if (player->GetLevel() + sPlayerbotAIConfig.RandomBotNearPlayersLevelRange < dkMinLevel)
++            return false;
++    }
++
++    return true;
++}
++
++// Player-centric movement is only safe for ungrouped, living bots that are not busy in an
++// instance, battleground, flight or combat. Grouped bots are left alone so a teleport cannot
++// split a group.
++bool RandomPlayerbotMgr::IsPlayerCentricBotEligible(Player* bot)
++{
++    if (!sPlayerbotAIConfig.RandomBotNearPlayers || !bot || !bot->IsInWorld())
++        return false;
++
++    if (!IsRandomBot(bot) || bot->isDead() || bot->IsInCombat() || bot->IsBeingTeleported() || bot->IsRooted() ||
++        bot->IsInFlight() || bot->IsFlying())
++        return false;
++
++    if (bot->InBattleground() || bot->InArena() || bot->inRandomLfgDungeon() || bot->InBattlegroundQueue())
++        return false;
++
++    Map* map = bot->GetMap();
++    if (!map || map->Instanceable())
++        return false;
++
++    if (bot->GetGroup())
++        return false;
++
++    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
++    if (!botAI || botAI->GetMaster())
++        return false;
++
++    return true;
++}
++
++// Returns the bot's assigned player, assigning the least-loaded eligible player when there is no
++// valid assignment yet. Returns nullptr when no eligible player is online, letting the caller fall
++// back to the normal randombot behaviour.
++Player* RandomPlayerbotMgr::GetPlayerCentricTarget(Player* bot)
++{
++    if (!sPlayerbotAIConfig.RandomBotNearPlayers || !bot || players.empty())
++        return nullptr;
++
++    uint32 botId = bot->GetGUID().GetCounter();
++    auto assigned = playerCentricTargets.find(botId);
++    if (assigned != playerCentricTargets.end())
++    {
++        Player* target = ObjectAccessor::FindConnectedPlayer(assigned->second);
++        if (IsPlayerCentricTargetValid(target, bot))
++            return target;
++
++        playerCentricTargets.erase(assigned);
++        playerCentricFollowAt.erase(botId);
++    }
++
++    std::unordered_map<uint32, uint32> assignments;
++    for (auto const& [assignedBotId, targetGuid] : playerCentricTargets)
++    {
++        if (!GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(assignedBotId)))
++            continue;
++
++        assignments[targetGuid.GetCounter()]++;
++    }
++
++    Player* best = nullptr;
++    uint32 bestCount = ~0u;
++    for (Player* player : players)
++    {
++        if (!IsPlayerCentricTargetValid(player, bot))
++            continue;
++
++        uint32 count = assignments[player->GetGUID().GetCounter()];
++        if (sPlayerbotAIConfig.RandomBotNearPlayersMaxPerPlayer > 0 &&
++            count >= sPlayerbotAIConfig.RandomBotNearPlayersMaxPerPlayer)
++            continue;
++
++        // Reservoir-sample ties so bots spread evenly over equally loaded players.
++        if (count < bestCount || (count == bestCount && urand(0, 1) == 0))
++        {
++            best = player;
++            bestCount = count;
++        }
++    }
++
++    if (!best)
++        return nullptr;
++
++    playerCentricTargets[botId] = best->GetGUID();
++    return best;
++}
++
++void RandomPlayerbotMgr::GetPlayerCentricLevelBounds(Player* bot, Player* target, uint8& low, uint8& high)
++{
++    uint32 range = sPlayerbotAIConfig.RandomBotNearPlayersLevelRange;
++    uint32 targetLevel = target->GetLevel();
++    uint32 minLevel = sPlayerbotAIConfig.RandomBotMinLevel;
++    uint32 maxLevel = sPlayerbotAIConfig.RandomBotMaxLevel;
++
++    low = static_cast<uint8>(std::max(minLevel, targetLevel > range ? targetLevel - range : 1));
++    high = static_cast<uint8>(std::min(maxLevel, targetLevel + range));
++
++    if (bot && bot->getClass() == CLASS_DEATH_KNIGHT)
++    {
++        uint8 dkMinLevel = sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL);
++        low = std::max(low, dkMinLevel);
++        high = std::max(high, low);
++    }
++
++    if (low > high)
++    {
++        low = high = static_cast<uint8>(std::min(maxLevel, std::max(minLevel, targetLevel)));
++    }
++}
++
++bool RandomPlayerbotMgr::AdjustBotLevel(Player* bot, uint8 level)
++{
++    if (!bot || level == 0 || level == bot->GetLevel())
++        return false;
++
++    if (bot->IsMounted())
++        bot->Dismount();
++
++    PlayerbotFactory factory(bot, level);
++    factory.Randomize(false);
++    SetValue(bot, "level", level);
++    return true;
++}
++
++bool RandomPlayerbotMgr::TeleportBotNearPlayer(Player* bot, Player* target)
++{
++    if (!bot || !target || !bot->IsInWorld() || !target->IsInWorld())
++        return false;
++
++    if (bot->IsBeingTeleported() || target->IsBeingTeleported() || bot->IsInCombat() || bot->IsRooted() ||
++        bot->isDead() || bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->GetGroup())
++        return false;
++
++    Map* map = target->GetMap();
++    if (!map || map->Instanceable())
++        return false;
++
++    float radius = sPlayerbotAIConfig.RandomBotNearPlayersRadius;
++    for (uint32 attempt = 0; attempt < 10; ++attempt)
++    {
++        float angle = frand(0.0f, static_cast<float>(2.0 * M_PI));
++        float distance = frand(radius * 0.35f, radius);
++        float x = target->GetPositionX() + cosf(angle) * distance;
++        float y = target->GetPositionY() + sinf(angle) * distance;
++        float z = target->GetPositionZ();
++
++        if (!map->CanReachPositionAndGetValidCoords(target, x, y, z, true, true))
++            continue;
++
++        if (map->IsInWater(bot->GetPhaseMask(), x, y, z, bot->GetCollisionHeight()))
++            continue;
++
++        bot->GetMotionMaster()->Clear();
++        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
++            botAI->Reset(true);
++
++        bot->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TELEPORTED | AURA_INTERRUPT_FLAG_CHANGE_MAP);
++        bot->TeleportTo(map->GetId(), x, y, z, target->GetOrientation());
++        bot->SendMovementFlagUpdate();
++        return true;
++    }
++
++    return false;
++}
++
++// Periodic pass that keeps the online random bots level-appropriate for, and close to, the real
++// players. It is deliberately rate-limited: a handful of bots are processed per manager tick so a
++// large bot population cannot turn a player login into a spike.
++void RandomPlayerbotMgr::UpdatePlayerCentricBots()
++{
++    if (!sPlayerbotAIConfig.RandomBotNearPlayers || players.empty())
++        return;
++
++    uint32 now = static_cast<uint32>(time(nullptr));
++
++    for (auto it = playerCentricTargets.begin(); it != playerCentricTargets.end();)
++    {
++        Player* assignedBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(it->first));
++        if (!assignedBot || !IsPlayerCentricBotEligible(assignedBot))
++        {
++            playerCentricFollowAt.erase(it->first);
++            it = playerCentricTargets.erase(it);
++        }
++        else
++        {
++            ++it;
++        }
++    }
++
++    uint32 actions = 0;
++    uint32 maxActions = _isBotInitializing ? 2 : 5;
++    PlayerBotMap bots = GetAllBots();
++
++    for (auto const& [botGuid, bot] : bots)
++    {
++        if (actions >= maxActions)
++            break;
++
++        if (!IsPlayerCentricBotEligible(bot))
++            continue;
++
++        Player* target = GetPlayerCentricTarget(bot);
++        if (!target)
++            continue;
++
++        uint32 botId = botGuid.GetCounter();
++        uint8 low, high;
++        GetPlayerCentricLevelBounds(bot, target, low, high);
++
++        if (!sPlayerbotAIConfig.DisableRandomLevels && !sPlayerbotAIConfig.RandomBotFixedLevel &&
++            (bot->GetLevel() < low || bot->GetLevel() > high))
++        {
++            if (AdjustBotLevel(bot, static_cast<uint8>(urand(low, high))))
++                ++actions;
++
++            continue;
++        }
++
++        if (now < playerCentricFollowAt[botId])
++            continue;
++
++        bool needsTeleport = bot->GetMapId() != target->GetMapId() ||
++                             bot->GetDistance(target) > sPlayerbotAIConfig.RandomBotNearPlayersRadius * 2.0f;
++        if (!needsTeleport)
++            continue;
++
++        bool teleported = TeleportBotNearPlayer(bot, target);
++        playerCentricFollowAt[botId] =
++            now + (teleported ? sPlayerbotAIConfig.RandomBotNearPlayersFollowInterval : 15);
++        ++actions;
++    }
++}
++
+ void RandomPlayerbotMgr::RandomTeleportGrindForLevel(Player* bot)
+ {
+     if (bot->InBattleground())
+@@ -2042,11 +2329,26 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
+         minLevel = std::max(minLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
+     }
+ 
++    // Player-centric mode replaces the world-wide level range with the assigned player's level
++    // window. If the player is ineligible mid-call, the normal range above is used unchanged.
++    if (sPlayerbotAIConfig.RandomBotNearPlayers)
++    {
++        Player* target = GetPlayerCentricTarget(bot);
++        if (target)
++        {
++            uint8 nearLow, nearHigh;
++            GetPlayerCentricLevelBounds(bot, target, nearLow, nearHigh);
++            minLevel = nearLow;
++            maxLevel = nearHigh;
++        }
++    }
++
+     PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomizeFirst");
+ 
+     uint32 level;
+ 
+-    if (sPlayerbotAIConfig.DowngradeMaxLevelBot && bot->GetLevel() >= sPlayerbotAIConfig.RandomBotMaxLevel)
++    if (sPlayerbotAIConfig.DowngradeMaxLevelBot && !sPlayerbotAIConfig.RandomBotNearPlayers &&
++        bot->GetLevel() >= sPlayerbotAIConfig.RandomBotMaxLevel)
+     {
+         if (bot->getClass() == CLASS_DEATH_KNIGHT)
+         {
+@@ -3174,6 +3476,9 @@ void RandomPlayerbotMgr::RandomTeleportForRpg(Player* bot)
+ void RandomPlayerbotMgr::Remove(Player* bot)
+ {
+     ObjectGuid owner = bot->GetGUID();
++    uint32 botId = owner.GetCounter();
++    playerCentricTargets.erase(botId);
++    playerCentricFollowAt.erase(botId);
+ 
+     PlayerbotsDatabasePreparedStatement* stmt =
+         PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_DEL_RANDOM_BOTS_BY_OWNER);
+@@ -3181,7 +3486,6 @@ void RandomPlayerbotMgr::Remove(Player* bot)
+     stmt->SetData(1, owner.GetCounter());
+     PlayerbotsDatabase.Execute(stmt);
+ 
+-    uint32 botId = owner.GetCounter();
+     eventCache.erase(botId);
+ 
+     LogoutPlayerBot(owner);
+diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
+index fca1d7c..34fbe0c 100644
+--- a/src/Bot/RandomPlayerbotMgr.h
++++ b/src/Bot/RandomPlayerbotMgr.h
+@@ -12,6 +12,7 @@
+ #include "ObjectGuid.h"
+ #include "PlayerbotCommandServer.h"
+ #include "PlayerbotMgr.h"
++#include <unordered_map>
+ #include <unordered_set>
+ 
+ struct BattlegroundInfo
+@@ -243,8 +244,17 @@ private:
+     void RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth = false);
+     uint32 GetZoneLevel(uint16 mapId, float teleX, float teleY, float teleZ);
+     std::vector<WorldLocation> GetPlayerZoneTeleportLocations(std::vector<WorldLocation> const& locs, Player* bot);
++    bool IsPlayerCentricTargetValid(Player* player, Player* bot);
++    bool IsPlayerCentricBotEligible(Player* bot);
++    Player* GetPlayerCentricTarget(Player* bot);
++    void GetPlayerCentricLevelBounds(Player* bot, Player* target, uint8& low, uint8& high);
++    bool AdjustBotLevel(Player* bot, uint8 level);
++    bool TeleportBotNearPlayer(Player* bot, Player* target);
++    void UpdatePlayerCentricBots();
+     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
+     std::vector<Player*> players;
++    std::unordered_map<uint32, ObjectGuid> playerCentricTargets;  // bot low GUID -> assigned real player
++    std::unordered_map<uint32, uint32> playerCentricFollowAt;     // bot low GUID -> next follow attempt
+ 
+     // std::map<uint32, std::vector<WorldLocation>> rpgLocsCache;
+     std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> rpgLocsCacheLevel;
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 4898cd8..2395922 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -746,6 +746,26 @@ bool PlayerbotAIConfig::Initialize()
+     SyncLevelWithPlayers = sConfigMgr->GetOption<bool>("Playerbots.SyncLevelWithPlayers", false);
+     RandomBotConcentrateInPlayerZone =
+         sConfigMgr->GetOption<bool>("Playerbots.RandomBotConcentrateInPlayerZone", false);
++    RandomBotNearPlayers = sConfigMgr->GetOption<bool>("Playerbots.RandomBotNearPlayers", false);
++    RandomBotNearPlayersLevelRange =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersLevelRange", 5);
++    RandomBotNearPlayersFollowInterval =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersFollowInterval", 2 * MINUTE);
++    RandomBotNearPlayersRadius =
++        sConfigMgr->GetOption<float>("Playerbots.RandomBotNearPlayersRadius", 60.0f);
++    RandomBotNearPlayersSameFaction =
++        sConfigMgr->GetOption<bool>("Playerbots.RandomBotNearPlayersSameFaction", true);
++    RandomBotNearPlayersMaxPerPlayer =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersMaxPerPlayer", 0);
++
++    if (RandomBotNearPlayersLevelRange > 40)
++        RandomBotNearPlayersLevelRange = 40;
++    if (RandomBotNearPlayersFollowInterval < 30)
++        RandomBotNearPlayersFollowInterval = 30;
++    if (RandomBotNearPlayersRadius < 5.0f)
++        RandomBotNearPlayersRadius = 5.0f;
++    if (RandomBotNearPlayersRadius > 300.0f)
++        RandomBotNearPlayersRadius = 300.0f;
+     RandomBotGroupNearby = sConfigMgr->GetOption<bool>("Playerbots.RandomBotGroupNearby", false);
+ 
+     // arena
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 5e89efa..6392192 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -398,6 +398,12 @@ public:
+     std::unordered_map<NewRpgStatus, uint32> RpgStatusProbWeight;
+     bool SyncLevelWithPlayers;
+     bool RandomBotConcentrateInPlayerZone;
++    bool RandomBotNearPlayers;
++    uint32 RandomBotNearPlayersLevelRange;
++    uint32 RandomBotNearPlayersFollowInterval;
++    float RandomBotNearPlayersRadius;
++    bool RandomBotNearPlayersSameFaction;
++    uint32 RandomBotNearPlayersMaxPerPlayer;
+     bool AutoLearnQuestSpells;
+     bool AutoTeleportForLevel;
+     bool RandomBotGroupNearby;

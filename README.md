@@ -8,7 +8,7 @@ Scope: upstream AzerothCore as used by the [Dad's MMO Lab WotLK guide](https://g
 
 The server half is implemented. `modules/mod-creature-gear` compiles into the server with the rest of the core, and `scripts/creature-gear/` generates its dataset: every creature the rules admit - humanoids of level 1-80 with no quest, vendor or trainer flag and no hand-set equipment, 1274 of them against the pinned base dumps - gets per-spawn weapon pools, drops the gear it is wearing, and wears an eleven-slot armour outfit over the mirror-image packet; server-side data and logic only, no client patch. The gear fits the creature's class (`creature_template.unit_class`): a mage-class caster gets staves, wands, swords, daggers and cloth, a warrior plate and a shield, a paladin no ranged weapon at all - the proficiency lists come from the client's own `SkillLine`/`SkillLineAbility` data, and the validator rejects any pick a class could not use. It has been booted end to end in a real `worldserver` built from the pinned core with the pinned client data: the module loaded its dataset (1274 outfit rows and 5096 armour variants for 1274 creatures) and the worldserver logged no errors.
 
-What is not verified yet: how a real client renders the outfit, a drop taken from a corpse in play, and any of it on the device — nothing here has run on a Thor, and the arm64 build the workflow produces has not been booted anywhere.
+What is not verified yet: how a real client renders the outfit, a drop taken from a corpse in play, and any of it on the device — nothing here has run on a Thor, and the arm64 build the workflow produces has not been booted anywhere. The player-centric randombot distribution compiles into the local worldserver but has not been exercised with a live client either.
 
 Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs the launcher app plus the client-side changes listed in [`docs/LAUNCHER-HOSTING-DESIGN.md`](docs/LAUNCHER-HOSTING-DESIGN.md); the app's shipped runtime already carries the 32-bit Windows client path. Hosting the server *inside* the app is out of scope for this repository: the app has no foreground service, one X environment, one shared rootfs and UID-wide process sweeps, so the guide's Docker flow does not transfer. The server runs beside the app, in Termux.
 
@@ -20,6 +20,8 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 | [`docs/SERVER-STACK.md`](docs/SERVER-STACK.md) | The server half: build, data, database, bots, supervision, and what of the guide transfers |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The ordered, copy-pasteable device steps (Termux + proot Ubuntu), with the gates to check as you go |
 | [`docs/CREATURE-GEAR-DESIGN.md`](docs/CREATURE-GEAR-DESIGN.md) | Mobs that wear what they drop: what needs a client patch (almost nothing), what needs code, and how the SQL rides the release — **implemented as `modules/mod-creature-gear`**; its status table lists what is verified and where |
+| [`docs/LOOT-BAGS-DESIGN.md`](docs/LOOT-BAGS-DESIGN.md) | Level-banded loot bags on every lootable creature: quality tiers, money, cloth, potions and level-appropriate gear, delivered as a pure database patch in the core's CUSTOM SQL slot |
+| [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md) | Player-centric randombot distribution: levels within a band of online players and teleports near them, delivered as a patch on the pinned `mod-playerbots` |
 | [`scripts/thor-install.sh`](scripts/thor-install.sh) | Does the whole device install for you: Termux packages, rootfs, server files, MySQL, configs, first boot, GM account, start/stop scripts |
 | [`pins.toml`](pins.toml) | Exact commits, artifact hashes and ports every document refers to |
 | [`.github/workflows/server-aarch64.yml`](.github/workflows/server-aarch64.yml) | Builds the linux/arm64 server + SQL sources on a native arm64 runner and attaches them to a release (the client data is fetched on the device: a single release asset stops at 2 GiB) |
@@ -44,6 +46,15 @@ The creature-gear dataset is committed as generated SQL, so a normal install (`-
 python3 scripts/creature-gear/gen_creature_gear.py --core <core> --out modules/mod-creature-gear/data/sql/world/base
 python3 scripts/creature-gear/check_creature_gear.py --core <core>
 ```
+
+The loot-bag patch is also committed as generated SQL, at `sql/custom/db_world/`, and rides the artifact's `src/data/sql` tree into the core's CUSTOM slot; `thor-install.sh --from-source` fetches the same directory. Regenerate it with the pinned core:
+
+```sh
+python3 scripts/loot-bags/gen_loot_bags.py --core <core>
+python3 scripts/loot-bags/gen_loot_bags.py --core <core> --check
+```
+
+The player-centric randombot pass is maintained as `patches/playerbots-player-centric.patch` against the pinned `mod-playerbots` commit. The workflow applies it before the arm64 build, `thor-install.sh --from-source` applies it after cloning the module, and the installer writes the near-player defaults into `playerbots.conf` (8 bots near the player, 80-yard radius, the rest normally distributed). See [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md).
 
 Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every flag.
 
