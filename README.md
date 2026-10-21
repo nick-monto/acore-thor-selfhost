@@ -6,9 +6,9 @@ Scope: upstream AzerothCore as used by the [Dad's MMO Lab WotLK guide](https://g
 
 ## Status
 
-The server half is implemented. `modules/mod-creature-gear` compiles into the server with the rest of the core, and `scripts/creature-gear/` generates its dataset: every creature the rules admit - humanoids of level 1-80 with no quest, vendor or trainer flag and no hand-set equipment, 1274 of them against the pinned base dumps - gets per-spawn weapon pools, drops the gear it is wearing, and wears an eleven-slot armour outfit over the mirror-image packet; server-side data and logic only, no client patch. The gear fits the creature's class (`creature_template.unit_class`): a mage-class caster gets staves, wands, swords, daggers and cloth, a warrior plate and a shield, a paladin no ranged weapon at all - the proficiency lists come from the client's own `SkillLine`/`SkillLineAbility` data, and the validator rejects any pick a class could not use. It has been booted end to end in a real `worldserver` built from the pinned core with the pinned client data: the module loaded its dataset (1274 outfit rows and 5096 armour variants for 1274 creatures) and the worldserver logged no errors.
+The server half is implemented. `modules/mod-creature-gear` and `modules/mod-hardcore` are wired into the static module build with the rest of the core. Hardcore defaults to `ghost`; creature gear uses `scripts/creature-gear/`, which generates its dataset: every creature the rules admit - humanoids of level 1-80 with no quest, vendor or trainer flag and no hand-set equipment, 1274 of them against the pinned base dumps - gets per-spawn weapon pools, drops the gear it is wearing, and wears an eleven-slot armour outfit over the mirror-image packet; server-side data and logic only, no client patch. The gear fits the creature's class (`creature_template.unit_class`): a mage-class caster gets staves, wands, swords, daggers and cloth, a warrior plate and a shield, a paladin no ranged weapon at all - the proficiency lists come from the client's own `SkillLine`/`SkillLineAbility` data, and the validator rejects any pick a class could not use. It has been booted end to end in a real `worldserver` built from the pinned core with the pinned client data: the module loaded its dataset (1274 outfit rows and 5096 armour variants for 1274 creatures) and the worldserver logged no errors.
 
-What is not verified yet: how a real client renders the outfit, a drop taken from a corpse in play, and any of it on the device — nothing here has run on a Thor, and the arm64 build the workflow produces has not been booted anywhere. The player-centric randombot distribution compiles into the local worldserver but has not been exercised with a live client either.
+What is not verified yet: how a real client renders the outfit, a drop taken from a corpse in play, the hardcore death/relog path, and any of it on the device — nothing here has run on a Thor, and the arm64 build the workflow produces has not been booted anywhere. The player-centric randombot distribution compiles into the local worldserver but has not been exercised with a live client either.
 
 Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs the launcher app plus the client-side changes listed in [`docs/LAUNCHER-HOSTING-DESIGN.md`](docs/LAUNCHER-HOSTING-DESIGN.md); the app's shipped runtime already carries the 32-bit Windows client path. Hosting the server *inside* the app is out of scope for this repository: the app has no foreground service, one X environment, one shared rootfs and UID-wide process sweeps, so the guide's Docker flow does not transfer. The server runs beside the app, in Termux.
 
@@ -22,6 +22,7 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 | [`docs/CREATURE-GEAR-DESIGN.md`](docs/CREATURE-GEAR-DESIGN.md) | Mobs that wear what they drop: what needs a client patch (almost nothing), what needs code, and how the SQL rides the release — **implemented as `modules/mod-creature-gear`**; its status table lists what is verified and where |
 | [`docs/LOOT-BAGS-DESIGN.md`](docs/LOOT-BAGS-DESIGN.md) | Level-banded loot bags on every lootable creature: quality tiers, money, cloth, potions and level-appropriate gear, delivered as a pure database patch in the core's CUSTOM SQL slot |
 | [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md) | Player-centric randombot distribution: levels within a band of online players and teleports near them, delivered as a patch on the pinned `mod-playerbots` |
+| [`modules/mod-hardcore/README.md`](modules/mod-hardcore/README.md) | Opt-in permadeath ruleset, vendored from `maluramichael/mod-hardcore` with the Thor-local changes recorded in `UPSTREAM.md` |
 | [`scripts/thor-install.sh`](scripts/thor-install.sh) | Does the whole device install for you: Termux packages, rootfs, server files, MySQL, configs, first boot, GM account, start/stop scripts |
 | [`pins.toml`](pins.toml) | Exact commits, artifact hashes and ports every document refers to |
 | [`.github/workflows/server-aarch64.yml`](.github/workflows/server-aarch64.yml) | Builds the linux/arm64 server + SQL sources on a native arm64 runner and attaches them to a release (the client data is fetched on the device: a single release asset stops at 2 GiB) |
@@ -47,6 +48,8 @@ python3 scripts/creature-gear/gen_creature_gear.py --core <core> --out modules/m
 python3 scripts/creature-gear/check_creature_gear.py --core <core>
 ```
 
+`modules/mod-hardcore` is vendored at the upstream commit in [`pins.toml`](pins.toml); the local changes are listed in [`modules/mod-hardcore/UPSTREAM.md`](modules/mod-hardcore/UPSTREAM.md). It adds the opt-in `.hardcore on` ruleset, logs every hardcore death, and defaults to `Hardcore.DeathPolicy = ghost` (resurrection refused, graveyard release allowed). The build copies it beside `mod-creature-gear`; `thor-install.sh --from-source` fetches both module trees from this repository.
+
 The loot-bag patch is also committed as generated SQL, at `sql/custom/db_world/`, and rides the artifact's `src/data/sql` tree into the core's CUSTOM slot; `thor-install.sh --from-source` fetches the same directory. Regenerate it with the pinned core:
 
 ```sh
@@ -54,7 +57,7 @@ python3 scripts/loot-bags/gen_loot_bags.py --core <core>
 python3 scripts/loot-bags/gen_loot_bags.py --core <core> --check
 ```
 
-The player-centric randombot pass is maintained as `patches/playerbots-player-centric.patch` against the pinned `mod-playerbots` commit. The workflow applies it before the arm64 build, `thor-install.sh --from-source` applies it after cloning the module, and the installer writes the near-player defaults into `playerbots.conf` (8 bots near the player, 80-yard radius, the rest normally distributed). See [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md).
+The player-centric randombot pass is maintained as `patches/playerbots-player-centric.patch` against the pinned `mod-playerbots` commit. The workflow applies it before the arm64 build, `thor-install.sh --from-source` applies it after cloning the module, and the installer writes the near-player defaults into `playerbots.conf` (12 bots tied to the player: 3 in the 80-yard inner ring, 5 in the overlapping 160-yard outer ring, and 4 elsewhere in the player's zone; the rest normally distributed). See [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md).
 
 Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every flag.
 

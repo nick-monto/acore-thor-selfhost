@@ -9,6 +9,15 @@ repo = "https://github.com/mod-playerbots/mod-playerbots"
 commit = "d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"   # master, 2026-10-16
 path = "modules/mod-playerbots"                        # DBUpdater loads module SQL from this path
 
+[module.hardcore]
+repo = "https://github.com/maluramichael/mod-hardcore"
+commit = "e136b45af8097730a058090ec933b1d8849b7478"   # 2026-10-11
+path = "modules/mod-hardcore"
+license = "GPL-2.0-or-later"
+# Vendored; see modules/mod-hardcore/UPSTREAM.md. Local changes: graveyard
+# release is allowed for fallen ghosts, and bot-controlled sessions cannot opt
+# in. Hardcore.DeathPolicy defaults to ghost.
+
 [module.creature_gear]
 repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
 path = "modules/mod-creature-gear"                          # DBUpdater loads module SQL from this path

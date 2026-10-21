@@ -127,3 +127,18 @@ The `mod-creature-gear` module lives in this repository under `modules/mod-creat
 | Verified end-to-end | a real `worldserver` (pinned core + playerbots + this module, dev x86_64, `-DMODULES=static`) booted from a device-shaped tree against the smoke databases and the pinned client data: the updater re-applied the five `MODULE` files onto a database holding the previous dataset; `mod-creature-gear: loaded 1274 outfit row(s) and 5096 variant row(s) for 1274 creature(s)`, zero ERROR lines; 1274 outfit rows, 3527 pool rows (a class that fills two weapon roles gets two rows, and the pool file prunes its own stale IDs - `Loaded 14385 Equipment Templates` against the 14680 the previous dataset left), and every `creature` row of those entries at `equipment_id = -1` (9915) | dev-workstation run, **not a Thor measurement** [V] |
 
 Regeneration is deterministic (same inputs, same bytes) and reads the pinned core's `data/sql/base/db_world/{creature_template,creature,item_template}.sql`; the policies live in `scripts/creature-gear/gear.toml`. `check_creature_gear.py` re-parses both the base dumps and the generated files and asserts every cross-file invariant, exiting non-zero with a precise message on the first failure. No client file enters this path. The client-visible outfit was not exercised by the boot (that needs a real 3.3.5a client), and the arm64/Thor device run is still unverified. The drop injection *was* exercised, without needing a player: a temporary probe build seeded a real `Loot` object with one of the creature's own worn items - what its loot table would have rolled for it - and ran the shipped injection against it six times; every run left the natural item alone and, on the creature with two eligible worn items, added the other one instead (see §9 and `pins.toml`; the arm64 workflow is the first device-path gate).
+
+## 11. Hardcore (`mod-hardcore`)
+
+`modules/mod-hardcore` is vendored from `maluramichael/mod-hardcore` at the commit in `pins.toml`; the local diff is recorded in `modules/mod-hardcore/UPSTREAM.md`. It is opt-in per character (`.hardcore on`), refuses bot-controlled sessions, writes `hardcore_flags` / `hardcore_deaths` in the characters database programmatically (no SQL tree), and defaults to `Hardcore.DeathPolicy = ghost`.
+
+| Item | Value | Evidence |
+|---|---|---|
+| Death gate | `OnPlayerCanResurrect` returns false for a fallen character; every resurrection route goes through it | `Player.cpp:4566-4567`, `PlayerScript.h:838` [V] |
+| Ghost policy | resurrection refused; `OnPlayerCanRepopAtGraveyard` is deliberately not overridden, so under-map/fatigue ghosts can reach a spirit healer | `Hardcore.cpp` [V] |
+| Bot guard | `WorldSession::IsHeadless()` blocks `.hardcore on`; all enforcement hooks ignore headless sessions | `Hardcore.cpp`, `WorldSession.h:1234` [V] |
+| Config | `$PREFIX/etc/modules/mod_hardcore.conf`; installer creates it with `DeathPolicy=ghost` and validates `ghost|archive|delete` | `thor-install.sh`, `server-aarch64.yml` [V] |
+| Delivery | `server-aarch64.yml` copies the module before configure; `thor-install.sh --from-source` extracts it from this repository; CMake installs the conf; the no-SQL layout is intentional | `server-aarch64.yml`, `thor-install.sh` [V] |
+| Verified | module sources pass a `-fsyntax-only` compile against the pinned core headers with the playerbots module present; full arm64/worldserver boot and the in-game death/relog path are still unverified | dev-workstation check, **not a Thor run** [V] |
+
+The admin escape hatch is the database: delete the character's `hardcore_flags` row (or set `fallen = 0`) and restart/reload the module's cache on next startup. There is no `.hardcore off` command by design.

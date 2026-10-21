@@ -63,8 +63,8 @@ CORE_REPO="https://github.com/mod-playerbots/azerothcore-wotlk"
 CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
 PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
-# mod-creature-gear lives in *this* repository (modules/mod-creature-gear), not in a repository of
-# its own, so --from-source has to fetch this one's tarball as well when the script is installed
+# mod-creature-gear and mod-hardcore live in *this* repository (modules/), not in repositories of
+# their own, so --from-source has to fetch this one's tarball as well when the script is installed
 # from a copy of the repo. --github-token (THOR_GH_TOKEN) is what makes that work while private.
 SELF_REPO="nick-monto/acore-thor-selfhost"
 SELF_REF="${SELF_REF:-main}"
@@ -83,8 +83,11 @@ ROOT="$ROOT_DEFAULT"
 BOTS=50
 # Solo default: only a handful of the random bots stay near the real player; the rest keep the
 # normal world-wide distribution, so the total population is unchanged without crowding.
-NEAR_BOTS=8
+NEAR_BOTS=12
 NEAR_RADIUS=80.0
+NEAR_INNER_COUNT=3
+NEAR_OUTER_RADIUS=160.0
+NEAR_ZONE_COUNT=4
 DB_USER="acore"
 DB_PASS=""
 ACCOUNT="admin"
@@ -855,7 +858,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -947,9 +950,11 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     tarball="$(mktemp)"
     curl_gh -fL --retry 3 -o "$tarball" "https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF" \
         || die "cannot download https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
-    # --strip-components=2 removes "<repo>-<ref>/modules/" so the tree lands as $parent/mod-creature-gear.
-    tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" '*/modules/mod-creature-gear*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear out of $SELF_REPO@$SELF_REF"; }
+    # --strip-components=2 removes "<repo>-<ref>/modules/" so each tree lands as
+    # $parent/<module-name>.
+    tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
+        '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear and modules/mod-hardcore out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -974,7 +979,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     rm -f "$tarball"
     [ -d "$parent/mod-creature-gear" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-gear (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear"
+    [ -d "$parent/mod-hardcore" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-hardcore (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear and $parent/mod-hardcore"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1111,7 +1118,7 @@ conf_pair() {   # print the live config file, creating it from NAME.conf.dist on
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -1120,7 +1127,7 @@ write_configs() {
     local mysql_bin
     mysql_bin="$(command -v mysql)"
 
-    local ws as pb cg
+    local ws as pb cg hc
     ws="$(conf_pair worldserver)"
     as="$(conf_pair authserver)"
     set_conf "$ws" DataDir                "\"$DATA_DIR\""
@@ -1161,6 +1168,9 @@ write_configs() {
         set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange    5
         set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
         set_conf "$pb" Playerbots.RandomBotNearPlayersRadius        "$NEAR_RADIUS"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersInnerCount    "$NEAR_INNER_COUNT"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersOuterRadius   "$NEAR_OUTER_RADIUS"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneCount     "$NEAR_ZONE_COUNT"
         set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction   1
         set_conf "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer  "$NEAR_BOTS"
         set_conf "$pb" PlayerbotsDatabaseInfo           "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_playerbots\""
@@ -1185,6 +1195,25 @@ write_configs() {
         log "mod-creature-gear.conf: Enable=$(conf_get "$cg" CreatureGear.Enable) Drop.Enable=$(conf_get "$cg" CreatureGear.Drop.Enable) Appearance.Enable=$(conf_get "$cg" CreatureGear.Appearance.Enable) Weapons.RerollOnRespawn=$(conf_get "$cg" CreatureGear.Weapons.RerollOnRespawn)"
     else
         warn "no $CONF_DIR/modules/mod-creature-gear.conf.dist - the artifact was built without the module, creatures keep their stock gear"
+    fi
+    if [ -f "$CONF_DIR/modules/mod_hardcore.conf.dist" ] || [ -f "$CONF_DIR/modules/mod_hardcore.conf" ]; then
+        hc="$(conf_pair modules/mod_hardcore)"
+        local hc_policy
+        hc_policy="$(conf_get "$hc" Hardcore.DeathPolicy)"
+        case "$hc_policy" in
+            ghost|archive|delete) ;;
+            *)
+                # The module itself falls back to ghost; make the file say so too.
+                if [ -n "$hc_policy" ]; then
+                    warn "mod_hardcore.conf: unknown DeathPolicy '$hc_policy', restoring the shipped default ghost"
+                fi
+                set_conf "$hc" Hardcore.DeathPolicy ghost
+                hc_policy=ghost
+                ;;
+        esac
+        log "mod_hardcore.conf: Enable=$(conf_get "$hc" Hardcore.Enable) DeathPolicy=$hc_policy"
+    else
+        warn "no $CONF_DIR/modules/mod_hardcore.conf.dist - the artifact was built without the module, hardcore is unavailable"
     fi
     log "worldserver.conf: DataDir=$(conf_get "$ws" DataDir) BindIP=$(conf_get "$ws" BindIP)"
 }
@@ -1448,11 +1477,11 @@ run_checks() {   # run_checks FIX(0|1)
 
     # 2. configs
     local ws="$CONF_DIR/worldserver.conf" as="$CONF_DIR/authserver.conf" pb="$CONF_DIR/modules/playerbots.conf"
-    local cg="$CONF_DIR/modules/mod-creature-gear.conf"
-    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf"
+    local cg="$CONF_DIR/modules/mod-creature-gear.conf" hc="$CONF_DIR/modules/mod_hardcore.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -1467,9 +1496,38 @@ run_checks() {   # run_checks FIX(0|1)
     else
         ok "playerbots.conf bots = ${BOTS}"
     fi
+    if [ -f "$hc" ]; then
+        local hc_policy
+        hc_policy="$(conf_get "$hc" Hardcore.DeathPolicy)"
+        case "$hc_policy" in
+            ghost|archive|delete) ok "mod_hardcore.conf: DeathPolicy=$hc_policy" ;;
+            *)
+                bad "mod_hardcore.conf: DeathPolicy is '$hc_policy' (expected ghost, archive or delete)"
+                if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); set_conf "$hc" Hardcore.DeathPolicy ghost; ok "DeathPolicy set to ghost"; fi
+                ;;
+        esac
+    fi
     if [ -f "$pb" ]; then
         if grep -qE '^[[:space:]]*Playerbots\.RandomBotNearPlayers[[:space:]]*=' "$pb"; then
             ok "playerbots.conf: near-player distribution = $(conf_get "$pb" Playerbots.RandomBotNearPlayers)"
+            local near_tier_missing=0 near_key
+            for near_key in RandomBotNearPlayersInnerCount RandomBotNearPlayersOuterRadius RandomBotNearPlayersZoneCount; do
+                if ! grep -qE "^[[:space:]]*Playerbots\\.${near_key}[[:space:]]*=" "$pb"; then
+                    near_tier_missing=1
+                fi
+            done
+            if [ "$near_tier_missing" = 1 ]; then
+                bad "playerbots.conf: twin-tier keys missing (old artifact or config)"
+                if [ "$fix" = 1 ]; then
+                    FIXES=$((FIXES + 1))
+                    set_conf "$pb" Playerbots.RandomBotNearPlayersInnerCount "$NEAR_INNER_COUNT"
+                    set_conf "$pb" Playerbots.RandomBotNearPlayersOuterRadius "$NEAR_OUTER_RADIUS"
+                    set_conf "$pb" Playerbots.RandomBotNearPlayersZoneCount "$NEAR_ZONE_COUNT"
+                    ok "near-player tier keys added"
+                fi
+            else
+                ok "playerbots.conf: rings inner=$(conf_get "$pb" Playerbots.RandomBotNearPlayersRadius) outer=$(conf_get "$pb" Playerbots.RandomBotNearPlayersOuterRadius) inner-count=$(conf_get "$pb" Playerbots.RandomBotNearPlayersInnerCount) zone-count=$(conf_get "$pb" Playerbots.RandomBotNearPlayersZoneCount) max=$(conf_get "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer)"
+            fi
         else
             bad "playerbots.conf: RandomBotNearPlayers missing (artifact built without the player-centric patch?)"
             if [ "$fix" = 1 ]; then
@@ -1478,6 +1536,9 @@ run_checks() {   # run_checks FIX(0|1)
                 set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange 5
                 set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
                 set_conf "$pb" Playerbots.RandomBotNearPlayersRadius "$NEAR_RADIUS"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersInnerCount "$NEAR_INNER_COUNT"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersOuterRadius "$NEAR_OUTER_RADIUS"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersZoneCount "$NEAR_ZONE_COUNT"
                 set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction 1
                 set_conf "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer "$NEAR_BOTS"
                 ok "near-player distribution keys added"
