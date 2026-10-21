@@ -708,13 +708,14 @@ host_repair() {
     state_load || true
     state_apply_cli
     [ -d "$ROOTFS" ] || die "rootfs missing: $ROOTFS (install first)"
+    # This copy is the one thing the host stage owns. Refresh it even when it exists: --repair may be
+    # run from a newer script, and the inside stage is where missing helpers are detected and written.
     if [ ! -f "$ROOTFS$INSIDE_SCRIPT_COPY" ]; then
-        # This copy is the one thing the host stage owns, and --repair exists to put things back.
         warn "the script's copy is missing; writing it again"
-        mkdir -p "$(dirname "$ROOTFS$INSIDE_SCRIPT_COPY")"
-        cp "$SCRIPT_PATH" "$ROOTFS$INSIDE_SCRIPT_COPY"
-        manifest_add "$ROOTFS$INSIDE_SCRIPT_COPY"
     fi
+    mkdir -p "$(dirname "$ROOTFS$INSIDE_SCRIPT_COPY")"
+    cp "$SCRIPT_PATH" "$ROOTFS$INSIDE_SCRIPT_COPY"
+    manifest_add "$ROOTFS$INSIDE_SCRIPT_COPY"
     guest_has_path "$INSIDE_SCRIPT_COPY" || die_path_invisible "$INSIDE_SCRIPT_COPY"
     local w
     for w in "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"; do
