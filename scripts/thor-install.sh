@@ -550,44 +550,41 @@ write_host_wrappers() {
     umask 077
     cat > "$HOME/start-wow-server.sh" <<WRAP
 #!/data/data/com.termux/files/usr/bin/bash
+# Start the realm. --bots N sets the random bot count before the world reads it.
+set -uo pipefail
+STATE="$HOST_STATE/state.env"
+# state.env writes values as KEY="value"; strip the quotes, or the path itself contains them.
+state() { [ -f "\$STATE" ] || return 0; sed -n "s/^\$1=//p" "\$STATE" | tail -1 | sed -E 's/^"(.*)"\$/\1/'; }
+root="\$(state ROOT)"; [ -n "\$root" ] || root="$ROOT"
+conf_dir="\$(state CONF_DIR)"; [ -n "\$conf_dir" ] || conf_dir="$ROOT/etc"
+if [ "\${1:-}" = "--bots" ]; then
+    [ "\$#" -eq 2 ] || { echo "usage: start-wow-server.sh [--bots N]" >&2; exit 2; }
+    n="\$2"
+    proot-distro login $ROOTFS_NAME -- "\$root/set-bots.sh" "\$conf_dir/modules/playerbots.conf" "\$n" "\$root/.thor-state/state.env" || exit \$?
+    [ -f "\$STATE" ] && sed -i -E "s|^BOTS=.*|BOTS=\$n|" "\$STATE"
+    shift 2
+elif [ "\$#" -ne 0 ]; then
+    echo "usage: start-wow-server.sh [--bots N]" >&2
+    exit 2
+fi
 # The wake lock is what keeps Android from freezing the server; it comes from the Termux:API app.
 command -v termux-wake-lock >/dev/null && termux-wake-lock
-exec proot-distro login $ROOTFS_NAME -- $ROOT/run.sh
+exec proot-distro login $ROOTFS_NAME -- "\$root/run.sh"
 WRAP
     cat > "$HOME/stop-wow-server.sh" <<WRAP
 #!/data/data/com.termux/files/usr/bin/bash
 proot-distro login $ROOTFS_NAME -- $ROOT/stop.sh
 command -v termux-wake-unlock >/dev/null && termux-wake-unlock
 WRAP
-    cat > "$HOME/wow-server.sh" <<WRAP
-#!/data/data/com.termux/files/usr/bin/bash
-# Control for the self-hosted realm, for the launcher and for you:
-#   wow-server.sh start | stop | bots [N]
-# The launcher sends these through Termux's RUN_COMMAND service; running it by hand is the same.
-set -uo pipefail
-STATE="$HOST_STATE/state.env"
-[ -f "\$STATE" ] || { echo "no \$STATE: run thor-install.sh first" >&2; exit 1; }
-state() { grep -E "^\$1=" "\$STATE" | tail -1 | cut -d= -f2-; }
-ROOT="\$(state ROOT)"; CONF_DIR="\$(state CONF_DIR)"
-action="\${1:-}"; shift 2>/dev/null || true
-case "\$action" in
-    start) exec "$HOME/start-wow-server.sh" ;;
-    stop)  exec "$HOME/stop-wow-server.sh" ;;
-    bots)
-        # login takes the distro name, not ROOTFS (the container's directory on disk).
-        proot-distro login $ROOTFS_NAME -- "\$ROOT/set-bots.sh" "\$CONF_DIR/modules/playerbots.conf" "\$@"
-        if [ "\$#" -ge 1 ]; then
-            # --status compares its own record of the bot count against the config, so a change made
-            # here has to land there too or the next --status would report a mismatch.
-            sed -i -E "s|^BOTS=.*|BOTS=\$1|" "\$STATE"
-        fi
-        ;;
-    *) echo "usage: wow-server.sh start|stop|bots [N]" >&2; exit 2 ;;
-esac
-WRAP
-    chmod +x "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh" "$HOME/wow-server.sh"
+    chmod +x "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"
     umask 022
-    log "wrote $HOME/start-wow-server.sh, $HOME/stop-wow-server.sh and $HOME/wow-server.sh"
+    # Older installs got a third script that only forwarded start/stop and changed bots. The start
+    # script now owns --bots, so remove that generated copy rather than leave a second control path.
+    if [ -f "$HOME/wow-server.sh" ] && grep -q '^# Control for the self-hosted realm' "$HOME/wow-server.sh"; then
+        rm -f "$HOME/wow-server.sh"
+        log "removed obsolete $HOME/wow-server.sh"
+    fi
+    log "wrote $HOME/start-wow-server.sh and $HOME/stop-wow-server.sh"
 }
 
 host_preflight() {
@@ -1312,12 +1309,14 @@ sleep 2
 EOF
     cat > "$ROOT/set-bots.sh" <<EOF
 #!/usr/bin/env bash
-# set-bots.sh CONF [N] - read or set the random bot count in a playerbots.conf.
-# Min and Max move together: the launcher offers one number, and a narrower window would only change
-# how the population drifts after startup. The world reads it at its next start.
+# set-bots.sh CONF [N] [STATE] - read or set the random bot count in a playerbots.conf.
+# Min and Max move together: the start script offers one number, and a narrower window would only
+# change how the population drifts after startup. STATE is the installer's state file, updated so
+# --status and --repair agree with the config; the world reads the config at its next start.
 set -euo pipefail
-conf="\${1:?usage: set-bots.sh CONF [N]}"
+conf="\${1:?usage: set-bots.sh CONF [N] [STATE]}"
 n="\${2:-}"
+state="\${3:-}"
 [ -f "\$conf" ] || { echo "no \$conf: the artifact was built without the module" >&2; exit 1; }
 read_key() { grep -E "^[[:space:]]*Playerbots\.\$1[[:space:]]*=" "\$conf" | tail -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*#.*\$//'; }
 if [ -z "\$n" ]; then
@@ -1333,6 +1332,13 @@ for key in MinRandomBots MaxRandomBots; do
         printf 'Playerbots.%s = %s\n' "\$key" "\$n" >> "\$conf"
     fi
 done
+if [ -n "\$state" ] && [ -f "\$state" ]; then
+    if grep -q '^BOTS=' "\$state"; then
+        sed -i -E "s|^BOTS=.*|BOTS=\$n|" "\$state"
+    else
+        printf 'BOTS=%s\n' "\$n" >> "\$state"
+    fi
+fi
 echo "min=\$(read_key MinRandomBots) max=\$(read_key MaxRandomBots)"
 EOF
     chmod +x "$ROOT/run.sh" "$ROOT/stop.sh" "$ROOT/start-db.sh" "$ROOT/stop-db.sh" "$ROOT/set-bots.sh"
@@ -1359,8 +1365,7 @@ Manage it
   inspect : bash thor-install.sh --status      (exit 1 when something needs repair)
   repair  : bash thor-install.sh --repair
   remove  : bash thor-install.sh --uninstall [--keep-db] [--purge-rootfs]
-  start   : ~/start-wow-server.sh              (stop: ~/stop-wow-server.sh)
-  control : ~/wow-server.sh start|stop|bots N  (what the launcher calls)
+  start   : ~/start-wow-server.sh [--bots N]   (stop: ~/stop-wow-server.sh)
 
 Next steps
   1. prove it with a PC 3.3.5a client before touching the launcher: re-run with

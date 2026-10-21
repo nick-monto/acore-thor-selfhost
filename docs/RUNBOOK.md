@@ -240,7 +240,7 @@ If that fails, the launcher work is pointless — fix the server first.
 
 ## Part 7 — Supervision
 
-The install script writes these: `~/start-wow-server.sh` (wake lock + `proot-distro login ubuntu -- /opt/acore/run.sh`), `~/stop-wow-server.sh`, `~/wow-server.sh` (the control entry point: `start`, `stop`, `bots [N]`; the launcher calls this through Termux's `RUN_COMMAND` service), and inside the rootfs `/opt/acore/run.sh` (mysqld → authserver → worldserver, restarting the world if it dies, Ctrl-C stops everything), `/opt/acore/stop.sh`, `start-db.sh`, `stop-db.sh`, `set-bots.sh` (sets `Playerbots.MinRandomBots`/`MaxRandomBots` together and leaves the rest of `playerbots.conf` alone; the world reads it at its next start).
+The install script writes these: `~/start-wow-server.sh [--bots N]` (wake lock + `proot-distro login ubuntu -- /opt/acore/run.sh`), `~/stop-wow-server.sh`, and inside the rootfs `/opt/acore/run.sh` (mysqld → authserver → worldserver, restarting the world if it dies, Ctrl-C stops everything), `/opt/acore/stop.sh`, `start-db.sh`, `stop-db.sh`, `set-bots.sh` (sets `Playerbots.MinRandomBots`/`MaxRandomBots` together and leaves the rest of `playerbots.conf` alone; the world reads it at its next start). `--bots N` runs `set-bots.sh` and updates the installer's recorded count before starting, so `--status` and `--repair` agree with `playerbots.conf`.
 
 Start order is DB → authserver → worldserver; stop in reverse. Nothing here involves Wine.
 
