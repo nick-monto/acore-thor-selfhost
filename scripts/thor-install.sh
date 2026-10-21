@@ -1480,7 +1480,23 @@ run_checks() {   # run_checks FIX(0|1)
     fi
     ensure_conf_dir_link
 
-    # 3. client data and SQL sources
+    # 3. helper scripts
+    local helper missing_helper=0
+    for helper in run.sh stop.sh start-db.sh stop-db.sh set-bots.sh; do
+        if [ -x "$ROOT/$helper" ]; then
+            ok "helper: $helper"
+        else
+            bad "helper missing or not executable: $ROOT/$helper"
+            missing_helper=1
+        fi
+    done
+    if [ "$missing_helper" = 1 ] && [ "$fix" = 1 ]; then
+        FIXES=$((FIXES + 1))
+        warn "rewriting the generated helper scripts"
+        write_helpers || true
+    fi
+
+    # 4. client data and SQL sources
     local d
     for d in dbc maps vmaps mmaps; do
         if [ -d "$DATA_DIR/$d" ]; then ok "client data: $d"; else
@@ -1503,7 +1519,7 @@ run_checks() {   # run_checks FIX(0|1)
         if [ "$fix" = 1 ]; then warn "re-run the install to restore it: bash thor-install.sh --force"; fi
     fi
 
-    # 4. database
+    # 5. database
     if ! have mysql; then
         bad "mysql client not found (is this the rootfs?)"
     else
@@ -1553,7 +1569,7 @@ run_checks() {   # run_checks FIX(0|1)
         fi
     fi
 
-    # 5. processes
+    # 6. processes
     local pattern
     for pattern in worldserver authserver; do
         if pgrep -f "$BIN_DIR/$pattern" >/dev/null 2>&1; then ok "$pattern is running"; else log "--    $pattern is not running"; fi
