@@ -81,13 +81,15 @@ DB_PROBE_TIMEOUT="${DB_PROBE_TIMEOUT:-30}"              # seconds a write probe 
 
 ROOT="$ROOT_DEFAULT"
 BOTS=50
-# Solo default: only a handful of the random bots stay near the real player; the rest keep the
-# normal world-wide distribution, so the total population is unchanged without crowding.
-NEAR_BOTS=12
-NEAR_RADIUS=80.0
-NEAR_INNER_COUNT=3
-NEAR_OUTER_RADIUS=160.0
-NEAR_ZONE_COUNT=4
+# Solo default: only a handful of the random bots stay in the real player's zone; the rest keep the
+# normal world-wide distribution, so the total population is unchanged without crowding the player.
+# The zone group also churns: bots visit for 15-40 minutes, then leave for 4-10 and come back.
+NEAR_BOTS=10
+NEAR_MIN_DISTANCE=100.0
+NEAR_VISIT_MIN=900
+NEAR_VISIT_MAX=2400
+NEAR_AWAY_MIN=240
+NEAR_AWAY_MAX=600
 DB_USER="acore"
 DB_PASS=""
 ACCOUNT="admin"
@@ -1161,18 +1163,24 @@ write_configs() {
         set_conf "$pb" Playerbots.RandomBotAutologin    1
         set_conf "$pb" Playerbots.MinRandomBots         "$BOTS"
         set_conf "$pb" Playerbots.MaxRandomBots         "$BOTS"
-        # Solo-friendly default: keep the bot population level-appropriate for and physically
-        # near real players instead of spreading it over the whole world. The keys are ignored by
-        # an unpatched playerbots build, so an older artifact still starts normally.
+        # Solo-friendly default: keep the bot population level-appropriate for, and inside the zone
+        # of, real players instead of spreading it over the whole world. The keys are ignored by an
+        # unpatched playerbots build, so an older artifact still starts normally.
         set_conf "$pb" Playerbots.RandomBotNearPlayers              1
         set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange    5
         set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
-        set_conf "$pb" Playerbots.RandomBotNearPlayersRadius        "$NEAR_RADIUS"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersInnerCount    "$NEAR_INNER_COUNT"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersOuterRadius   "$NEAR_OUTER_RADIUS"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneCount     "$NEAR_ZONE_COUNT"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersMinDistance   "$NEAR_MIN_DISTANCE"
         set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction   1
         set_conf "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer  "$NEAR_BOTS"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneTraffic   1
+        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneVisitMinTime "$NEAR_VISIT_MIN"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneVisitMaxTime "$NEAR_VISIT_MAX"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneAwayMinTime  "$NEAR_AWAY_MIN"
+        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneAwayMaxTime  "$NEAR_AWAY_MAX"
+        # The twin-ring keys are gone: bots stay in the player's zone instead of being placed in
+        # rings around the player. Left in an older config they would look like they still do
+        # something, so they are dropped here.
+        sed -i -E '/^[[:space:]]*Playerbots\.RandomBotNearPlayers(Radius|InnerCount|OuterRadius|ZoneCount)[[:space:]]*=/d' "$pb"
         set_conf "$pb" PlayerbotsDatabaseInfo           "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_playerbots\""
         set_conf "$pb" Playerbots.Updates.EnableDatabases 1
         log "playerbots.conf: enabled=$(conf_get "$pb" Playerbots.Enabled) bots=$(conf_get "$pb" Playerbots.MaxRandomBots)"
@@ -1510,23 +1518,46 @@ run_checks() {   # run_checks FIX(0|1)
     if [ -f "$pb" ]; then
         if grep -qE '^[[:space:]]*Playerbots\.RandomBotNearPlayers[[:space:]]*=' "$pb"; then
             ok "playerbots.conf: near-player distribution = $(conf_get "$pb" Playerbots.RandomBotNearPlayers)"
-            local near_tier_missing=0 near_key
-            for near_key in RandomBotNearPlayersInnerCount RandomBotNearPlayersOuterRadius RandomBotNearPlayersZoneCount; do
-                if ! grep -qE "^[[:space:]]*Playerbots\\.${near_key}[[:space:]]*=" "$pb"; then
-                    near_tier_missing=1
+            # Every key the mode reads, with the value the installer writes. A config from an older
+            # install can be missing the newer ones, which the binary then fills with its own
+            # defaults - so name them rather than silently accepting the difference.
+            local near_pair near_key near_val near_missing=0
+            for near_pair in \
+                "RandomBotNearPlayersLevelRange=5" \
+                "RandomBotNearPlayersFollowInterval=120" \
+                "RandomBotNearPlayersMinDistance=$NEAR_MIN_DISTANCE" \
+                "RandomBotNearPlayersSameFaction=1" \
+                "RandomBotNearPlayersMaxPerPlayer=$NEAR_BOTS" \
+                "RandomBotNearPlayersZoneTraffic=1" \
+                "RandomBotNearPlayersZoneVisitMinTime=$NEAR_VISIT_MIN" \
+                "RandomBotNearPlayersZoneVisitMaxTime=$NEAR_VISIT_MAX" \
+                "RandomBotNearPlayersZoneAwayMinTime=$NEAR_AWAY_MIN" \
+                "RandomBotNearPlayersZoneAwayMaxTime=$NEAR_AWAY_MAX"
+            do
+                near_key="${near_pair%%=*}"
+                near_val="${near_pair#*=}"
+                if grep -qE "^[[:space:]]*Playerbots\\.${near_key}[[:space:]]*=" "$pb"; then
+                    continue
                 fi
-            done
-            if [ "$near_tier_missing" = 1 ]; then
-                bad "playerbots.conf: twin-tier keys missing (old artifact or config)"
+
+                near_missing=1
+                bad "playerbots.conf: $near_key missing (old artifact or config)"
                 if [ "$fix" = 1 ]; then
                     FIXES=$((FIXES + 1))
-                    set_conf "$pb" Playerbots.RandomBotNearPlayersInnerCount "$NEAR_INNER_COUNT"
-                    set_conf "$pb" Playerbots.RandomBotNearPlayersOuterRadius "$NEAR_OUTER_RADIUS"
-                    set_conf "$pb" Playerbots.RandomBotNearPlayersZoneCount "$NEAR_ZONE_COUNT"
-                    ok "near-player tier keys added"
+                    set_conf "$pb" "Playerbots.$near_key" "$near_val"
+                    ok "$near_key set to $near_val"
                 fi
-            else
-                ok "playerbots.conf: rings inner=$(conf_get "$pb" Playerbots.RandomBotNearPlayersRadius) outer=$(conf_get "$pb" Playerbots.RandomBotNearPlayersOuterRadius) inner-count=$(conf_get "$pb" Playerbots.RandomBotNearPlayersInnerCount) zone-count=$(conf_get "$pb" Playerbots.RandomBotNearPlayersZoneCount) max=$(conf_get "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer)"
+            done
+            if [ "$near_missing" = 0 ]; then
+                ok "playerbots.conf: zone bots max=$(conf_get "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer) min-distance=$(conf_get "$pb" Playerbots.RandomBotNearPlayersMinDistance) traffic=$(conf_get "$pb" Playerbots.RandomBotNearPlayersZoneTraffic) visit=$(conf_get "$pb" Playerbots.RandomBotNearPlayersZoneVisitMinTime)-$(conf_get "$pb" Playerbots.RandomBotNearPlayersZoneVisitMaxTime)s away=$(conf_get "$pb" Playerbots.RandomBotNearPlayersZoneAwayMinTime)-$(conf_get "$pb" Playerbots.RandomBotNearPlayersZoneAwayMaxTime)s"
+            fi
+            if grep -qE '^[[:space:]]*Playerbots\.RandomBotNearPlayers(Radius|InnerCount|OuterRadius|ZoneCount)[[:space:]]*=' "$pb"; then
+                warn "playerbots.conf: twin-ring keys are still in the config; the current build ignores them"
+                if [ "$fix" = 1 ]; then
+                    FIXES=$((FIXES + 1))
+                    sed -i -E '/^[[:space:]]*Playerbots\.RandomBotNearPlayers(Radius|InnerCount|OuterRadius|ZoneCount)[[:space:]]*=/d' "$pb"
+                    ok "twin-ring keys removed"
+                fi
             fi
         else
             bad "playerbots.conf: RandomBotNearPlayers missing (artifact built without the player-centric patch?)"
@@ -1535,12 +1566,14 @@ run_checks() {   # run_checks FIX(0|1)
                 set_conf "$pb" Playerbots.RandomBotNearPlayers 1
                 set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange 5
                 set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
-                set_conf "$pb" Playerbots.RandomBotNearPlayersRadius "$NEAR_RADIUS"
-                set_conf "$pb" Playerbots.RandomBotNearPlayersInnerCount "$NEAR_INNER_COUNT"
-                set_conf "$pb" Playerbots.RandomBotNearPlayersOuterRadius "$NEAR_OUTER_RADIUS"
-                set_conf "$pb" Playerbots.RandomBotNearPlayersZoneCount "$NEAR_ZONE_COUNT"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersMinDistance "$NEAR_MIN_DISTANCE"
                 set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction 1
                 set_conf "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer "$NEAR_BOTS"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersZoneTraffic 1
+                set_conf "$pb" Playerbots.RandomBotNearPlayersZoneVisitMinTime "$NEAR_VISIT_MIN"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersZoneVisitMaxTime "$NEAR_VISIT_MAX"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersZoneAwayMinTime "$NEAR_AWAY_MIN"
+                set_conf "$pb" Playerbots.RandomBotNearPlayersZoneAwayMaxTime "$NEAR_AWAY_MAX"
                 ok "near-player distribution keys added"
             fi
         fi

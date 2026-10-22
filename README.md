@@ -57,7 +57,7 @@ python3 scripts/loot-bags/gen_loot_bags.py --core <core>
 python3 scripts/loot-bags/gen_loot_bags.py --core <core> --check
 ```
 
-The player-centric randombot pass is maintained as `patches/playerbots-player-centric.patch` against the pinned `mod-playerbots` commit. The workflow applies it before the arm64 build, `thor-install.sh --from-source` applies it after cloning the module, and the installer writes the near-player defaults into `playerbots.conf` (12 bots tied to the player: 3 in the 80-yard inner ring, 5 in the overlapping 160-yard outer ring, and 4 elsewhere in the player's zone; the rest normally distributed). See [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md).
+The player-centric randombot pass is maintained as `patches/playerbots-player-centric.patch` against the pinned `mod-playerbots` commit. The workflow applies it before the arm64 build, `thor-install.sh --from-source` applies it after cloning the module, and the installer writes the near-player defaults into `playerbots.conf`: the bots assigned to the player are capped at 10 and placed at level-appropriate spots in the player's current zone, at least 100 yards away, never in a ring around them; each bot then visits for 15-40 minutes and spends 4-10 away in another zone, so the zone's population changes over time. The rest of the bots keep the normal world-wide distribution. See [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md).
 
 Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every flag.
 

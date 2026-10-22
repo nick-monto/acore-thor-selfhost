@@ -1,16 +1,17 @@
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
-index 19d4c8e..c3061fc 100644
+index 19d4c8e..f57ddf7 100644
 --- a/conf/playerbots.conf.dist
 +++ b/conf/playerbots.conf.dist
-@@ -747,6 +747,61 @@ Playerbots.SyncLevelWithPlayers = 0
+@@ -747,6 +747,67 @@ Playerbots.SyncLevelWithPlayers = 0
  # Default: 0 (disabled)
  Playerbots.RandomBotConcentrateInPlayerZone = 0
  
-+# Keep randombots around real players instead of spreading them across the whole world.
++# Keep randombots in the zone of real players instead of spreading them across the whole world.
 +# Each randombot is assigned to a real (non-GM) open-world player; its level is kept within
-+# +/- RandomBotNearPlayersLevelRange of that player, and it is moved to that player's zone when
-+# it drifts away. Bots grouped with a real player, in instances, battlegrounds or flight are left
-+# alone. Falls back to normal randombot behaviour when no eligible player is online.
++# +/- RandomBotNearPlayersLevelRange of that player, and it is placed at a safe level-appropriate
++# travel location inside that player's current zone. Bots grouped with a real player, in
++# instances, battlegrounds or flight are left alone, and nothing is ever placed on top of the
++# player. Falls back to normal randombot behaviour when no eligible player is online.
 +#
 +# This supersedes Playerbots.SyncLevelWithPlayers for level selection and
 +# Playerbots.RandomBotConcentrateInPlayerZone for teleport target. Do not enable
@@ -23,43 +24,48 @@ index 19d4c8e..c3061fc 100644
 +# Default: 5
 +Playerbots.RandomBotNearPlayersLevelRange = 5
 +
-+# How often (in seconds) a bot that has drifted away from its assigned player is moved back.
++# How often (in seconds) a bot that has drifted out of its assigned player's zone is moved back.
 +# Default: 120
 +Playerbots.RandomBotNearPlayersFollowInterval = 120
 +
-+# Preferred inner-ring distance (in yards) from the assigned player when placing a bot. The
-+# actual distance is randomized between roughly a third of this value and the value itself.
-+# Default: 60.0
-+Playerbots.RandomBotNearPlayersRadius = 60.0
-+
-+# Number of bots per player assigned to the inner ring. The first N bots assigned to a player are
-+# placed inside RandomBotNearPlayersRadius; zone bots are assigned next, then the outer ring. 0
-+# makes every bot eligible for the zone/outer tiers.
-+# Default: 3
-+Playerbots.RandomBotNearPlayersInnerCount = 3
-+
-+# Outer-ring radius (in yards). Outer bots are placed between 75% of the inner radius and this
-+# value, so the two bands overlap and outer bots can wander into the inner area naturally. It is
-+# clamped above the inner radius and at 500 yards.
-+# Default: 160.0
-+Playerbots.RandomBotNearPlayersOuterRadius = 160.0
-+
-+# Number of bots per player assigned to the zone tier. These bots are placed at a safe,
-+# level-appropriate point in the player's current zone, at least the outer radius away, so they
-+# populate roads and hubs outside the local rings without crowding the player. They follow the
-+# assigned player when the player changes zone. 0 disables the zone tier.
-+# Default: 4
-+Playerbots.RandomBotNearPlayersZoneCount = 4
++# Smallest distance (in yards) a bot may be placed from its assigned player when it arrives in the
++# player's zone. Travel locations inside that distance are skipped, so an arrival never looks like
++# a bot landing on the player: 100 is about where a 3.3.5a client stops drawing other players. 0
++# allows placement anywhere.
++# Default: 100.0
++Playerbots.RandomBotNearPlayersMinDistance = 100.0
 +
 +# Restrict each bot to players of its own faction. Disable to let both factions gather around
 +# the same player (the bot AI may then treat the player as a PvP target).
 +# Default: 1 (enabled)
 +Playerbots.RandomBotNearPlayersSameFaction = 1
 +
-+# Maximum number of randombots assigned to one player. 0 distributes bots evenly across all
-+# eligible players without a cap.
-+# Default: 0
-+Playerbots.RandomBotNearPlayersMaxPerPlayer = 0
++# Maximum number of randombots assigned to one player, which is also the most that can be in that
++# player's zone at once. 0 distributes bots evenly across all eligible players without a cap.
++# Default: 10
++Playerbots.RandomBotNearPlayersMaxPerPlayer = 10
++
++# Simulate zone traffic: each bot spends a while in the zone and then leaves for another zone for a
++# while, so the population around the player keeps changing instead of standing still. A bot only
++# leaves once it is far enough away that the player cannot watch it go, and it is never pulled back
++# before its return time. Disable to keep every assigned bot in the zone permanently.
++# Default: 1 (enabled)
++Playerbots.RandomBotNearPlayersZoneTraffic = 1
++
++# How long (in seconds) a bot stays in the zone before it may leave. Randomised per visit.
++# Default: 900 (15 minutes)
++Playerbots.RandomBotNearPlayersZoneVisitMinTime = 900
++
++# Default: 2400 (40 minutes)
++Playerbots.RandomBotNearPlayersZoneVisitMaxTime = 2400
++
++# How long (in seconds) a bot stays away before it returns to the player's zone. Randomised per
++# trip, and only counted down while the bot is eligible to be moved.
++# Default: 240 (4 minutes)
++Playerbots.RandomBotNearPlayersZoneAwayMinTime = 240
++
++# Default: 600 (10 minutes)
++Playerbots.RandomBotNearPlayersZoneAwayMaxTime = 600
 +
  # Mark many quests ≤ bot level as complete (slows down bot creation)
  # Default: 0 (disabled)
@@ -81,7 +87,7 @@ index d3ecf11..5fe4ecf 100644
  
      LoadSocialFriendList();
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index 2a92e58..99148d6 100644
+index 2a92e58..a23ba8c 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
 @@ -309,6 +309,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
@@ -95,30 +101,32 @@ index 2a92e58..99148d6 100644
      // Copied deliberately: ProcessBot() erases from currentBots while this is
      // being iterated below, so the loops must run over a snapshot.
      std::unordered_set<uint32> availableBots = currentBots;
-@@ -1833,6 +1837,22 @@ void RandomPlayerbotMgr::RandomTeleportForLevel(Player* bot)
+@@ -1833,6 +1837,24 @@ void RandomPlayerbotMgr::RandomTeleportForLevel(Player* bot)
      if (bot->InBattleground())
          return;
  
 +    if (sPlayerbotAIConfig.RandomBotNearPlayers)
 +    {
-+        Player* target = GetPlayerCentricTarget(bot);
-+        if (target)
++        uint32 botId = bot->GetGUID().GetCounter();
++        uint32 now = static_cast<uint32>(time(nullptr));
++        auto away = playerCentricAwayUntil.find(botId);
++        if (away != playerCentricAwayUntil.end())
 +        {
-+            bool moved = IsPlayerCentricZoneBot(bot) ? TeleportBotToTargetZone(bot, target)
-+                                                     : TeleportBotNearPlayer(bot, target);
-+            if (moved)
-+            {
-+                playerCentricFollowAt[bot->GetGUID().GetCounter()] =
-+                    static_cast<uint32>(time(nullptr)) + sPlayerbotAIConfig.RandomBotNearPlayersFollowInterval;
++            // The bot is out of the zone on purpose. Only its own return timer brings it back;
++            // teleporting it here would end the visit early and shrink the traffic to nothing.
++            if (now < away->second)
 +                return;
-+            }
 +        }
++
++        Player* target = GetPlayerCentricTarget(bot);
++        if (target && PlaceBotInPlayerZone(bot, target, now))
++            return;
 +    }
 +
      if (bot->GetLevel() >= 10 && urand(0, 100) < sPlayerbotAIConfig.ProbTeleToBankers * 100)
      {
          std::vector<WorldLocation> locs = sTravelMgr.GetCityLocations(bot);
-@@ -1924,6 +1944,385 @@ std::vector<WorldLocation> RandomPlayerbotMgr::GetPlayerZoneTeleportLocations(st
+@@ -1924,6 +1946,400 @@ std::vector<WorldLocation> RandomPlayerbotMgr::GetPlayerZoneTeleportLocations(st
      return filtered;
  }
  
@@ -210,23 +218,17 @@ index 2a92e58..99148d6 100644
 +
 +        playerCentricTargets.erase(assigned);
 +        playerCentricFollowAt.erase(botId);
-+        playerCentricInnerBots.erase(botId);
-+        playerCentricZoneBots.erase(botId);
++        playerCentricLeaveAt.erase(botId);
++        playerCentricAwayUntil.erase(botId);
 +    }
 +
 +    std::unordered_map<uint32, uint32> assignments;
-+    std::unordered_map<uint32, uint32> innerAssignments;
-+    std::unordered_map<uint32, uint32> zoneAssignments;
 +    for (auto const& [assignedBotId, targetGuid] : playerCentricTargets)
 +    {
 +        if (!GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(assignedBotId)))
 +            continue;
 +
 +        assignments[targetGuid.GetCounter()]++;
-+        if (playerCentricInnerBots.find(assignedBotId) != playerCentricInnerBots.end())
-+            innerAssignments[targetGuid.GetCounter()]++;
-+        if (playerCentricZoneBots.find(assignedBotId) != playerCentricZoneBots.end())
-+            zoneAssignments[targetGuid.GetCounter()]++;
 +    }
 +
 +    Player* best = nullptr;
@@ -252,26 +254,13 @@ index 2a92e58..99148d6 100644
 +    if (!best)
 +        return nullptr;
 +
-+    uint32 bestId = best->GetGUID().GetCounter();
-+    playerCentricInnerBots.erase(botId);
-+    playerCentricZoneBots.erase(botId);
-+    if (innerAssignments[bestId] < sPlayerbotAIConfig.RandomBotNearPlayersInnerCount)
-+        playerCentricInnerBots.insert(botId);
-+    else if (zoneAssignments[bestId] < sPlayerbotAIConfig.RandomBotNearPlayersZoneCount)
-+        playerCentricZoneBots.insert(botId);
-+
 +    playerCentricTargets[botId] = best->GetGUID();
++    // A fresh assignment gets a full visit before traffic may send it away, randomised so a login
++    // does not empty the zone in one wave later on.
++    playerCentricLeaveAt[botId] = static_cast<uint32>(time(nullptr)) +
++                                  urand(sPlayerbotAIConfig.RandomBotNearPlayersZoneVisitMinTime,
++                                        sPlayerbotAIConfig.RandomBotNearPlayersZoneVisitMaxTime);
 +    return best;
-+}
-+
-+bool RandomPlayerbotMgr::IsPlayerCentricInnerBot(Player* bot)
-+{
-+    return bot && playerCentricInnerBots.find(bot->GetGUID().GetCounter()) != playerCentricInnerBots.end();
-+}
-+
-+bool RandomPlayerbotMgr::IsPlayerCentricZoneBot(Player* bot)
-+{
-+    return bot && playerCentricZoneBots.find(bot->GetGUID().GetCounter()) != playerCentricZoneBots.end();
 +}
 +
 +void RandomPlayerbotMgr::GetPlayerCentricLevelBounds(Player* bot, Player* target, uint8& low, uint8& high)
@@ -311,58 +300,42 @@ index 2a92e58..99148d6 100644
 +    return true;
 +}
 +
-+bool RandomPlayerbotMgr::TeleportBotNearPlayer(Player* bot, Player* target)
++// A zone bot only leaves once it is far enough away that the player cannot watch it go: a 3.3.5a
++// client stops drawing units around 100 yards out.
++static constexpr float PLAYER_CENTRIC_UNSEEN_DISTANCE = 100.0f;
++
++// The zone the player is standing in, or 0 when the client has not placed them in one yet.
++uint32 RandomPlayerbotMgr::GetPlayerCentricZoneId(Player* player)
 +{
-+    if (!bot || !target || !bot->IsInWorld() || !target->IsInWorld())
-+        return false;
++    Map* map = player ? player->GetMap() : nullptr;
++    if (!map)
++        return 0;
 +
-+    if (bot->IsBeingTeleported() || target->IsBeingTeleported() || bot->IsInCombat() || bot->IsRooted() ||
-+        bot->isDead() || bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->GetGroup())
-+        return false;
-+
-+    Map* map = target->GetMap();
-+    if (!map || map->Instanceable())
-+        return false;
-+
-+    bool inner = IsPlayerCentricInnerBot(bot);
-+    float innerRadius = sPlayerbotAIConfig.RandomBotNearPlayersRadius;
-+    float outerRadius = sPlayerbotAIConfig.RandomBotNearPlayersOuterRadius;
-+    // The outer band starts inside the inner boundary, so outer bots can naturally wander into
-+    // the inner area instead of being confined to a hard second ring.
-+    float minDistance = inner ? innerRadius * 0.35f : innerRadius * 0.75f;
-+    float maxDistance = inner ? innerRadius : std::max(innerRadius, outerRadius);
-+    for (uint32 attempt = 0; attempt < 10; ++attempt)
-+    {
-+        float angle = frand(0.0f, static_cast<float>(2.0 * M_PI));
-+        float distance = frand(minDistance, maxDistance);
-+        float x = target->GetPositionX() + cosf(angle) * distance;
-+        float y = target->GetPositionY() + sinf(angle) * distance;
-+        float z = target->GetPositionZ();
-+
-+        if (!map->CanReachPositionAndGetValidCoords(target, x, y, z, true, true))
-+            continue;
-+
-+        if (map->IsInWater(bot->GetPhaseMask(), x, y, z, bot->GetCollisionHeight()))
-+            continue;
-+
-+        bot->GetMotionMaster()->Clear();
-+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-+            botAI->Reset(true);
-+
-+        bot->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TELEPORTED | AURA_INTERRUPT_FLAG_CHANGE_MAP);
-+        bot->TeleportTo(map->GetId(), x, y, z, target->GetOrientation());
-+        bot->SendMovementFlagUpdate();
-+        return true;
-+    }
-+
-+    return false;
++    return map->GetZoneId(PHASEMASK_NORMAL, player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
 +}
 +
-+// Zone tier: keep the bot in the assigned player's current zone, but outside the local rings.
-+// It uses the normal level-appropriate travel locations, filtered to the target map and zone, so
-+// roads, hubs and quest areas across the zone can be populated instead of only the player's
-+// immediate surroundings.
-+bool RandomPlayerbotMgr::TeleportBotToTargetZone(Player* bot, Player* target)
++// True while the bot shares the map and zone of its assigned player, which is the only place a
++// player-centric bot is allowed to be.
++bool RandomPlayerbotMgr::IsBotInPlayerZone(Player* bot, Player* target)
++{
++    if (!bot || !target || bot->GetMapId() != target->GetMapId())
++        return false;
++
++    Map* map = bot->GetMap();
++    uint32 targetZone = GetPlayerCentricZoneId(target);
++    if (!map || !targetZone)
++        return false;
++
++    return map->GetZoneId(PHASEMASK_NORMAL, bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ()) ==
++           targetZone;
++}
++
++// Places the bot in the assigned player's zone, or - when inPlayerZone is false - at a
++// level-appropriate location somewhere else, which is how a zone bot leaves. Placement uses the
++// normal travel locations, so roads, hubs and quest areas across the zone are populated instead of
++// only the player's immediate surroundings. In-zone arrivals keep
++// RandomBotNearPlayersMinDistance yards of clearance, so a bot never lands on the player.
++bool RandomPlayerbotMgr::TeleportBotToTargetZone(Player* bot, Player* target, bool inPlayerZone)
 +{
 +    if (!bot || !target || !bot->IsInWorld() || !target->IsInWorld())
 +        return false;
@@ -375,44 +348,87 @@ index 2a92e58..99148d6 100644
 +    if (!targetMap || targetMap->Instanceable())
 +        return false;
 +
-+    uint32 targetZone = targetMap->GetZoneId(PHASEMASK_NORMAL, target->GetPositionX(), target->GetPositionY(),
-+                                              target->GetPositionZ());
-+    if (!targetZone)
++    uint32 targetZone = GetPlayerCentricZoneId(target);
++    if (inPlayerZone && !targetZone)
 +        return false;
 +
-+    AreaTableEntry const* zone = sAreaTableStore.LookupEntry(targetZone);
-+    if (zone && ((zone->team == 4 && bot->GetTeamId() == TEAM_ALLIANCE) ||
-+                 (zone->team == 2 && bot->GetTeamId() == TEAM_HORDE)))
-+        return false;
-+
-+    std::vector<WorldLocation> locs = sTravelMgr.GetTeleportLocations(bot);
-+    std::vector<WorldLocation> zoneLocs;
-+    for (WorldLocation const& loc : locs)
++    if (inPlayerZone)
 +    {
-+        if (loc.GetMapId() != targetMap->GetId())
-+            continue;
-+
-+        if (sMapMgr->GetZoneId(PHASEMASK_NORMAL, loc) != targetZone)
-+            continue;
-+
-+        // Zone bots are deliberately outside the local outer ring.
-+        if (target->GetDistance(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ()) <
-+            sPlayerbotAIConfig.RandomBotNearPlayersOuterRadius)
-+            continue;
-+
-+        zoneLocs.push_back(loc);
++        AreaTableEntry const* zone = sAreaTableStore.LookupEntry(targetZone);
++        if (zone && ((zone->team == 4 && bot->GetTeamId() == TEAM_ALLIANCE) ||
++                     (zone->team == 2 && bot->GetTeamId() == TEAM_HORDE)))
++            return false;
 +    }
 +
-+    if (zoneLocs.empty())
++    std::vector<WorldLocation> locs = sTravelMgr.GetTeleportLocations(bot);
++    std::vector<WorldLocation> wanted;
++    for (WorldLocation const& loc : locs)
++    {
++        bool sameMap = loc.GetMapId() == targetMap->GetId();
++        bool sameZone = sameMap && sMapMgr->GetZoneId(PHASEMASK_NORMAL, loc) == targetZone;
++
++        if (!inPlayerZone)
++        {
++            // Leaving means actually leaving: anywhere but the zone the player is watching.
++            if (!sameZone)
++                wanted.push_back(loc);
++
++            continue;
++        }
++
++        if (!sameZone)
++            continue;
++
++        if (target->GetDistance(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ()) <
++            sPlayerbotAIConfig.RandomBotNearPlayersMinDistance)
++            continue;
++
++        wanted.push_back(loc);
++    }
++
++    if (wanted.empty())
 +        return false;
 +
-+    RandomTeleport(bot, zoneLocs, false);
++    RandomTeleport(bot, wanted, false);
 +    return true;
 +}
 +
-+// Periodic pass that keeps the online random bots level-appropriate for, and close to, the real
-+// players. It is deliberately rate-limited: a handful of bots are processed per manager tick so a
-+// large bot population cannot turn a player login into a spike.
++// Puts the bot in its assigned player's zone and starts a new visit. Returns false when the zone has
++// no usable location, so the caller can let the normal distribution place the bot instead.
++bool RandomPlayerbotMgr::PlaceBotInPlayerZone(Player* bot, Player* target, uint32 now)
++{
++    if (!TeleportBotToTargetZone(bot, target, true))
++    {
++        playerCentricFollowAt[bot->GetGUID().GetCounter()] = now + 15;
++        return false;
++    }
++
++    uint32 botId = bot->GetGUID().GetCounter();
++    playerCentricAwayUntil.erase(botId);
++    playerCentricFollowAt[botId] = now + sPlayerbotAIConfig.RandomBotNearPlayersFollowInterval;
++    playerCentricLeaveAt[botId] = now + urand(sPlayerbotAIConfig.RandomBotNearPlayersZoneVisitMinTime,
++                                              sPlayerbotAIConfig.RandomBotNearPlayersZoneVisitMaxTime);
++    return true;
++}
++
++// Sends the bot to another zone for a while: this mode's version of a player walking out.
++// Returns false when there is nowhere else to go, so the bot simply stays.
++bool RandomPlayerbotMgr::SendBotAwayFromPlayerZone(Player* bot, Player* target, uint32 now)
++{
++    if (!TeleportBotToTargetZone(bot, target, false))
++        return false;
++
++    uint32 botId = bot->GetGUID().GetCounter();
++    playerCentricAwayUntil[botId] = now + urand(sPlayerbotAIConfig.RandomBotNearPlayersZoneAwayMinTime,
++                                                sPlayerbotAIConfig.RandomBotNearPlayersZoneAwayMaxTime);
++    playerCentricFollowAt[botId] = now + sPlayerbotAIConfig.RandomBotNearPlayersFollowInterval;
++    return true;
++}
++
++// Periodic pass that keeps the online random bots level-appropriate for, and inside the zone of,
++// the real players, and that makes the zone population change over time instead of standing still.
++// It is deliberately rate-limited: a handful of bots are processed per manager tick so a large bot
++// population cannot turn a player login into a spike.
 +void RandomPlayerbotMgr::UpdatePlayerCentricBots()
 +{
 +    if (!sPlayerbotAIConfig.RandomBotNearPlayers || players.empty())
@@ -422,12 +438,13 @@ index 2a92e58..99148d6 100644
 +
 +    for (auto it = playerCentricTargets.begin(); it != playerCentricTargets.end();)
 +    {
-+        Player* assignedBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(it->first));
++        uint32 botId = it->first;
++        Player* assignedBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId));
 +        if (!assignedBot || !IsPlayerCentricBotEligible(assignedBot))
 +        {
-+            playerCentricFollowAt.erase(it->first);
-+            playerCentricInnerBots.erase(it->first);
-+            playerCentricZoneBots.erase(it->first);
++            playerCentricFollowAt.erase(botId);
++            playerCentricLeaveAt.erase(botId);
++            playerCentricAwayUntil.erase(botId);
 +            it = playerCentricTargets.erase(it);
 +        }
 +        else
@@ -460,7 +477,12 @@ index 2a92e58..99148d6 100644
 +            (bot->GetLevel() < low || bot->GetLevel() > high))
 +        {
 +            if (AdjustBotLevel(bot, static_cast<uint8>(urand(low, high))))
++            {
++                // A full re-randomisation may move the bot, so give it a fresh visit either way.
++                playerCentricLeaveAt[botId] = now + urand(sPlayerbotAIConfig.RandomBotNearPlayersZoneVisitMinTime,
++                                                          sPlayerbotAIConfig.RandomBotNearPlayersZoneVisitMaxTime);
 +                ++actions;
++            }
 +
 +            continue;
 +        }
@@ -468,43 +490,44 @@ index 2a92e58..99148d6 100644
 +        if (now < playerCentricFollowAt[botId])
 +            continue;
 +
-+        bool zoneBot = IsPlayerCentricZoneBot(bot);
-+        bool needsTeleport;
-+        if (zoneBot)
++        auto away = playerCentricAwayUntil.find(botId);
++        if (away != playerCentricAwayUntil.end())
 +        {
-+            Map* botMap = bot->GetMap();
-+            Map* targetMap = target->GetMap();
-+            uint32 targetZone = targetMap
-+                                    ? targetMap->GetZoneId(PHASEMASK_NORMAL, target->GetPositionX(),
-+                                                           target->GetPositionY(), target->GetPositionZ())
-+                                    : 0;
-+            needsTeleport = bot->GetMapId() != target->GetMapId() || !botMap || !targetZone ||
-+                            botMap->GetZoneId(PHASEMASK_NORMAL, bot->GetPositionX(), bot->GetPositionY(),
-+                                              bot->GetPositionZ()) != targetZone;
-+        }
-+        else
-+        {
-+            // Inner bots get a wider hysteresis so they can drift into the overlap without being
-+            // snapped back; outer bots are pulled back only when they leave the outer band.
-+            float leash = IsPlayerCentricInnerBot(bot)
-+                              ? sPlayerbotAIConfig.RandomBotNearPlayersRadius * 2.0f
-+                              : sPlayerbotAIConfig.RandomBotNearPlayersOuterRadius * 1.5f;
-+            needsTeleport = bot->GetMapId() != target->GetMapId() || bot->GetDistance(target) > leash;
-+        }
-+        if (!needsTeleport)
-+            continue;
++            // Out of the zone on a visit elsewhere: nothing moves it until its return time.
++            if (now < away->second)
++                continue;
 +
-+        bool teleported = zoneBot ? TeleportBotToTargetZone(bot, target) : TeleportBotNearPlayer(bot, target);
-+        playerCentricFollowAt[botId] =
-+            now + (teleported ? sPlayerbotAIConfig.RandomBotNearPlayersFollowInterval : 15);
-+        ++actions;
++            if (PlaceBotInPlayerZone(bot, target, now))
++                ++actions;
++
++            continue;
++        }
++
++        if (IsBotInPlayerZone(bot, target))
++        {
++            // Zone traffic: once a bot has been in the zone for its whole visit, it leaves for a
++            // while and something else (or itself, later) takes its place. The bot is only sent
++            // away when the player is too far from it to watch it disappear.
++            if (!sPlayerbotAIConfig.RandomBotNearPlayersZoneTraffic || now < playerCentricLeaveAt[botId] ||
++                bot->GetDistance(target) < PLAYER_CENTRIC_UNSEEN_DISTANCE)
++                continue;
++
++            if (SendBotAwayFromPlayerZone(bot, target, now))
++                ++actions;
++
++            continue;
++        }
++
++        // Drifted out of the zone (wandered, died nearby, was re-levelled): bring it back.
++        if (PlaceBotInPlayerZone(bot, target, now))
++            ++actions;
 +    }
 +}
 +
  void RandomPlayerbotMgr::RandomTeleportGrindForLevel(Player* bot)
  {
      if (bot->InBattleground())
-@@ -2042,11 +2441,26 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
+@@ -2042,11 +2458,26 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
          minLevel = std::max(minLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
      }
  
@@ -532,19 +555,19 @@ index 2a92e58..99148d6 100644
      {
          if (bot->getClass() == CLASS_DEATH_KNIGHT)
          {
-@@ -3174,6 +3588,11 @@ void RandomPlayerbotMgr::RandomTeleportForRpg(Player* bot)
+@@ -3174,6 +3605,11 @@ void RandomPlayerbotMgr::RandomTeleportForRpg(Player* bot)
  void RandomPlayerbotMgr::Remove(Player* bot)
  {
      ObjectGuid owner = bot->GetGUID();
 +    uint32 botId = owner.GetCounter();
 +    playerCentricTargets.erase(botId);
 +    playerCentricFollowAt.erase(botId);
-+    playerCentricInnerBots.erase(botId);
-+    playerCentricZoneBots.erase(botId);
++    playerCentricLeaveAt.erase(botId);
++    playerCentricAwayUntil.erase(botId);
  
      PlayerbotsDatabasePreparedStatement* stmt =
          PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_DEL_RANDOM_BOTS_BY_OWNER);
-@@ -3181,7 +3600,6 @@ void RandomPlayerbotMgr::Remove(Player* bot)
+@@ -3181,7 +3617,6 @@ void RandomPlayerbotMgr::Remove(Player* bot)
      stmt->SetData(1, owner.GetCounter());
      PlayerbotsDatabase.Execute(stmt);
  
@@ -553,7 +576,7 @@ index 2a92e58..99148d6 100644
  
      LogoutPlayerBot(owner);
 diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
-index fca1d7c..ceb8aa3 100644
+index fca1d7c..2c00366 100644
 --- a/src/Bot/RandomPlayerbotMgr.h
 +++ b/src/Bot/RandomPlayerbotMgr.h
 @@ -12,6 +12,7 @@
@@ -564,34 +587,35 @@ index fca1d7c..ceb8aa3 100644
  #include <unordered_set>
  
  struct BattlegroundInfo
-@@ -243,8 +244,22 @@ private:
+@@ -243,8 +244,23 @@ private:
      void RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth = false);
      uint32 GetZoneLevel(uint16 mapId, float teleX, float teleY, float teleZ);
      std::vector<WorldLocation> GetPlayerZoneTeleportLocations(std::vector<WorldLocation> const& locs, Player* bot);
 +    bool IsPlayerCentricTargetValid(Player* player, Player* bot);
 +    bool IsPlayerCentricBotEligible(Player* bot);
 +    Player* GetPlayerCentricTarget(Player* bot);
-+    bool IsPlayerCentricInnerBot(Player* bot);
-+    bool IsPlayerCentricZoneBot(Player* bot);
++    uint32 GetPlayerCentricZoneId(Player* player);
++    bool IsBotInPlayerZone(Player* bot, Player* target);
 +    void GetPlayerCentricLevelBounds(Player* bot, Player* target, uint8& low, uint8& high);
 +    bool AdjustBotLevel(Player* bot, uint8 level);
-+    bool TeleportBotNearPlayer(Player* bot, Player* target);
-+    bool TeleportBotToTargetZone(Player* bot, Player* target);
++    bool TeleportBotToTargetZone(Player* bot, Player* target, bool inPlayerZone);
++    bool PlaceBotInPlayerZone(Player* bot, Player* target, uint32 now);
++    bool SendBotAwayFromPlayerZone(Player* bot, Player* target, uint32 now);
 +    void UpdatePlayerCentricBots();
      typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
      std::vector<Player*> players;
 +    std::unordered_map<uint32, ObjectGuid> playerCentricTargets;  // bot low GUID -> assigned real player
-+    std::unordered_map<uint32, uint32> playerCentricFollowAt;     // bot low GUID -> next follow attempt
-+    std::unordered_set<uint32> playerCentricInnerBots;            // bot low GUIDs assigned to the inner ring
-+    std::unordered_set<uint32> playerCentricZoneBots;             // bot low GUIDs assigned to the zone tier
++    std::unordered_map<uint32, uint32> playerCentricFollowAt;     // bot low GUID -> next placement attempt
++    std::unordered_map<uint32, uint32> playerCentricLeaveAt;      // bot low GUID -> next zone-leave attempt
++    std::unordered_map<uint32, uint32> playerCentricAwayUntil;    // bot low GUID -> return time, while away
  
      // std::map<uint32, std::vector<WorldLocation>> rpgLocsCache;
      std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> rpgLocsCacheLevel;
 diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
-index 4898cd8..2aa6bc2 100644
+index 4898cd8..f40a5c9 100644
 --- a/src/PlayerbotAIConfig.cpp
 +++ b/src/PlayerbotAIConfig.cpp
-@@ -746,6 +746,46 @@ bool PlayerbotAIConfig::Initialize()
+@@ -746,6 +746,53 @@ bool PlayerbotAIConfig::Initialize()
      SyncLevelWithPlayers = sConfigMgr->GetOption<bool>("Playerbots.SyncLevelWithPlayers", false);
      RandomBotConcentrateInPlayerZone =
          sConfigMgr->GetOption<bool>("Playerbots.RandomBotConcentrateInPlayerZone", false);
@@ -600,61 +624,70 @@ index 4898cd8..2aa6bc2 100644
 +        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersLevelRange", 5);
 +    RandomBotNearPlayersFollowInterval =
 +        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersFollowInterval", 2 * MINUTE);
-+    RandomBotNearPlayersRadius =
-+        sConfigMgr->GetOption<float>("Playerbots.RandomBotNearPlayersRadius", 60.0f);
-+    int32 nearPlayersInnerCount =
-+        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersInnerCount", 3);
-+    if (nearPlayersInnerCount < 0)
-+        nearPlayersInnerCount = 0;
-+    if (nearPlayersInnerCount > 100)
-+        nearPlayersInnerCount = 100;
-+    RandomBotNearPlayersInnerCount = static_cast<uint32>(nearPlayersInnerCount);
-+    RandomBotNearPlayersOuterRadius =
-+        sConfigMgr->GetOption<float>("Playerbots.RandomBotNearPlayersOuterRadius", 160.0f);
-+    int32 nearPlayersZoneCount =
-+        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersZoneCount", 4);
-+    if (nearPlayersZoneCount < 0)
-+        nearPlayersZoneCount = 0;
-+    if (nearPlayersZoneCount > 100)
-+        nearPlayersZoneCount = 100;
-+    RandomBotNearPlayersZoneCount = static_cast<uint32>(nearPlayersZoneCount);
++    RandomBotNearPlayersMinDistance =
++        sConfigMgr->GetOption<float>("Playerbots.RandomBotNearPlayersMinDistance", 100.0f);
++    int32 nearPlayersMaxPerPlayer =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersMaxPerPlayer", 10);
++    if (nearPlayersMaxPerPlayer < 0)
++        nearPlayersMaxPerPlayer = 0;
++    if (nearPlayersMaxPerPlayer > 100)
++        nearPlayersMaxPerPlayer = 100;
++    RandomBotNearPlayersMaxPerPlayer = static_cast<uint32>(nearPlayersMaxPerPlayer);
 +    RandomBotNearPlayersSameFaction =
 +        sConfigMgr->GetOption<bool>("Playerbots.RandomBotNearPlayersSameFaction", true);
-+    RandomBotNearPlayersMaxPerPlayer =
-+        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersMaxPerPlayer", 0);
++    RandomBotNearPlayersZoneTraffic =
++        sConfigMgr->GetOption<bool>("Playerbots.RandomBotNearPlayersZoneTraffic", true);
++    RandomBotNearPlayersZoneVisitMinTime =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersZoneVisitMinTime", 15 * MINUTE);
++    RandomBotNearPlayersZoneVisitMaxTime =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersZoneVisitMaxTime", 40 * MINUTE);
++    RandomBotNearPlayersZoneAwayMinTime =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersZoneAwayMinTime", 4 * MINUTE);
++    RandomBotNearPlayersZoneAwayMaxTime =
++        sConfigMgr->GetOption<int32>("Playerbots.RandomBotNearPlayersZoneAwayMaxTime", 10 * MINUTE);
 +
 +    if (RandomBotNearPlayersLevelRange > 40)
 +        RandomBotNearPlayersLevelRange = 40;
 +    if (RandomBotNearPlayersFollowInterval < 30)
 +        RandomBotNearPlayersFollowInterval = 30;
-+    if (RandomBotNearPlayersRadius < 5.0f)
-+        RandomBotNearPlayersRadius = 5.0f;
-+    if (RandomBotNearPlayersRadius > 300.0f)
-+        RandomBotNearPlayersRadius = 300.0f;
-+    if (RandomBotNearPlayersOuterRadius <= RandomBotNearPlayersRadius)
-+        RandomBotNearPlayersOuterRadius = RandomBotNearPlayersRadius * 2.0f;
-+    if (RandomBotNearPlayersOuterRadius > 500.0f)
-+        RandomBotNearPlayersOuterRadius = 500.0f;
++    if (RandomBotNearPlayersMinDistance < 0.0f)
++        RandomBotNearPlayersMinDistance = 0.0f;
++    if (RandomBotNearPlayersMinDistance > 500.0f)
++        RandomBotNearPlayersMinDistance = 500.0f;
++    if (RandomBotNearPlayersZoneVisitMinTime < 60)
++        RandomBotNearPlayersZoneVisitMinTime = 60;
++    if (RandomBotNearPlayersZoneVisitMaxTime < RandomBotNearPlayersZoneVisitMinTime)
++        RandomBotNearPlayersZoneVisitMaxTime = RandomBotNearPlayersZoneVisitMinTime;
++    if (RandomBotNearPlayersZoneVisitMaxTime > 24 * HOUR)
++        RandomBotNearPlayersZoneVisitMaxTime = 24 * HOUR;
++    if (RandomBotNearPlayersZoneAwayMinTime < 30)
++        RandomBotNearPlayersZoneAwayMinTime = 30;
++    if (RandomBotNearPlayersZoneAwayMaxTime < RandomBotNearPlayersZoneAwayMinTime)
++        RandomBotNearPlayersZoneAwayMaxTime = RandomBotNearPlayersZoneAwayMinTime;
++    if (RandomBotNearPlayersZoneAwayMaxTime > 24 * HOUR)
++        RandomBotNearPlayersZoneAwayMaxTime = 24 * HOUR;
      RandomBotGroupNearby = sConfigMgr->GetOption<bool>("Playerbots.RandomBotGroupNearby", false);
  
      // arena
 diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
-index 5e89efa..37e6030 100644
+index 5e89efa..5539371 100644
 --- a/src/PlayerbotAIConfig.h
 +++ b/src/PlayerbotAIConfig.h
-@@ -398,6 +398,15 @@ public:
+@@ -398,6 +398,17 @@ public:
      std::unordered_map<NewRpgStatus, uint32> RpgStatusProbWeight;
      bool SyncLevelWithPlayers;
      bool RandomBotConcentrateInPlayerZone;
 +    bool RandomBotNearPlayers;
 +    uint32 RandomBotNearPlayersLevelRange;
 +    uint32 RandomBotNearPlayersFollowInterval;
-+    float RandomBotNearPlayersRadius;
-+    uint32 RandomBotNearPlayersInnerCount;
-+    float RandomBotNearPlayersOuterRadius;
-+    uint32 RandomBotNearPlayersZoneCount;
-+    bool RandomBotNearPlayersSameFaction;
++    float RandomBotNearPlayersMinDistance;
 +    uint32 RandomBotNearPlayersMaxPerPlayer;
++    bool RandomBotNearPlayersSameFaction;
++    bool RandomBotNearPlayersZoneTraffic;
++    uint32 RandomBotNearPlayersZoneVisitMinTime;
++    uint32 RandomBotNearPlayersZoneVisitMaxTime;
++    uint32 RandomBotNearPlayersZoneAwayMinTime;
++    uint32 RandomBotNearPlayersZoneAwayMaxTime;
      bool AutoLearnQuestSpells;
      bool AutoTeleportForLevel;
      bool RandomBotGroupNearby;
