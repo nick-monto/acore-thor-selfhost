@@ -6,9 +6,16 @@ Scope: upstream AzerothCore as used by the [Dad's MMO Lab WotLK guide](https://g
 
 ## Status
 
-The server half is implemented. `modules/mod-creature-gear` and `modules/mod-hardcore` are wired into the static module build with the rest of the core. Hardcore defaults to `ghost`; creature gear uses `scripts/creature-gear/`, which generates its dataset: every creature the rules admit - humanoids of level 1-80 with no quest, vendor or trainer flag and no hand-set equipment, 1274 of them against the pinned base dumps - gets per-spawn weapon pools, drops the gear it is wearing, and wears an eleven-slot armour outfit over the mirror-image packet; server-side data and logic only, no client patch. The gear fits the creature's class (`creature_template.unit_class`): a mage-class caster gets staves, wands, swords, daggers and cloth, a warrior plate and a shield, a paladin no ranged weapon at all - the proficiency lists come from the client's own `SkillLine`/`SkillLineAbility` data, and the validator rejects any pick a class could not use. It has been booted end to end in a real `worldserver` built from the pinned core with the pinned client data: the module loaded its dataset (1274 outfit rows and 5096 armour variants for 1274 creatures) and the worldserver logged no errors.
+The server half is built and running on the Thor. Four pieces ride the same arm64 artifact:
 
-What is not verified yet: how a real client renders the outfit, a drop taken from a corpse in play, the hardcore death/relog path, and any of it on the device — nothing here has run on a Thor, and the arm64 build the workflow produces has not been booted anywhere. The player-centric randombot distribution compiles into the local worldserver but has not been exercised with a live client either.
+- **Core and bots.** AzerothCore linked statically with `mod-playerbots`, `mod-creature-gear` and `mod-hardcore`, plus `patches/playerbots-player-centric.patch`.
+- **Creature gear.** Every creature the rules admit - humanoids of level 1-80 with no quest, vendor or trainer flag and no hand-set equipment, 1274 of them against the pinned base dumps - gets per-spawn weapon pools, drops the gear it is wearing, and wears an eleven-slot armour outfit over the mirror-image packet; server-side data and logic only, no client patch. Class proficiency comes from the client's own `SkillLine`/`SkillLineAbility` data, and the validator rejects any pick a class could not use.
+- **Hardcore.** Opt-in ruleset, `Hardcore.DeathPolicy = ghost` by default, bot-controlled sessions excluded.
+- **Loot bags.** Level-banded bags on every lootable creature, delivered as pure database SQL in the core's CUSTOM slot.
+
+Runtime is verified on the Thor itself: the installer built the rootfs, unpacked the arm64 artifact and created the database, the first boot populated the three `acore_*` schemas and the GM account, a real 3.3.5a client logged in, and the realm ran with **up to 50 randombots** on the device.
+
+Not verified yet: how a real client renders a creature-gear outfit, a gear item or a loot bag taken off a corpse in play, and the hardcore death/relog path.
 
 Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs the launcher app plus the client-side changes listed in [`docs/LAUNCHER-HOSTING-DESIGN.md`](docs/LAUNCHER-HOSTING-DESIGN.md); the app's shipped runtime already carries the 32-bit Windows client path. Hosting the server *inside* the app is out of scope for this repository: the app has no foreground service, one X environment, one shared rootfs and UID-wide process sweeps, so the guide's Docker flow does not transfer. The server runs beside the app, in Termux.
 
@@ -83,7 +90,7 @@ Confidence labels: **[V]** verified against source or an artifact inspected here
 
 - A **3.3.5a (build 12340) Windows x86 client** — the game files are supplied by the user; nothing here redistributes them.
 - ~10 GB for the client, ~5 GB for the server (binaries + `maps`/`vmaps`/`mmaps` + world/playerbots database).
-- 16 GB RAM shared between server and client: bot count has to be measured, not copied from desktop guides.
+- 16 GB RAM shared between server and client: 50 randombots is the measured ceiling so far on the Thor, not a desktop-guide figure.
 
 ## Licence
 
