@@ -18,6 +18,14 @@ license = "GPL-2.0-or-later"
 # release is allowed for fallen ghosts, and bot-controlled sessions cannot opt
 # in. Hardcore.DeathPolicy defaults to ghost.
 
+[module.e_interact]
+repo = "https://github.com/Rainblower/mod-e-interact"
+commit = "0d17e70622085877929c68d583b18f3b0156c81c"   # initial release, 2026-10
+path = "modules/mod-e-interact"
+license = "MIT"
+# Vendored; see modules/mod-e-interact/UPSTREAM.md. Local changes: a gameobject pass
+# (chests, herb/ore nodes, questgiver objects) behind EInteract.Use.
+
 [module.creature_gear]
 repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
 path = "modules/mod-creature-gear"                          # DBUpdater loads module SQL from this path
