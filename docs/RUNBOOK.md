@@ -97,7 +97,8 @@ cd /tmp/pb && git fetch --depth 1 origin d750b4b3a50effdf22bedc8032f0e8e5f7cb809
 cp -a /tmp/pb /opt/acore-src/modules/mod-playerbots        # path is load-bearing
 cd /opt/acore-src && cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/opt/acore \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DAPPS_BUILD=all -DTOOLS_BUILD=all \
-  -DSCRIPTS=static -DMODULES=static -DBoost_USE_STATIC_LIBS=ON
+  -DSCRIPTS=static -DMODULES=static -DBoost_USE_STATIC_LIBS=ON \
+  -DCMAKE_CXX_FLAGS=-Wno-psabi          # aarch64 -Wpsabi notes: see the workflow's Configure step
 cmake --build build --parallel "$(nproc)" && cmake --install build
 mkdir -p /opt/acore/data && curl -fL -o /tmp/data.zip \
   https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip

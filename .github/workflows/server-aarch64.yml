@@ -109,13 +109,32 @@ jobs:
           # /opt/acore/lib instead. The "Bundle the libraries" step rewrites them to
           # $ORIGIN/../lib after install, which is what finds the bundled libraries wherever
           # the tarball is unpacked.
+          #
+          # -Wno-psabi is not a warning-level choice: GCC 10.1 fixed the C++17 ABI for
+          # passing and returning classes with a zero-sized subobject - a homogeneous
+          # aggregate such as std::pair<float, float> is now classified the way C++14
+          # classifies it (gcc.gnu.org/gcc-10/changes.html, "Caveats") - and -Wpsabi, on by
+          # default and untouched by WITH_WARNINGS, then notes every function that
+          # passes or returns one. On aarch64 that is every std::pair<float, float> in
+          # mod-playerbots' dungeon AI and in the console's headers, so the log fills with
+          # "parameter passing for argument of type 'std::pair<float, float>' when C++17 is
+          # enabled changed to match C++14 in GCC 10.1". The note is about mixing objects
+          # built by GCC <= 10.0 in C++17 mode with objects built by GCC >= 10.1, and this
+          # build cannot mix anything: one GCC 13 toolchain, C++20, core and modules in a
+          # single project, Boost from the same image. Silencing it hides no real risk here
+          # and keeps the notes that do matter visible.
           cmake -S . -B build -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DAPPS_BUILD=all -DTOOLS_BUILD=all \
             -DSCRIPTS=static -DMODULES=static \
             -DBoost_USE_STATIC_LIBS=ON \
-            -DWITH_WARNINGS=OFF
+            -DWITH_WARNINGS=OFF \
+            -DCMAKE_CXX_FLAGS="-Wno-psabi"
+          # Prove it reached the compiler rather than only the cache: a target that resets
+          # CMAKE_CXX_FLAGS would take the flag with it, and the notes would come back silently.
+          grep -q -- '-Wno-psabi' build/build.ninja || {
+            echo "::error::-Wno-psabi is not in the build's compile lines"; exit 1; }
 
       - name: Build
         working-directory: src/core

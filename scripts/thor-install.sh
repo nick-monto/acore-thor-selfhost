@@ -870,10 +870,16 @@ fetch_server() {
         fetch_self_module "$src/modules" "$src/data/sql"
         apply_playerbots_patch "$src/modules/mod-playerbots" \
             "$src/.thor-patches/playerbots-player-centric.patch"
+        # -Wno-psabi: GCC >= 10.1 notes every function that passes or returns a class with a
+        # zero-sized subobject (a homogeneous aggregate such as std::pair<float, float>), because
+        # the C++17 ABI for those changed to match C++14 and objects from older C++17 builds
+        # cannot be mixed with these. Nothing here is mixed - one compiler, one project - so the
+        # notes are noise, and this is the same flag the workflow passes.
         cmake -S "$src" -B "$src/build" -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$ROOT" -DCONF_DIR="$ROOT/etc" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo -DAPPS_BUILD=all -DTOOLS_BUILD=all \
-            -DSCRIPTS=static -DMODULES=static -DBoost_USE_STATIC_LIBS=ON
+            -DSCRIPTS=static -DMODULES=static -DBoost_USE_STATIC_LIBS=ON \
+            -DCMAKE_CXX_FLAGS=-Wno-psabi
         cmake --build "$src/build" --parallel "$(nproc)"
         cmake --install "$src/build"
         SRC_DIR="$src"
