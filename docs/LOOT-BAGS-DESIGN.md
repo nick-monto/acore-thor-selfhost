@@ -59,6 +59,15 @@ Two core features carry the whole feature:
    row with `MaxCount=2` rolls two items from the pool. This is the mechanism
    the stock lockboxes already use.
 
+   A reference row has no count range: `MinCount` is ignored, and the core's
+   startup check logs `Table 'reference_loot_template' Entry ... has minCount
+   ( 1 ) != maxCount ( 2 ) which is not supported for this loot type` for every
+   reference row whose two counts disagree (`LootTemplate::CheckLootRefs` ->
+   `LootStore::ReportInvalidCount`). The generator therefore writes the
+   multiplier into **both** columns, and refuses to emit a reference row whose
+   counts differ. The base world dumps hold no reference row with a range, so a
+   clean install boots with no such warning.
+
 The bag item itself is class 15 (miscellaneous), `Flags=4`
 (`ITEM_FLAG_HAS_LOOT`), `InventoryType=0`, `ContainerSlots=0` — exactly the
 lockbox/Sack-of-Coins shape. The client opens it with `CMSG_OPEN_ITEM`; the
@@ -145,7 +154,7 @@ economy without editing the SQL.
 |---|---|
 | SQL syntax | all three files parse with `sqlglot` (MySQL dialect) |
 | Real MySQL 8.0.46 | imported the five base tables, applied the three files, then applied them a second time: 64 bags, 304 item-loot rows, 80 drop tables, 7801 creature rows before and after |
-| Relational integrity in MySQL | zero rows for: bad bag flags/money, bag without a gear reference, item-loot reference to a missing pool, direct item missing from `item_template`, bad counts, drop row pointing to a missing bag, drop row outside group 101, creature row pointing to a missing table, creature row outside group 101, creature group collision |
+| Relational integrity in MySQL | zero rows for: bad bag flags/money, bag without a gear reference, item-loot reference to a missing pool, direct item missing from `item_template`, bad counts, reference row whose `MinCount` differs from its `MaxCount`, drop row pointing to a missing bag, drop row outside group 101, creature row pointing to a missing table, creature row outside group 101, creature group collision |
 | Weight/rank checks in MySQL | every rank table's group sums to 100; every creature row's chance matches the rank encoded in its table id; every loot id exists in `creature_template.lootid` |
 | Roll simulation | 50k rolls per representative bracket/rank reproduced the configured drop chances (10/20/35/50/100%) and tier mixes; bag opens always produced cloth, potions and 1-4 gear items whose required level was inside the bracket or at most four levels above it |
 | Generator `--check` | committed SQL matches a fresh run |

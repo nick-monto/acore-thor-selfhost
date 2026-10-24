@@ -472,8 +472,11 @@ def build_bags(items, pools):
 
             item_key = 1
             for pool, rolls, chance in gear_plan(tier_index, chosen):
+                # A reference row has no count range: the core reads MaxCount as the reference
+                # multiplier and ignores MinCount, and warns about every reference row whose
+                # MinCount differs from its MaxCount.  Emit the multiplier in both columns.
                 loot_rows.append([
-                    entry, item_key, pool.ref, chance, 0, 1, 0, 1, rolls,
+                    entry, item_key, pool.ref, chance, 0, 1, 0, rolls, rolls,
                     f"{tier['name']} gear ({pool.realm} {pool.quality})",
                 ])
                 item_key += 1
@@ -635,6 +638,16 @@ def validate_outputs(items, pools, item_rows, loot_rows, drop_rows, creature_row
                 raise SystemExit(f"bag {bag}: unknown reference {row[loot_col['Reference']]}")
             if not 0 < row[loot_col["Chance"]] <= 100:
                 raise SystemExit(f"bag {bag}: bad reference chance")
+            # The core reads MaxCount as the reference multiplier, ignores MinCount, and logs
+            # "minCount != maxCount which is not supported for this loot type" for reference
+            # rows that disagree.  Rows from here must therefore carry one multiplier twice.
+            if row[loot_col["MinCount"]] != row[loot_col["MaxCount"]]:
+                raise SystemExit(
+                    f"bag {bag}: reference row {row[loot_col['Item']]} has "
+                    f"MinCount {row[loot_col['MinCount']]} != MaxCount {row[loot_col['MaxCount']]}"
+                )
+            if row[loot_col["MaxCount"]] < 1:
+                raise SystemExit(f"bag {bag}: reference multiplier must be at least 1")
         else:
             if row[loot_col["Item"]] not in items:
                 raise SystemExit(f"bag {bag}: direct item {row[loot_col['Item']]} does not exist")
