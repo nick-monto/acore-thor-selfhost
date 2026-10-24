@@ -95,13 +95,18 @@ bag neither competes with nor replaces the creature's existing group loot. The
 generator refuses to run if the base data ever grows a group at or above 101.
 
 `<drop table>` is a generated `reference_loot_template` entry. There is **one
-table per (bracket, rank)** — 16 brackets x 5 ranks = 80 tables, entries
+table per (bracket, rank) in use** — 16 brackets x 5 ranks gives 80 possible
+combinations, and the current base data rolls 62 of them, entries
 9800101-9800180 — with a single group 101 holding the bag tiers as explicit
 chances summing to 100. The table-per-rank shape is required by the schema:
 `reference_loot_template`'s primary key is `(Entry, Item)` in this core, so the
-same bag item cannot appear in several groups of one table. Unused rank tables
-(for ranks a bracket has no creatures of) are harmless and stay for custom
-creatures.
+same bag item cannot appear in several groups of one table.
+
+Combinations no creature uses are not written. The worldserver's startup check
+reports every `reference_loot_template` entry that no loot table references as
+`Table 'reference_loot_template' Entry ... isn't reference id and not referenced
+from loot, and thus useless`, so emitting all 80 would log 18 errors on every
+boot. Custom creatures added later need the generator re-run, not a spare table.
 
 Reference ranges:
 
@@ -109,13 +114,13 @@ Reference ranges:
 |---|---|
 | 91000-91063 | bag `item_template` entries |
 | 91000-91099 | bag delete range in the item file |
-| 9800101-9800180 | (bracket, rank) drop tables |
+| 9800101-9800180 | the (bracket, rank) drop tables in use |
 | 9800100-9800199 | drop-table and creature-row delete ranges |
 
 ## Delivery
 
 - `sql/custom/db_world/loot_bags_10_items.sql` — bag items and their contents.
-- `sql/custom/db_world/loot_bags_20_drop_tables.sql` — 80 rank tables.
+- `sql/custom/db_world/loot_bags_20_drop_tables.sql` — the rank tables in use.
 - `sql/custom/db_world/loot_bags_30_creature_drops.sql` — one row per loot id.
 - The base world database already has
   `('$/data/sql/custom/db_world','CUSTOM')` in `updates_include`, so the
@@ -153,12 +158,14 @@ economy without editing the SQL.
 | Check | Result |
 |---|---|
 | SQL syntax | all three files parse with `sqlglot` (MySQL dialect) |
-| Real MySQL 8.0.46 | imported the five base tables, applied the three files, then applied them a second time: 64 bags, 304 item-loot rows, 80 drop tables, 7801 creature rows before and after |
+| Startup check, creature store | `LoadLootTemplates_Creature` logic replayed over the base dumps plus the patch: 0 `creature_loot_template` entries without a `creature_template.lootid`, 0 loot ids without rows |
+| Startup check, reference store | `LoadLootTemplates_Reference` logic replayed the same way: 0 unreferenced `reference_loot_template` entries in 9800100-9800199 |
+| Real MySQL 8.0.46 | ran against the earlier 80-table shape: 64 bags, 304 item-loot rows, 80 drop tables, 7801 creature rows, applied twice; **not** repeated for the 62-table shape |
 | Relational integrity in MySQL | zero rows for: bad bag flags/money, bag without a gear reference, item-loot reference to a missing pool, direct item missing from `item_template`, bad counts, reference row whose `MinCount` differs from its `MaxCount`, drop row pointing to a missing bag, drop row outside group 101, creature row pointing to a missing table, creature row outside group 101, creature group collision |
 | Weight/rank checks in MySQL | every rank table's group sums to 100; every creature row's chance matches the rank encoded in its table id; every loot id exists in `creature_template.lootid` |
 | Roll simulation | 50k rolls per representative bracket/rank reproduced the configured drop chances (10/20/35/50/100%) and tier mixes; bag opens always produced cloth, potions and 1-4 gear items whose required level was inside the bracket or at most four levels above it |
 | Generator `--check` | committed SQL matches a fresh run |
-| Worldserver / client | **not run**: no worldserver boot or in-game open was performed here |
+| Worldserver / client | **not observed**: the regenerated files no longer contain the 24063 row or the 18 unreferenced tables, but no worldserver boot was performed here |
 
 ## Limits
 
@@ -167,7 +174,13 @@ economy without editing the SQL.
 - The bags are unbound, so they can be traded, mailed and stockpiled.
 - Some base quality pools are small (purple pools can have 2-21 items), so epic
   contents repeat more than green contents.
-- The 18 unused rank tables exist for completeness; the base creature set has no
-  creatures of those bracket/rank combinations.
+- Ranks a bracket has no creatures of get no table, so a creature added later
+  that lands in one of those 18 combinations drops nothing until the generator is
+  re-run against a refreshed base dump.
+- The base dumps lag the assembled database: an update can retire a loot id that
+  the dump still lists (`2026_07_30_00.sql` zeroes Dragonflayer Worg's, 24063),
+  which would make a bag row useless at startup. `RETIRED_LOOT_IDS` in the
+  generator holds those, and the generator fails if one stops existing in the
+  dump.
 - No quest, keyed, or class-restricted bags are generated; every bag opens for
   every class and race.

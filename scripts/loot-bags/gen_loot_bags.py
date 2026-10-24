@@ -3,8 +3,9 @@
 
 The patch is pure data: a set of openable ``item_template`` rows (class 15,
 ``ITEM_FLAG_HAS_LOOT``), their ``item_loot_template`` contents, one
-``reference_loot_template`` table per level bracket and creature rank that rolls
-the bag quality, and one ``creature_loot_template`` row per loot id.
+``reference_loot_template`` table per level bracket and creature rank that some
+creature actually rolls the bag quality from, and one ``creature_loot_template``
+row per loot id.
 
 Money is not a loot-template row: the core reads ``item_template.minMoneyLoot`` /
 ``maxMoneyLoot`` when an item is opened (``Player.cpp`` item-loot branch), so the
@@ -144,6 +145,16 @@ RANKS = [
 ]
 
 BAG_GROUP = 101  # creature/reference group used by every bag row (base data uses 1..7)
+
+# Loot ids that the base dumps still carry but the assembled world database does
+# not reference: a later update retired them, so a bag row would be logged at
+# startup as "isn't creature entry and not referenced from loot".  Keep the list
+# short and explained; the generator fails if an id here stops existing in the
+# base dump, so a refreshed pin forces the entry to be dropped.
+RETIRED_LOOT_IDS = {
+    # 2026_07_30_00.sql zeroes Dragonflayer Worg's lootid and deletes its loot rows.
+    24063,
+}
 
 QUALITY_ID = {"Greys": 0, "Whites": 1, "Greens": 2, "Blues": 3, "Purples": 4}
 POOL_LABEL = re.compile(
@@ -494,10 +505,18 @@ def drop_ref(bracket_index: int, rank_index: int) -> int:
     return DROP_REF_BASE + (bracket_index - 1) * len(RANKS) + rank_index + 1
 
 
-def build_drop_tables():
+def build_drop_tables(used_pairs):
+    """Emit one reference table per (bracket, rank) that a creature actually rolls.
+
+    A table no creature points at is logged by the core at startup as
+    "isn't reference id and not referenced from loot", so only referenced
+    combinations are written.
+    """
     rows = []
     for bracket_index, (lo, hi) in enumerate(BRACKETS, start=1):
         for rank_index, rank in enumerate(RANKS):
+            if (bracket_index, rank_index) not in used_pairs:
+                continue
             # One table per bracket and rank: reference_loot_template is keyed by
             # (Entry, Item), so the same bag cannot sit in several groups of one
             # table.  The table has a single group, matched by the creature row.
@@ -516,14 +535,25 @@ def build_drop_tables():
 def build_creature_drops(world: Path):
     creature_index, creature_rows = read_table(world / "creature_template.sql", "creature_template")
     by_loot_id = defaultdict(list)
+    base_loot_ids = set()
     for row in creature_rows:
         loot_id = row[creature_index["lootid"]]
         min_level = row[creature_index["minlevel"]]
         creature_type = row[creature_index["type"]]
         if not loot_id or min_level <= 0 or creature_type == 8:  # 8 = critter
             continue
+        base_loot_ids.add(loot_id)
+        if loot_id in RETIRED_LOOT_IDS:
+            continue
         by_loot_id[loot_id].append(
             (min_level, row[creature_index["rank"]], row[creature_index["name"]])
+        )
+
+    stale = sorted(RETIRED_LOOT_IDS - base_loot_ids)
+    if stale:
+        raise SystemExit(
+            f"RETIRED_LOOT_IDS {stale} no longer exist in {world / 'creature_template.sql'}; "
+            "drop them from the list"
         )
 
     # Guard against group-id collisions in the existing template rows.
@@ -599,11 +629,12 @@ def file_header(title: str, counts: str) -> list[str]:
 
 def validate_outputs(items, pools, item_rows, loot_rows, drop_rows, creature_rows):
     pool_refs = {pool.ref for pool in pools}
-    drop_refs = {
+    all_drop_refs = {
         drop_ref(bracket_index, rank_index)
         for bracket_index in range(1, len(BRACKETS) + 1)
         for rank_index in range(len(RANKS))
     }
+    drop_refs = {row[0] for row in drop_rows}
     bag_entries = {row[0] for row in item_rows}
     expected_bags = len(BRACKETS) * len(TIERS)
     if len(item_rows) != expected_bags or len(bag_entries) != expected_bags:
@@ -666,7 +697,7 @@ def validate_outputs(items, pools, item_rows, loot_rows, drop_rows, creature_row
         if key in drop_keys:
             raise SystemExit(f"duplicate reference_loot_template key {key}")
         drop_keys.add(key)
-        if row[0] not in drop_refs:
+        if row[0] not in all_drop_refs:
             raise SystemExit(f"drop table {row[0]} is outside the generated range")
         if row[loot_col["Item"]] not in bag_entries:
             raise SystemExit(f"drop table {row[0]}: item {row[loot_col['Item']]} is not a bag")
@@ -700,15 +731,17 @@ def validate_outputs(items, pools, item_rows, loot_rows, drop_rows, creature_row
             raise SystemExit(f"creature {row[0]}: chance does not match rank {RANKS[rank_index]['name']}")
         used_drop_refs.add(reference)
     if used_drop_refs != drop_refs:
+        # A table no creature points at is logged by the core at startup as
+        # "isn't reference id and not referenced from loot, and thus useless".
         unused = sorted(drop_refs - used_drop_refs)
-        print(f"note: drop tables without creatures: {unused}", file=sys.stderr)
+        raise SystemExit(f"drop tables no creature references: {unused}")
 
 
 def build_outputs(world: Path):
     items, pools = build_pools(world)
     item_rows, loot_rows, bracket_pools = build_bags(items, pools)
-    drop_rows = build_drop_tables()
-    creature_rows, _ = build_creature_drops(world)
+    creature_rows, tiers_by_loot = build_creature_drops(world)
+    drop_rows = build_drop_tables(set(tiers_by_loot.values()))
     validate_outputs(items, pools, item_rows, loot_rows, drop_rows, creature_rows)
 
     items_sql = file_header(
@@ -726,8 +759,8 @@ def build_outputs(world: Path):
     ]
 
     tables_sql = file_header(
-        "Loot bags: one reference table per level bracket and creature rank.",
-        f"{len(BRACKETS) * len(RANKS)} tables, {len(drop_rows)} rows.",
+        "Loot bags: one reference table per level bracket and creature rank in use.",
+        f"{len({row[0] for row in drop_rows})} tables, {len(drop_rows)} rows.",
     )
     tables_sql += [
         f"DELETE FROM `reference_loot_template` WHERE `Entry` BETWEEN {DROP_REF_DELETE_FROM} AND {DROP_REF_DELETE_TO};",
