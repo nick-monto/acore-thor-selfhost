@@ -142,17 +142,3 @@ Regeneration is deterministic (same inputs, same bytes) and reads the pinned cor
 | Verified | module sources pass a `-fsyntax-only` compile against the pinned core headers with the playerbots module present; full arm64/worldserver boot and the in-game death/relog path are still unverified | dev-workstation check, **not a Thor run** [V] |
 
 The admin escape hatch is the database: delete the character's `hardcore_flags` row (or set `fallen = 0`) and restart/reload the module's cache on next startup. There is no `.hardcore off` command by design.
-
-## 12. One interact key (`mod-e-interact`)
-
-`modules/mod-e-interact` is vendored from `Rainblower/mod-e-interact` at the commit in `pins.toml`; the local diff is recorded in `modules/mod-e-interact/UPSTREAM.md`, and the full mechanism plus the gameobject pass is in `docs/INTERACT-KEY-DESIGN.md`. The add-on half travels with the launcher, not this repository.
-
-| Item | Value | Evidence |
-|---|---|---|
-| Transport | self-addressed addon whisper (`LANG_ADDON`, whisper to self) swallowed by `PlayerScript::OnPlayerCanUseChat`; replies are addon whispers back | `modules/mod-e-interact/src/e_interact.cpp`, `Player.cpp:9694` [V] |
-| What it acts with | the client's own handlers: `HandleLoot*`, `HandleGameObjectUseOpcode`, and queued `CMSG_GOSSIP_HELLO` / `CMSG_LIST_INVENTORY` / … packets | same, `WorldSession.h:744-747`, `:791` [V] |
-| Order | target → corpse → chest/node → questgiver object → mailbox → NPC, at normal interaction distance | `HandleNear` [V] |
-| Chests and nodes (local) | `Player::SendLoot(guid, LOOT_CORPSE)` after a `CanOpenLock`-equivalent lock check; questgiver objects through `HandleGameObjectUseOpcode`; mailboxes through `HandleGetMailList` | `UPSTREAM.md`, `docs/INTERACT-KEY-DESIGN.md` [V] |
-| Config | `$PREFIX/etc/modules/mod_e_interact.conf`; the installer creates it and restores `Enable` / `Loot` / `Gather` / `Talk` / `Use` to 1 | `thor-install.sh`, `server-aarch64.yml` [V] |
-| Delivery | copied before configure in `server-aarch64.yml`, extracted by `thor-install.sh --from-source`, conf installed by CMake; no SQL tree, nothing in the artifact's `src/` | `server-aarch64.yml`, `thor-install.sh` [V] |
-| Verified | every core API it calls was checked against pin `8a4e76e`; `EInteract.Use = 1` presence is asserted in the build. No local compile (no Boost headers on the dev workstation) and no in-game press yet | dev-workstation check, **not a build or a Thor run** [V] |
