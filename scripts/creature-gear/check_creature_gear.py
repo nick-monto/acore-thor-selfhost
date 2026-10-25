@@ -50,6 +50,7 @@ from gen_creature_gear import (  # noqa: E402
     load_class_rules,
     offhand_position,
     outfit_positions,
+    spawn_statements,
 )
 
 # The generator's slot table, its five varying slots and the variant table's columns; imported so
@@ -98,10 +99,6 @@ OUTFIT_COLUMNS = ("CreatureID", "Race", "Gender", "Class", "Skin", "Face", "Hair
 )
 
 EQUIP_TEMPLATE_COLUMNS = ("CreatureID", "ID", "ItemID1", "ItemID2", "ItemID3")
-
-# The phase-A spawn UPDATE, parsed generically and then asserted against the derived column form
-# (see parse_spawn_updates): group 1 is the SET column, group 2 the WHERE clause.
-SPAWN_UPDATE_RE = re.compile(r"^UPDATE `creature` SET `([^`]+)` = -1 WHERE (.+);$")
 
 # A weapon-pool prune in creature_gear_20_weapon_pools.sql: the creature's stale pool IDs above the
 # roles this dataset emits. Groups: CreatureID, the role count n (exclusive lower bound) and the
@@ -213,44 +210,42 @@ def parse_generated_insert(path: Path, table: str, columns: tuple[str, ...]) -> 
     return rows
 
 
-def parse_spawn_updates(path: Path, form: SpawnColumnForm) -> list[int]:
-    """Entry values of the spawn UPDATEs, each asserted against the derived column form.
+def parse_spawn_statements(path: Path, form: SpawnColumnForm) -> list[int]:
+    """The phase-A entry list, with the file asserted against the statements the generator emits.
 
-    Every statement must match `spawn_update_statement(entry, form)` byte for byte: same SET column,
-    same WHERE columns, same order. On a schema where the update chain has dropped the base dumps'
-    secondary-id column, naming it (`id2 = 0`) or the pre-rename primary (`id1`) is a hard failure.
+    Comments aside, the file must be exactly `spawn_statements(entries, form)` — same statement
+    count, same text — so a statement that names a column the update chain has dropped, or that
+    loses the alternation guard, fails here instead of on a live database.
     """
     if not path.is_file():
         fail(f"missing generated file {path}")
+    text = path.read_text(encoding="utf-8")
+    body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--"))
+    statements = [" ".join(chunk.split()) for chunk in body.split(";") if chunk.strip()]
+    if not statements:
+        fail(f"{path}: no statements found")
     absent = [column for column in BASE_SPAWN_COLUMNS if column not in form.columns]
-    entries = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("--"):
-            continue
-        match = SPAWN_UPDATE_RE.match(stripped)
-        if not match:
-            fail(f"{path}:{number}: unexpected statement {stripped!r}")
+    for statement in statements:
         for column in absent:
-            if f"`{column}`" in stripped:
+            if f"`{column}`" in statement:
                 fail(
-                    f"{path}:{number}: statement names `{column}`, which the core's update chain no longer"
+                    f"{path}: statement names `{column}`, which the core's update chain no longer"
                     f" has on `creature`; the derived form is {form.where_form}"
                 )
-        prefix = f"`{form.entry}` = "
-        tail = f" AND {form.clause_tail}"
-        clause = match.group(2)
-        if match.group(1) != form.equipment or not clause.startswith(prefix) or not clause.endswith(tail):
-            fail(
-                f"{path}:{number}: {stripped!r} does not match the derived spawn form"
-                f" `UPDATE `creature` SET `{form.equipment}` = -1 WHERE {form.where_form};`"
-            )
-        value = clause[len(prefix) : -len(tail)]
-        if not value.isdigit():
-            fail(f"{path}:{number}: entry {value!r} is not a positive integer")
-        entries.append(int(value))
-    if not entries:
-        fail(f"{path}: no UPDATE statements found")
+    match = re.search(r"AND `" + form.entry + r"` IN \(([\d,\s]+)\)", statements[0])
+    if not match:
+        fail(f"{path}: the first statement has no `{form.entry}` IN (...) list")
+    entries = [int(value) for value in match.group(1).replace(" ", "").split(",")]
+    expected = [
+        " ".join(chunk.split())
+        for chunk in ";".join(spawn_statements(entries, form)).split(";")
+        if chunk.strip()
+    ]
+    if statements != expected:
+        for number, (found, wanted) in enumerate(zip(statements, expected), 1):
+            if found != wanted:
+                fail(f"{path}: statement {number} is not the one the generator emits:\n  found:  {found}\n  wanted: {wanted}")
+        fail(f"{path}: has {len(statements)} statement(s), the generator emits {len(expected)}")
     return entries
 
 
@@ -360,10 +355,25 @@ def build_core_maps(core: Path) -> dict:
     # `equipment_id`); `form` decides which of its rows the post-migration UPDATE reaches, and
     # `spawns` is keyed by the dump's `id1`, i.e. the entry the migrated `id` column carries.
     spawns: dict[int, list[int]] = {}
+    # Per-spawn detail for the phase-A rules: the entry, the shared equipment id and the alternate
+    # entries the same spawn can become (the dump's `id2`/`id3`, which the update chain moves into
+    # `creature_multispawn`).
+    spawn_rows: dict[int, dict] = {}
     for row in creature_rows:
         if form.secondary is not None and int(row[ac["id2"]]) != 0:
             continue
         spawns.setdefault(int(row[ac["id1"]]), []).append(int(row[ac["equipment_id"]]))
+        spawn_rows[int(row[ac["guid"]])] = {
+            "entry": int(row[ac["id1"]]),
+            "equipment": int(row[ac["equipment_id"]]),
+            "alternates": {int(row[ac["id2"]]), int(row[ac["id3"]])} - {0},
+        }
+
+    equip_columns, equip_rows = parse_dump(world / "creature_equip_template.sql")
+    ae = {name: position for position, name in enumerate(equip_columns)}
+    # Entries that already carry an `ID = 1` row in the base data: with the generated pool rows,
+    # these are the entries a pinned spawn (one that can change entry) can rely on.
+    base_row_one = {int(row[ae["CreatureID"]]) for row in equip_rows if int(row[ae["ID"]]) == 1}
 
     item_columns, item_rows = parse_dump(world / "item_template.sql")
     ai = {name: position for position, name in enumerate(item_columns)}
@@ -391,6 +401,8 @@ def build_core_maps(core: Path) -> dict:
         "creature_levels": creature_levels,
         "creature_classes": creature_classes,
         "spawns": spawns,
+        "spawn_rows": spawn_rows,
+        "base_row_one": base_row_one,
         "items": items,
         "form": form,
     }
@@ -777,30 +789,59 @@ def check_outfit_variants(
     return sorted(variants_per_creature), distinct_counts
 
 
-def check_spawn_updates(entries: list[int], core: dict, form: SpawnColumnForm) -> int:
-    """Returns how many spawn rows the UPDATE statements will actually touch.
+def check_spawn_updates(entries: list[int], core: dict, form: SpawnColumnForm) -> tuple[int, int, int]:
+    """Returns (random-pool spawns, row-1 spawns, spawns left gearless) over the dump's spawn rows.
 
-    The touched set is the derived form's: every dump row whose `id1` is the entry once the update
-    chain has dropped the secondary-id column, and only that entry's `id2 = 0` rows while the column
-    still exists. No touched row may carry hand-set equipment — `equipment_id = 0` in the statement
-    would leave it alone, but the generator must not point a creature's spawns at a pool while one
-    of them does. An entry the statement cannot match at all is a dead no-op and fails too.
+    Two rules are enforced, and they are the ones the emitted guards encode:
+
+    - A spawn that cannot change entry may take the whole pool, because the core resolves -1 by
+      picking among the rows present for the entry it loads.
+    - A spawn that can change entry shares one equipment id across all of them, so it may only be
+      pinned to an id every alternate entry also has — pool row 1 — and otherwise must be left at
+      equipment_id = 0. Anything else makes the core log
+      `Table 'creature_multispawn' ... where equipment_id N not found in 'creature_equip_template'`
+      at boot and spawns the alternate without gear.
+
+    No row the statements touch may carry hand-set equipment either: the statement's
+    `equipment_id IN (0, -1)` filter leaves it alone, but the generator must not point a creature's
+    spawns at a pool while one of them does. (`-1` is inside the filter on purpose: it is the value
+    an older generation of this dataset wrote, so a database that ran one is repaired rather than
+    left in the broken state.) An entry the statements cannot match at all is a dead no-op and
+    fails too.
     """
-    spawns = core["spawns"]
-    touched = 0
-    for entry in entries:
-        equipment_ids = spawns.get(entry)
-        if not equipment_ids:
-            fail(f"creature_gear_40_spawn_equipment.sql: entry {entry} matches no creature spawn row ({form.where_form})")
-        for equipment_id in equipment_ids:
-            if equipment_id != 0:
-                fail(
-                    f"creature_gear_40_spawn_equipment.sql: entry {entry} has a spawn row the statement"
-                    f" matches ({form.where_form}) with equipment_id = {equipment_id};"
-                    " the UPDATE would gear a spawn that already carries equipment"
-                )
-        touched += len(equipment_ids)
-    return touched
+    covered = set(entries)
+    row_one = covered | core["base_row_one"]
+    random_pool = pinned = gearless = 0
+    matched: set[int] = set()
+    for spawn_id, spawn in core["spawn_rows"].items():
+        if spawn["entry"] not in covered:
+            continue
+        matched.add(spawn["entry"])
+        if spawn["equipment"] not in (0, -1):
+            fail(
+                f"creature_gear_40_spawn_equipment.sql: entry {spawn['entry']} has spawn {spawn_id}"
+                f" with equipment_id = {spawn['equipment']}, which the statement"
+                f" ({form.where_form}) leaves alone; the generator must not select an entry whose"
+                " spawns already carry hand-set equipment"
+            )
+        alternates = spawn["alternates"]
+        if not alternates:
+            random_pool += 1
+            continue
+        missing = sorted(alternate for alternate in alternates if alternate not in row_one)
+        if missing:
+            gearless += 1
+            continue
+        pinned += 1
+        if spawn["entry"] not in row_one:
+            fail(f"entry {spawn['entry']} is pinned to pool row 1 but has no ID = 1 row")
+    dead = sorted(covered - matched)
+    if dead:
+        fail(
+            f"creature_gear_40_spawn_equipment.sql: entries {dead[:5]} match no creature spawn row"
+            f" ({form.where_form})"
+        )
+    return random_pool, pinned, gearless
 
 
 def check_drop_coverage(
@@ -928,13 +969,13 @@ def main(argv: list[str] | None = None) -> int:
     variant_rows = parse_generated_insert(
         args.sql_dir / GENERATED_FILES[3], "mod_creature_gear_outfit_variant", OUTFIT_VARIANT_COLUMNS
     )
-    spawn_entries = parse_spawn_updates(args.sql_dir / GENERATED_FILES[4], form)
+    spawn_entries = parse_spawn_statements(args.sql_dir / GENERATED_FILES[4], form)
     pool_deletes = parse_pool_deletes(args.sql_dir / GENERATED_FILES[1])
 
     pool_creatures = check_equip_templates(equip_rows, core, pool, rules, classes)
     outfit_creatures, slot_counts = check_outfits(outfit_rows, core, pool, rules, classes)
     variant_creatures, variant_distinct = check_outfit_variants(variant_rows, outfit_rows, core, rules, pool, classes)
-    spawn_rows = check_spawn_updates(spawn_entries, core, form)
+    spawn_random, spawn_pinned, spawn_gearless = check_spawn_updates(spawn_entries, core, form)
     prunes = check_pool_deletes(
         pool_deletes, pool_creatures, core, pool, rules, classes, args.sql_dir / GENERATED_FILES[1]
     )
@@ -983,7 +1024,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  {'  of which pool prune DELETE':<38}{prunes:>8}")
     print(f"  {'outfit rows':<38}{len(outfit_rows):>8}")
     print(f"  {'outfit variant rows':<38}{len(variant_rows):>8}")
-    print(f"  {'spawn rows updated (equipment_id = -1)':<38}{spawn_rows:>8}")
+    print(f"  {'spawn rows resolving the pool (-1)':<38}{spawn_random:>8}")
+    print(f"  {'spawn rows pinned to pool row 1':<38}{spawn_pinned:>8}")
+    print(f"  {'spawn rows left without equipment':<38}{spawn_gearless:>8}")
     print()
     print("  class mix (creature_template.unit_class) and the gear checked for it:")
     for class_id in sorted(class_counts):
