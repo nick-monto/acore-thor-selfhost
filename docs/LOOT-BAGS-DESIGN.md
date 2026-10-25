@@ -44,7 +44,7 @@ below level 19), or the only common pool's required level tops out more than
 four levels above the bracket, the tier falls back to the next-lower quality;
 every bracket therefore has usable contents.
 
-## Why it is database-only
+## Why the server side is database-only
 
 Two core features carry the whole feature:
 
@@ -73,9 +73,53 @@ The bag item itself is class 15 (miscellaneous), `Flags=4`
 lockbox/Sack-of-Coins shape. The client opens it with `CMSG_OPEN_ITEM`; the
 core destroys the item once its loot window is empty.
 
-No client DBC or MPQ edit is needed: custom item entries are served from
-`item_template`, and `SMSG_ITEM_QUERY_SINGLE_RESPONSE` carries the borrowed
-`displayid` to the client.
+No server-side client data is edited: the bags are `item_template` rows, their
+contents are loot rows, and `SMSG_ITEM_QUERY_SINGLE_RESPONSE` carries the name,
+quality and the borrowed `displayid` to the client.
+
+The **client** does need one file, though — see "The bag icon" below.
+
+## The bag icon
+
+A 3.3.5a client draws an inventory item from its own `Item.dbc` record. The loot
+window is the exception: `SMSG_LOOT_RESPONSE` carries
+`ItemTemplate::DisplayInfoID` for every slot (`LootMgr.cpp`, `operator<<` for
+`LootItem`), so a custom bag shows the right icon while it is being looted and a
+red question mark once it is in the player's bags, where the client has no
+`Item.dbc` record for entry 91000+.
+
+The server notices the same gap and says so only at debug level:
+`ObjectMgr::LoadItemTemplates` looks the entry up in `sItemStore` and logs
+`Item (Entry: ...) does not exist in item.dbc! (not correct id?)` before skipping
+the DBC attribute checks for that entry. Everything else about the item works,
+which is why the bags drop, open and roll their contents regardless.
+
+`scripts/item-dbc/patch_item_dbc.py` closes the gap the standard way for custom
+items:
+
+```sh
+RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
+python3 scripts/item-dbc/patch_item_dbc.py \
+    --dbc "$RF/opt/acore/data/dbc/Item.dbc" \
+    --client-data "/sdcard/AzerothCore 3.3.5a/Data" \
+    --server-dbc "$RF/opt/acore/data/dbc"
+```
+
+- It appends one record per bag — class 15, subclass 0, material 0, inventory
+  type 0, sheath 0, and the tier's borrowed bag `displayid`, mirroring the
+  `item_template` rows, so `enforceDBCAttributes` has nothing to correct.
+- It writes `patch-4.MPQ` (the first free name from `patch-4` to `patch-9`, then
+  `patch-A` up) into the client's `Data` directory. The archive holds
+  `DBFilesClient\Item.dbc` stored in 4096-byte sectors, with its hash and block
+  tables encrypted the way the client expects.
+- It writes the patched `Item.dbc` back to the server's `data/dbc`, so
+  `sItemStore` agrees with the client.
+- Re-running is safe: existing records in 91000-91063 are replaced, and the
+  script refuses a stock file that already has ids above 91000.
+
+A `--force` reinstall that re-copies the client's DBCs can put the stock
+`Item.dbc` back in the server's `data/dbc`; the client patch is unaffected and
+the only consequence is the debug line returning.
 
 ## Drop wiring
 
@@ -165,10 +209,13 @@ economy without editing the SQL.
 | Weight/rank checks in MySQL | every rank table's group sums to 100; every creature row's chance matches the rank encoded in its table id; every loot id exists in `creature_template.lootid` |
 | Roll simulation | 50k rolls per representative bracket/rank reproduced the configured drop chances (10/20/35/50/100%) and tier mixes; bag opens always produced cloth, potions and 1-4 gear items whose required level was inside the bracket or at most four levels above it |
 | Generator `--check` | committed SQL matches a fresh run |
-| Worldserver / client | **not observed**: the regenerated files no longer contain the 24063 row or the 18 unreferenced tables, but no worldserver boot was performed here |
+| Item.dbc patch | run against a synthetic 54,000-record `Item.dbc`: 64 records appended in id order, `patch-4.MPQ` extracts byte-identically through an independent MPQ reader (`mpyq`), re-running on its own output is byte-identical, and a stock file with an id above 91000 or a wrong record layout is refused |
+| Worldserver / client | **not observed**: the regenerated files no longer contain the 24063 row or the 18 unreferenced tables, but no worldserver boot was performed here, and the patched `Item.dbc` has not been loaded by a real client |
 
 ## Limits
 
+- The bag icon needs the client patch above. Without it the bags work and show
+  their icon in the loot window, but a red question mark in the player's bags.
 - Bag contents scale with the **creature's** bracket, not the opener's level; a
   level 80 can farm level 1-5 bags and mail them to an alt.
 - The bags are unbound, so they can be traded, mailed and stockpiled.

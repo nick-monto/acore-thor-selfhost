@@ -279,6 +279,23 @@ Four tests, in this order — each one is a gate:
 3. **Realm appears** in the list (the server's `realmlist` row is what the client asks for).
 4. **In-world**, with the server's bots online, at a frame rate you are willing to live with.
 
+## Part 9a — Loot-bag icons
+
+The bag items are custom entries (91000-91063), so the client has no `Item.dbc` record for them: the loot window shows the icon because that packet carries it, and the player's bags show a red question mark. One command fixes it, run once per client (and again after a client update replaces `Item.dbc`):
+
+```bash
+pkg install python          # once, in Termux
+RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
+python3 scripts/item-dbc/patch_item_dbc.py \
+    --dbc "$RF/opt/acore/data/dbc/Item.dbc" \
+    --client-data "/sdcard/AzerothCore 3.3.5a/Data" \
+    --server-dbc "$RF/opt/acore/data/dbc"
+```
+
+It appends the 64 records to `Item.dbc`, writes `patch-4.MPQ` into the client's `Data` directory (first free name from `patch-4` to `patch-9`, then `patch-A` up), and puts the patched `Item.dbc` where the server reads it. Restart the client afterwards.
+
+Check: bags in the player's bags show the tier icon instead of a question mark, and `Item (Entry: 910xx) does not exist in item.dbc!` no longer appears in the worldserver log at debug level. `docs/LOOT-BAGS-DESIGN.md` § "The bag icon" has the mechanism and the archive layout.
+
 ## Part 10 — Fallbacks if a gate fails
 
 | Failure | Next thing to try |
