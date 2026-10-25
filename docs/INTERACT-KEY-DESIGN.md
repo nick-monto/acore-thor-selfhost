@@ -17,9 +17,10 @@ Two halves:
   `modules/mod-e-interact/UPSTREAM.md`.
 - **client:** the `EInteract` add-on, shipped by the launcher as assets
   (`acore-thor-launcher/app/src/main/assets/einteract/`) and installed into
-  `Interface/AddOns` beside ConsolePortLK. It registers a client binding
-  (`EINTERACT_INTERACT`) rather than taking a literal key, so the pad is calibrated in ConsolePort's
-  own `/cp` menu and the launcher binds nothing.
+  `Interface/AddOns` beside ConsolePortLK. It declares a client binding - a click binding on a
+  hidden button, `CLICK EInteractButton:LeftButton` - instead of taking a literal key, and appends a
+  named row for it to ConsolePort's `/cp` list, so the button that fires the interact key is assigned
+  in ConsolePort's own menu.
 
 ## How the key works
 
@@ -30,7 +31,7 @@ sequenceDiagram
     participant P as pad button
     participant A as EInteract addon
     participant S as worldserver
-    P->>A: key bound to EINTERACT_INTERACT
+    P->>A: key bound to CLICK EInteractButton:LeftButton
     A->>S: CMSG_MESSAGECHAT LANG_ADDON whisper, receiver = self<br/>EINT\tnear
     S->>S: PlayerScript::OnPlayerCanUseChat(...) -> false<br/>(swallowed before chat)
     S->>S: target → corpse → chest/node → quest object → NPC
@@ -61,30 +62,38 @@ won by someone else stay on the corpse or object.
 ## The key is a binding, not a key
 
 The first version of this module shipped the opposite: the add-on called
-`SetOverrideBindingClick(frame, true, "E", "EInteractButton")` at login, and the launcher hard-bound
-the pad's left stick click to `E`. That fought ConsolePortLK, which is what drives the pad:
+`SetOverrideBindingClick(frame, true, "E", "EInteractButton")` at login. That is a global override,
+invisible to every UI - and it collided with ConsolePortLK, which is what drives the pad: ConsolePort's
+default controller set claims both stick clicks as mouse buttons (`["CP_T_L3"] = "BUTTON1"`,
+`["CP_T_R3"] = "BUTTON2"`, `ConsolePort/Config/Binds.lua:104-105`), so a stick click that also held
+`E` had two owners and whichever wrote last won.
 
-- ConsolePort's default controller set claims both stick clicks as mouse buttons —
-  `["CP_T_L3"] = "BUTTON1"`, `["CP_T_R3"] = "BUTTON2"` (`ConsolePort/Config/Binds.lua:104-105`).
-  The launcher's `L3 -> E` mapping therefore gave one physical button two owners, and whichever was
-  written last won.
-- An override binding is a global, invisible to every UI. ConsolePort could not list it, rebind it
-  or scope it, so the two could only be reconciled by editing the launcher.
-
-The add-on now declares a normal client binding:
+The add-on now uses a normal client binding: a click binding on its hidden button.
 
 ```lua
-BINDING_HEADER_EINTERACT        = "EInteract"
-BINDING_NAME_EINTERACT_INTERACT = "Interact with the nearest thing"
+SetBindingClick("E", "EInteractButton")   -- what the first run writes
+GetBindingKey("CLICK EInteractButton:LeftButton")
 ```
 
-and reacts to that binding's action. ConsolePort's binding menu is built from the client's entire
-binding table — `Atlas.BindingMeta:RefreshBindings()` walks `GetNumBindings()`/`GetBinding(i)`,
-resolves `BINDING_NAME_<id>`, and files unknown headers under "Other"
-(`ConsolePort/Frames/Atlas.lua:642-692`) — so the interact row appears in `/cp` and can be assigned
-to any pad button there. The launcher maps no interact key, L3 and R3 stay ConsolePort's, and a
-player who never opens `/cp` gets a default key from the add-on itself (`/ei key <key>` overrides it,
-`/ei` prints the current state).
+Three things follow from that:
+
+- The client stores it in its own binding table, so the Key Bindings frame lists it, the player can
+  rebind or clear it there, `/ei key <key>` moves it, and the choice survives in SavedVariables.
+  Nothing re-adds it after the first run - an unbound key is a choice too.
+- ConsolePort's menu is built on demand from `ConsolePort:GetCustomBindings()`
+  (`ConsolePort/Frames/Atlas.lua:691`), and a click binding from another add-on has no
+  `BINDING_NAME_*` global, so it would show the raw binding string. The add-on wraps that function -
+  never replaces it - and appends `{ name = "Interact with the nearest thing", binding = "CLICK
+  EInteractButton:LeftButton" }`, the same shape ConsolePort uses for its own actions
+  (`CLICK ConsolePortUtilityToggle:LeftButton` and friends). The row then appears in `/cp` and any
+  pad button can be assigned to it.
+- The launcher's pad profile sends `E` on the left stick click and nothing else, so the button works
+  out of the box. A player who would rather have ConsolePort's left click there assigns it in `/cp`:
+  one place owns the pad, and both actions are visible in it.
+
+ConsolePort's own interact bindings (right-click simulation, "Interact With Mouseover") need the
+cursor on the target or a mouseover unit, and its "smart interaction" setting only caches friendly
+nameplate GUIDs to retarget in range, so neither overlaps this module.
 
 Nothing is shared between the two halves at runtime: the module answers a whisper that never leaves
 the player, and ConsolePort never sees it.
@@ -139,11 +148,14 @@ tree, so the DB updater never sees it, and `src/modules/mod-e-interact` is not i
 - `EInteract.Use = 1` is asserted in the build (`server-aarch64.yml`), so a build that lost the
   vendored pass fails there.
 - The ConsolePort facts above were read in the shipped 1.5.0-rc2 sources: the L3/R3 mouse defaults
-  (`Config/Binds.lua:104-105`), the binding-name resolution and the "Other" fallback
-  (`Frames/Atlas.lua:642-692`). Its own interact bindings (right-click simulation, "Interact With
-  Mouseover") need the cursor or a mouseover target, and "smart interaction"
-  (`Config/Lookup.lua:801-802`, off by default) only caches friendly-nameplate GUIDs to retarget in
-  range, so neither overlaps this module.
+  (`Config/Binds.lua:104-105`) and the custom-binding list the `/cp` menu builds
+  (`Frames/Atlas.lua:691`). Its own interact bindings need the cursor or a mouseover target, and its
+  "smart interaction" setting (`Config/Lookup.lua:801-802`, off by default) only caches
+  friendly-nameplate GUIDs to retarget in range.
+- The add-on was run against a stubbed client API: the first login binds `E`, `/ei key F` moves the
+  binding, a rebind asked for in combat is deferred and applied on `PLAYER_REGEN_ENABLED`, a relogin
+  after the player unbound the key does not re-add it, `/cp` gets the named row, the bound action
+  sends `EINT near` once the module answers `ready`, and `/ei off` makes it silent.
 - A local `-fsyntax-only` compile was **not** possible on the dev workstation (no Boost headers in
   the rootfs), so the first real compile is the arm64 CI build.
 - Not verified anywhere yet: a real 3.3.5a client pressing the bound key, on the Thor or otherwise.
