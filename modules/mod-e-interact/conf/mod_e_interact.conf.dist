@@ -1,0 +1,57 @@
+[worldserver]
+
+########################################
+# mod-e-interact configuration
+########################################
+#
+#    EInteract.Enable
+#        Description: Answer requests from the EInteract client addon.
+#                     When disabled, the addon reports that the server module is missing
+#                     and only its client-side features (quest dialogs, loot rolls) work.
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+
+EInteract.Enable = 1
+
+#
+#    EInteract.Loot
+#        Description: Loot the nearest corpse (money and every item the player may take).
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+
+EInteract.Loot = 1
+
+#
+#    EInteract.Gather
+#        Description: Skin, herb, mine or salvage the nearest looted corpse.
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+
+EInteract.Gather = 1
+
+#
+#    EInteract.Talk
+#        Description: Open the gossip, quest, vendor, trainer, bank or auction window
+#                     of the nearest NPC.
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+
+EInteract.Talk = 1
+
+#
+#    EInteract.Use
+#        Description: Open the nearest chest, herb or ore node, the nearest questgiver
+#                     object and the nearest mailbox. A locked object is only opened when the player has the key,
+#                     the skill the lock asks for, or the spell it names; the lock is read
+#                     the same way Spell::CanOpenLock reads it. Only the nearest object of
+#                     each kind is tried, so a node that is already looted is skipped and
+#                     the key moves on to the next stage.
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+
+EInteract.Use = 1

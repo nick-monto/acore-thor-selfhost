@@ -8,10 +8,11 @@ Scope: upstream AzerothCore as used by the [Dad's MMO Lab WotLK guide](https://g
 
 The server half is built and running on the Thor. Four pieces ride the same arm64 artifact:
 
-- **Core and bots.** AzerothCore linked statically with `mod-playerbots`, `mod-creature-gear` and `mod-hardcore`, plus `patches/playerbots-player-centric.patch`.
+- **Core and bots.** AzerothCore linked statically with `mod-playerbots`, `mod-creature-gear`, `mod-hardcore` and `mod-e-interact`, plus `patches/playerbots-player-centric.patch`.
 - **Creature gear.** Every creature the rules admit - humanoids of level 1-80 with no quest, vendor or trainer flag and no hand-set equipment, 1274 of them against the pinned base dumps - gets per-spawn weapon pools, drops the gear it is wearing, and wears an eleven-slot armour outfit over the mirror-image packet; server-side data and logic only, no client patch. Class proficiency comes from the client's own `SkillLine`/`SkillLineAbility` data, and the validator rejects any pick a class could not use.
 - **Hardcore.** Opt-in ruleset, `Hardcore.DeathPolicy = ghost` by default, bot-controlled sessions excluded.
 - **Loot bags.** Level-banded bags on every lootable creature, delivered as pure database SQL in the core's CUSTOM slot.
+- **One interact key.** `mod-e-interact` plus the launcher's EInteract add-on: one bound key loots the nearest corpse, skins or gathers it, opens a chest, herb or ore node, or talks to the nearest NPC — with the gameobject pass added here, which upstream does not have. The add-on registers a client binding (`EINTERACT_INTERACT`) instead of taking a literal key, so the pad assigns it in ConsolePort's `/cp` menu.
 
 Runtime is verified on the Thor itself: the installer built the rootfs, unpacked the arm64 artifact and created the database, the first boot populated the three `acore_*` schemas and the GM account, a real 3.3.5a client logged in, and the realm ran with **up to 50 randombots** on the device.
 
@@ -29,6 +30,7 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 | [`docs/CREATURE-GEAR-DESIGN.md`](docs/CREATURE-GEAR-DESIGN.md) | Mobs that wear what they drop: what needs a client patch (almost nothing), what needs code, and how the SQL rides the release — **implemented as `modules/mod-creature-gear`**; its status table lists what is verified and where |
 | [`docs/LOOT-BAGS-DESIGN.md`](docs/LOOT-BAGS-DESIGN.md) | Level-banded loot bags on every lootable creature: quality tiers, money, cloth, potions and level-appropriate gear, delivered as a pure database patch in the core's CUSTOM SQL slot |
 | [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md) | Player-centric randombot distribution: levels within a band of online players and teleports near them, delivered as a patch on the pinned `mod-playerbots` |
+| [`docs/INTERACT-KEY-DESIGN.md`](docs/INTERACT-KEY-DESIGN.md) | One key for loot, gathering, NPC windows, chests and nodes: the addon-whisper RPC, the local gameobject pass, and what is verified — **implemented as `modules/mod-e-interact`** |
 | [`modules/mod-hardcore/README.md`](modules/mod-hardcore/README.md) | Opt-in permadeath ruleset, vendored from `maluramichael/mod-hardcore` with the Thor-local changes recorded in `UPSTREAM.md` |
 | [`scripts/thor-install.sh`](scripts/thor-install.sh) | Does the whole device install for you: Termux packages, rootfs, server files, MySQL, configs, first boot, GM account, start/stop scripts |
 | [`pins.toml`](pins.toml) | Exact commits, artifact hashes and ports every document refers to |
@@ -56,6 +58,8 @@ python3 scripts/creature-gear/check_creature_gear.py --core <core>
 ```
 
 `modules/mod-hardcore` is vendored at the upstream commit in [`pins.toml`](pins.toml); the local changes are listed in [`modules/mod-hardcore/UPSTREAM.md`](modules/mod-hardcore/UPSTREAM.md). It adds the opt-in `.hardcore on` ruleset, logs every hardcore death, and defaults to `Hardcore.DeathPolicy = ghost` (resurrection refused, graveyard release allowed). The build copies it beside `mod-creature-gear`; `thor-install.sh --from-source` fetches both module trees from this repository.
+
+`modules/mod-e-interact` is vendored the same way (upstream commit in [`pins.toml`](pins.toml), local gameobject pass recorded in [`modules/mod-e-interact/UPSTREAM.md`](modules/mod-e-interact/UPSTREAM.md)). It has no SQL tree: it answers the EInteract add-on's self-addressed whisper and runs the client's own loot, gossip and object-use handlers. The launcher ships the add-on.
 
 The loot-bag patch is also committed as generated SQL, at `sql/custom/db_world/`, and rides the artifact's `src/data/sql` tree into the core's CUSTOM slot; `thor-install.sh --from-source` fetches the same directory. Regenerate it with the pinned core:
 

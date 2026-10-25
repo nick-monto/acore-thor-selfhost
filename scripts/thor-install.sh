@@ -860,7 +860,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -961,8 +961,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     # --strip-components=2 removes "<repo>-<ref>/modules/" so each tree lands as
     # $parent/<module-name>.
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
-        '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear and modules/mod-hardcore out of $SELF_REPO@$SELF_REF"; }
+        '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' '*/modules/mod-e-interact*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore and modules/mod-e-interact out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -989,7 +989,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-gear (wrong SELF_REF?)"
     [ -d "$parent/mod-hardcore" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-hardcore (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear and $parent/mod-hardcore"
+    [ -d "$parent/mod-e-interact" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-e-interact (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear, $parent/mod-hardcore and $parent/mod-e-interact"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1126,7 +1128,7 @@ conf_pair() {   # print the live config file, creating it from NAME.conf.dist on
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -1135,7 +1137,7 @@ write_configs() {
     local mysql_bin
     mysql_bin="$(command -v mysql)"
 
-    local ws as pb cg hc
+    local ws as pb cg hc ei
     ws="$(conf_pair worldserver)"
     as="$(conf_pair authserver)"
     set_conf "$ws" DataDir                "\"$DATA_DIR\""
@@ -1209,6 +1211,23 @@ write_configs() {
         log "mod-creature-gear.conf: Enable=$(conf_get "$cg" CreatureGear.Enable) Drop.Enable=$(conf_get "$cg" CreatureGear.Drop.Enable) Appearance.Enable=$(conf_get "$cg" CreatureGear.Appearance.Enable) Weapons.RerollOnRespawn=$(conf_get "$cg" CreatureGear.Weapons.RerollOnRespawn)"
     else
         warn "no $CONF_DIR/modules/mod-creature-gear.conf.dist - the artifact was built without the module, creatures keep their stock gear"
+    fi
+    if [ -f "$CONF_DIR/modules/mod_e_interact.conf.dist" ] || [ -f "$CONF_DIR/modules/mod_e_interact.conf" ]; then
+        ei="$(conf_pair modules/mod_e_interact)"
+        # One key for the whole interact loop (loot, gather, talk, chests and nodes). Every option
+        # defaults to on in the shipped .dist; a drifted key is put back, since a silent 0 here
+        # looks exactly like a broken key in game.
+        local ei_key ei_val
+        for ei_key in EInteract.Enable EInteract.Loot EInteract.Gather EInteract.Talk EInteract.Use; do
+            ei_val="$(conf_get "$ei" "$ei_key")"
+            if [ "$ei_val" != "1" ]; then
+                warn "mod_e_interact.conf: $ei_key is '$ei_val', restoring the shipped default 1"
+                set_conf "$ei" "$ei_key" 1
+            fi
+        done
+        log "mod_e_interact.conf: Enable=$(conf_get "$ei" EInteract.Enable) Loot=$(conf_get "$ei" EInteract.Loot) Gather=$(conf_get "$ei" EInteract.Gather) Talk=$(conf_get "$ei" EInteract.Talk) Use=$(conf_get "$ei" EInteract.Use)"
+    else
+        warn "no $CONF_DIR/modules/mod_e_interact.conf.dist - the artifact was built without the module, the interact key will not work"
     fi
     if [ -f "$CONF_DIR/modules/mod_hardcore.conf.dist" ] || [ -f "$CONF_DIR/modules/mod_hardcore.conf" ]; then
         hc="$(conf_pair modules/mod_hardcore)"
@@ -1492,10 +1511,11 @@ run_checks() {   # run_checks FIX(0|1)
     # 2. configs
     local ws="$CONF_DIR/worldserver.conf" as="$CONF_DIR/authserver.conf" pb="$CONF_DIR/modules/playerbots.conf"
     local cg="$CONF_DIR/modules/mod-creature-gear.conf" hc="$CONF_DIR/modules/mod_hardcore.conf"
-    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf"
+    local ei="$CONF_DIR/modules/mod_e_interact.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$ei" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -1520,6 +1540,21 @@ run_checks() {   # run_checks FIX(0|1)
                 if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); set_conf "$hc" Hardcore.DeathPolicy ghost; ok "DeathPolicy set to ghost"; fi
                 ;;
         esac
+    fi
+    if [ -f "$ei" ]; then
+        local ei_off="" ei_key
+        for ei_key in Enable Loot Gather Talk Use; do
+            if [ "$(conf_get "$ei" "EInteract.$ei_key")" != "1" ]; then ei_off="$ei_off $ei_key"; fi
+        done
+        if [ -z "$ei_off" ]; then
+            ok "mod_e_interact.conf: Enable/Loot/Gather/Talk/Use = 1"
+        else
+            bad "mod_e_interact.conf: off:$ei_off (the key is on, those steps are not)"
+            if [ "$fix" = 1 ]; then
+                for ei_key in $ei_off; do set_conf "$ei" "EInteract.$ei_key" 1; done
+                ok "interact options set to 1"
+            fi
+        fi
     fi
     if [ -f "$pb" ]; then
         if grep -qE '^[[:space:]]*Playerbots\.RandomBotNearPlayers[[:space:]]*=' "$pb"; then
