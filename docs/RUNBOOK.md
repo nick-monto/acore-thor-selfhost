@@ -85,7 +85,7 @@ sha256sum -c acore-server-arm64.tar.zst.sha256
 tar --zstd -xf acore-server-arm64.tar.zst -C /opt/acore   # → /opt/acore/{bin,etc,lib,src}
 ```
 
-`bin/` is the stripped server, `etc/` the config templates, and `src/` the SQL the DB updater reads (`src/data/sql`, `src/modules/mod-playerbots/data/sql`, `src/modules/mod-creature-gear/data/sql` and the loot-bag patch in `src/data/sql/custom/db_world`). That last part is why the artifact is not just a binary drop: `SourceDirectory` must point at a tree containing those paths (`DBUpdater.cpp:98-195`, `mod-playerbots/src/Script/Playerbots.cpp:77-78`) [V].
+`bin/` is the stripped server, `etc/` the config templates, and `src/` the SQL the DB updater reads (`src/data/sql`, `src/modules/mod-playerbots/data/sql`, `src/modules/mod-creature-gear/data/sql` and the loot-bag and portal patches in `src/data/sql/custom/db_world`). That last part is why the artifact is not just a binary drop: `SourceDirectory` must point at a tree containing those paths (`DBUpdater.cpp:98-195`, `mod-playerbots/src/Script/Playerbots.cpp:77-78`) [V]. The CUSTOM slice is refreshed from this repository after unpacking (Part 4a), so the artifact's copy is only a snapshot.
 
 **Fallback: build in place** (hours; the workflow exists to avoid this):
 
@@ -165,7 +165,12 @@ Edit `/opt/acore/etc/worldserver.conf` and `authserver.conf`:
 | `WorldServerPort` / `RealmServerPort` | `8085` / `3724` | guide defaults |
 | `BindIP` | `127.0.0.1` | loopback-only while testing on-device (use the LAN IP only for the test in Part 6) |
 | `Updates.EnableDatabases` | `7` (world) / `1` (auth) | lets the first start populate base data |
+| `InstantFlightPaths` | `2` | 2 = instant: the flight teleports to the last node and still charges the fare, but each flight master keeps a toggle so the player can fly normally; 1 would force it on everyone [V] |
+| `AllFlightPaths` | `1` | every taxi node known from login (`SetTaxiCheater(true)` on the first login packet, `CharacterHandler.cpp:1055`) [V] |
+| `TaxiFlightSpeed` | `50.0` | 50 is the top of the core's clamp (`WorldConfig.cpp:265`: accepted only when `> 0.01` and `<= 50`); anything higher is rejected and the default 32 stands [V] |
 | Login/world/character database info | `127.0.0.1;3306;acore;changeme;acore_*` | match Part 3 |
+
+The three travel keys are what `thor-install.sh` writes (`scripts/thor-install.sh:1206-1208`) and logs at the end of `write_configs()`. `--status` reads each one back and prints `ok` or `bad` with the value it found, and `--repair` puts all three back to `2` / `1` / `50.0` when any is wrong (`run_checks`, `:1584-1616`). `--check` is a dry run: it calls neither, so it reports nothing about these keys (or about the SQL families in Part 4a). The gate on the third key is `(32, 50]`, not just "not empty": the stock `32.0` counts as not set, and anything above 50 is rejected by the core and falls back to 32. `TaxiFlightSpeed` is `Reloadable::Yes` (`WorldConfig.cpp:265`), so a new value applies with `.reload config` in the worldserver console and no restart; `AllFlightPaths` is granted when a character logs in (`CharacterHandler.cpp:1055`), so a character already online needs a relog before it sees the full taxi map.
 
 `/opt/acore/etc/modules/mod_hardcore.conf` — the installer creates it from the shipped `.dist` and keeps `Hardcore.DeathPolicy = ghost` unless the file already names `ghost`, `archive` or `delete`. In `ghost` policy, resurrection is refused but graveyard release is allowed so under-map/fatigue deaths can reach a spirit healer. Players opt in with `.hardcore on`; bot-controlled sessions are refused.
 
@@ -174,6 +179,52 @@ Edit `/opt/acore/etc/worldserver.conf` and `authserver.conf`:
 `/opt/acore/etc/modules/playerbots.conf` — the module ships `Playerbots.Enabled = 1` and **500/500** bots by default; start smaller (Part 5). It also carries its own `PlayerbotsDatabaseInfo` (default database name `acore_playerbots`) and `Playerbots.Updates.EnableDatabases = 1` [V]. The installer sets `Playerbots.RandomBotNearPlayers = 1` with a +/-5 level window and at most 10 bots tied to each player, placed at level-appropriate spots inside the player's zone at least 100 yards away (no rings around the player; 100 is about where the client stops drawing other players), each visiting for 15-40 minutes and away in another zone for 4-10 before it returns. The rest stay normally distributed. Re-running the installer rewrites those keys to the same defaults and drops the retired ring keys. See `docs/BOT-DISTRIBUTION-DESIGN.md` [V].
 
 One trap worth knowing before you debug a "bots do not load" symptom: **module configs are read from the compile-time `_CONF_DIR`, not from the `-c` path** (`Config.cpp:704-711`, `:766`) [V]. The artifact is built with `-DCMAKE_INSTALL_PREFIX=/opt/acore`, so `/opt/acore/etc/modules/playerbots.conf` is the file it reads. If you install the tarball somewhere else (`--root`), the script links that baked path to your `etc/` directory.
+
+## Part 4a — The CUSTOM SQL patches
+
+Two patches ride the core's CUSTOM slot rather than a module: the loot bags (Part 9a) and the capital portals. The installer puts `sql/custom/db_world/*.sql` under `<core>/data/sql/custom/db_world/`, i.e. under `SourceDirectory` (Part 4), and the world database updater applies each CUSTOM file **once per file name**, recording its SHA-1 hash in the world database's `updates` table [V].
+
+The SQL no longer has to ride the artifact. `refresh_custom_sql()` runs right after `fetch_server` on every install and re-run — it is skipped under `--from-source`, which already extracts the same tree with the module sources — and it downloads `sql/custom*` from `SELF_REPO@SELF_REF` (`nick-monto/acore-thor-selfhost` at `SELF_REF`, default `main`) into `$SRC_DIR/data/sql`. A SQL change therefore reaches the device with an ordinary re-run, and the commit only has to be on the ref that `SELF_REF` names; no rebuilt artifact is involved.
+
+| File (in `/opt/acore/src/data/sql/custom/db_world/`) | What it inserts | Generated by |
+|---|---|---|
+| `travel_portals_10_spawns.sql` | 16 `gameobject` spawns, guids 9800000-9800015: two per capital city, standing at that city's own teleport arrival point and casting the two same-faction cities on the other continent. Stock `gameobject_template` type-22 (spellcaster) entries — no DBC, no new template, no module [V] | `scripts/travel/gen_portals.py` |
+| `loot_bags_*.sql` (three files) | the bag items, drop tables and creature drops from Part 9a | `scripts/loot-bags/gen_loot_bags.py` |
+
+The portal file is the one that must be careful with its `DELETE`: it names its 16 guids explicitly (`WHERE guid IN (9800000, …, 9800015)`), never a range, because the core seeds its gameobject guid allocator from `MAX(guid) + 1` — once the file has applied, objects the server creates are allocated above these guids, and a range delete would take them out on re-apply. The loot-bag files delete their own private ranges instead (`item_template` / `item_loot_template` 91000-91099, `reference_loot_template` / `creature_loot_template` 9800100-9800199) [V]. Every CUSTOM file starts with a `DELETE`, which is what makes re-application idempotent.
+
+Faction, since it is easy to misread as an access rule: seven of the eight portal templates carry Alliance 1732 (Stormwind, Darnassus, Exodar) or Horde 1735 (Orgrimmar, Undercity, Thunder Bluff, Silvermoon) in `gameobject_template_addon`, and only Ironforge's 176497 is neutral (0), used only as an Alliance destination. The server-side use path never tests that faction, so it does not gate who may click a portal [V].
+
+Neither patch has been exercised in a client: the portal mechanism is the one the stock Shattrath portals already use with seven of the same eight templates.
+
+Check what applied, and which files the server is carrying:
+
+```bash
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
+  -e "SELECT name, hash, state, timestamp FROM updates WHERE name LIKE 'travel_portals%';"
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
+  -e "SELECT COUNT(*) AS portals FROM gameobject WHERE guid BETWEEN 9800000 AND 9800015;"
+```
+
+The `updates` table is keyed by `name`; its columns are `name, hash, state, timestamp, speed` [V], so the query above and the deletes below use `name`. `bash thor-install.sh --status` also reports each SQL family as present or missing in `$SRC_DIR/data/sql/custom/db_world/` (`scripts/thor-install.sh:1745-1759`). `--check` does not: it is a pre-install dry run and never calls the check code.
+
+To change one, edit the generator and regenerate (the README has the commands); do **not** hand-edit the committed SQL. With the shipped `Updates.Redundancy = 1` the updater compares hashes, so a CUSTOM file whose content changed **is** re-applied on the next boot, logged as `Reapplying update "<name>" (it changed)` [V]; the `DELETE` at the top of the file makes that safe. Removing its `updates` row or renaming the file is only needed when redundancy checking is off:
+
+```bash
+# only for a server running Updates.Redundancy = 0: make the updater treat the file as new
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
+  -e "DELETE FROM updates WHERE name = 'travel_portals_10_spawns.sql';"
+```
+
+To remove a patch for good, delete the rows it inserted, then its `updates` row (in that order the server never sees a half state; the reverse order just re-inserts them on the next start if the file is still there):
+
+```bash
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world -e "
+DELETE FROM gameobject WHERE guid IN (9800000, 9800001, 9800002, 9800003, 9800004, 9800005, 9800006, 9800007, 9800008, 9800009, 9800010, 9800011, 9800012, 9800013, 9800014, 9800015);
+DELETE FROM updates WHERE name = 'travel_portals_10_spawns.sql';"
+```
+
+Then delete the file from `$SRC_DIR/data/sql/custom/db_world/` and from `sql/custom/db_world/` in the repository — `refresh_custom_sql()` would fetch it back on the next install or `--repair` otherwise — or point `SELF_REF` at a commit that no longer carries it. Restart the worldserver afterwards, since inventory rows are read at start; after that `--status` reporting the family as missing is the correct state for a patch you removed on purpose.
 
 ## Part 5 — First start
 

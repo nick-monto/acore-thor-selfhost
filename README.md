@@ -6,17 +6,18 @@ Scope: upstream AzerothCore as used by the [Dad's MMO Lab WotLK guide](https://g
 
 ## Status
 
-The server half is built and running on the Thor. Four pieces ride the same arm64 artifact:
+The server half is built and running on the Thor. Six pieces ride the same arm64 artifact:
 
 - **Core and bots.** AzerothCore linked statically with `mod-playerbots`, `mod-creature-gear`, `mod-hardcore` and `mod-e-interact`, plus `patches/playerbots-player-centric.patch`.
 - **Creature gear.** Every creature the rules admit - humanoids of level 1-80 with no quest, vendor or trainer flag and no hand-set equipment, 1274 of them against the pinned base dumps - gets per-spawn weapon pools, drops the gear it is wearing, and wears an eleven-slot armour outfit over the mirror-image packet; server-side data and logic only, no client patch. Class proficiency comes from the client's own `SkillLine`/`SkillLineAbility` data, and the validator rejects any pick a class could not use.
 - **Hardcore.** Opt-in ruleset, `Hardcore.DeathPolicy = ghost` by default, bot-controlled sessions excluded.
 - **Loot bags.** Level-banded bags on every lootable creature, delivered as pure database SQL in the core's CUSTOM slot.
 - **One interact key.** `mod-e-interact` plus the launcher's EInteract add-on: one bound key loots the nearest corpse, skins or gathers it, opens a chest, herb or ore node, or talks to the nearest NPC — with the gameobject pass added here, which upstream does not have. The add-on declares a client binding (`CLICK EInteractButton:LeftButton`) instead of taking a literal key, and adds a named row for it to ConsolePort's `/cp` menu, so a pad button is assigned there.
+- **Travel.** A flight is dead time on a handheld, so the installer writes `InstantFlightPaths = 2` (the instant teleport still charges the fare and each flight master keeps a toggle, so a player can fly normally when wanted), `AllFlightPaths = 1` (every taxi node known from login) and `TaxiFlightSpeed = 50.0`, the top of the core's clamp — anything above 50 is rejected and falls back to the 32 default. The same install adds a two-way capital network as pure custom SQL: 16 portal spawns (guids 9800000-9800015), two per capital city standing at that city's own teleport arrival point and casting the two same-faction cities on the other continent. They reuse stock `gameobject_template` type-22 portal entries, so there is no DBC change, no new template and no module.
 
 Runtime is verified on the Thor itself: the installer built the rootfs, unpacked the arm64 artifact and created the database, the first boot populated the three `acore_*` schemas and the GM account, a real 3.3.5a client logged in, and the realm ran with **up to 50 randombots** on the device.
 
-Not verified yet: how a real client renders a creature-gear outfit, a gear item or a loot bag taken off a corpse in play, and the hardcore death/relog path.
+Not verified yet: how a real client renders a creature-gear outfit, a gear item or a loot bag taken off a corpse in play, the hardcore death/relog path, and the portal rows — no portal has been clicked in a client. The portal patch is database rows, and the mechanism is the one the stock Shattrath portals already use.
 
 Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs the launcher app plus the client-side changes listed in [`docs/LAUNCHER-HOSTING-DESIGN.md`](docs/LAUNCHER-HOSTING-DESIGN.md); the app's shipped runtime already carries the 32-bit Windows client path. Hosting the server *inside* the app is out of scope for this repository: the app has no foreground service, one X environment, one shared rootfs and UID-wide process sweeps, so the guide's Docker flow does not transfer. The server runs beside the app, in Termux.
 
@@ -29,6 +30,8 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The ordered, copy-pasteable device steps (Termux + proot Ubuntu), with the gates to check as you go |
 | [`docs/CREATURE-GEAR-DESIGN.md`](docs/CREATURE-GEAR-DESIGN.md) | Mobs that wear what they drop: what needs a client patch (almost nothing), what needs code, and how the SQL rides the release — **implemented as `modules/mod-creature-gear`**; its status table lists what is verified and where |
 | [`docs/LOOT-BAGS-DESIGN.md`](docs/LOOT-BAGS-DESIGN.md) | Level-banded loot bags on every lootable creature: quality tiers, money, cloth, potions and level-appropriate gear, delivered as a pure database patch in the core's CUSTOM SQL slot |
+| [`docs/TRAVEL-PORTALS-DESIGN.md`](docs/TRAVEL-PORTALS-DESIGN.md) | A two-way capital portal network: the 16 spawns and the stock type-22 gameobject templates and `spell_target_position` rows behind them, why no DBC, template or module is needed, and what is verified |
+| [`docs/GRAVEYARDS-DESIGN.md`](docs/GRAVEYARDS-DESIGN.md) | A rejected patch, not a shipped feature: the custom graveyard SQL (`graveyards_10_zones.sql`) was generated, reviewed and reverted — all 15 ids were sub-areas whose parent zone is already linked, and stock coverage of the open-world questing zones is complete |
 | [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md) | Player-centric randombot distribution: levels within a band of online players and teleports near them, delivered as a patch on the pinned `mod-playerbots` |
 | [`docs/INTERACT-KEY-DESIGN.md`](docs/INTERACT-KEY-DESIGN.md) | One key for loot, gathering, NPC windows, chests and nodes: the addon-whisper RPC, the local gameobject pass, and what is verified — **implemented as `modules/mod-e-interact`** |
 | [`modules/mod-hardcore/README.md`](modules/mod-hardcore/README.md) | Opt-in permadeath ruleset, vendored from `maluramichael/mod-hardcore` with the Thor-local changes recorded in `UPSTREAM.md` |
@@ -38,7 +41,7 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 
 ## Install on the Thor
 
-The Thor pulls two things from GitHub: this script, and the server artifact from a release. Both come from this public repository, so fetching needs no token:
+The Thor pulls three things from GitHub: this script, the server artifact from a release, and the `sql/custom` tree (a few small files, fetched by the installer on every run so the CUSTOM SQL is never a stale build-time snapshot). All come from this public repository, so fetching needs no token:
 
 ```sh
 curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
@@ -61,11 +64,13 @@ python3 scripts/creature-gear/check_creature_gear.py --core <core>
 
 `modules/mod-e-interact` is vendored the same way (upstream commit in [`pins.toml`](pins.toml), local gameobject pass recorded in [`modules/mod-e-interact/UPSTREAM.md`](modules/mod-e-interact/UPSTREAM.md)). It has no SQL tree: it answers the EInteract add-on's self-addressed whisper and runs the client's own loot, gossip and object-use handlers. The launcher ships the add-on.
 
-The loot-bag patch is also committed as generated SQL, at `sql/custom/db_world/`, and rides the artifact's `src/data/sql` tree into the core's CUSTOM slot; `thor-install.sh --from-source` fetches the same directory. Regenerate it with the pinned core:
+The loot-bag and portal patches are also committed as generated SQL, at `sql/custom/db_world/`, and land in the core's CUSTOM slot under `SourceDirectory`: the installer's `refresh_custom_sql()` fetches `sql/custom` from this repository at `SELF_REF` (default `main`) on every install and re-run, and `--from-source` extracts the same directory with the module sources. A rebuilt artifact is not needed to ship a SQL change — but the commit has to be on the ref that `SELF_REF` names. Regenerate them with the pinned core:
 
 ```sh
 python3 scripts/loot-bags/gen_loot_bags.py --core <core>
 python3 scripts/loot-bags/gen_loot_bags.py --core <core> --check
+python3 scripts/travel/gen_portals.py --core <core>
+python3 scripts/travel/gen_portals.py --core <core> --check
 ```
 
 The player-centric randombot pass is maintained as `patches/playerbots-player-centric.patch` against the pinned `mod-playerbots` commit. The workflow applies it before the arm64 build, `thor-install.sh --from-source` applies it after cloning the module, and the installer writes the near-player defaults into `playerbots.conf`: the bots assigned to the player are capped at 10 and placed at level-appropriate spots in the player's current zone, at least 100 yards away, never in a ring around them; each bot then visits for 15-40 minutes and spends 4-10 away in another zone, so the zone's population changes over time. The rest of the bots keep the normal world-wide distribution. See [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md).

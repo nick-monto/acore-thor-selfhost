@@ -814,6 +814,7 @@ stage_inside() {
 
     install_deps
     fetch_server
+    refresh_custom_sql
     layout_check
     install_missing_libs || warn "some libraries could not be resolved; --status lists them"   # never aborts an install
     ensure_client_data
@@ -996,6 +997,53 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     return 0
 }
 
+refresh_custom_sql() {   # fetch only sql/custom from this repo into $SRC_DIR/data/sql
+    # The prebuilt artifact carries sql/custom as a build-time snapshot, and fetch_server returns
+    # early when the server is already installed, so a re-run would keep an old copy of the custom
+    # SQL forever. Refresh it on every install and re-run: it is a few small files, and the DB
+    # updater only ever reads them from $SRC_DIR/data/sql/custom.
+    local sql_parent="${SRC_DIR:-$ROOT/src}/data/sql" url
+    if [ "$FROM_SOURCE" = 1 ]; then
+        # fetch_self_module already extracted sql/custom beside the source; a second fetch would
+        # just download the same tarball again.
+        return 0
+    fi
+    url="https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF"
+    if [ "$CHECK" = 1 ]; then
+        log "would fetch $SELF_REPO@$SELF_REF sql/custom into $sql_parent"
+        return 0
+    fi
+    if [ ! -d "$sql_parent" ]; then
+        warn "no $sql_parent yet; skipping the custom sql refresh"
+        return 0
+    fi
+    if ! have curl; then
+        warn "curl is missing; keeping the custom sql already in $sql_parent"
+        return 0
+    fi
+    local tarball
+    tarball="$(mktemp)"
+    if ! curl_gh -fL --retry 3 -o "$tarball" "$url"; then
+        rm -f "$tarball"
+        warn "cannot download $url; keeping the custom sql already in $sql_parent (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
+        return 0
+    fi
+    # Same strip as fetch_self_module: "<repo>-<ref>/sql/custom/db_world/..." becomes
+    # "$sql_parent/custom/db_world/...", the CUSTOM include the base database registers.
+    if ! tar -xzf "$tarball" --wildcards --strip-components=2 -C "$sql_parent" '*/sql/custom*'; then
+        rm -f "$tarball"
+        warn "cannot extract sql/custom out of $SELF_REPO@$SELF_REF; keeping the custom sql already in $sql_parent"
+        return 0
+    fi
+    rm -f "$tarball"
+    local n=0
+    if [ -d "$sql_parent/custom/db_world" ]; then
+        n=$(find "$sql_parent/custom/db_world" -maxdepth 1 -name '*.sql' 2>/dev/null | wc -l || true)
+    fi
+    log "custom sql refreshed: ${n:-0} file(s) in $sql_parent/custom/db_world"
+    return 0
+}
+
 layout_check() {
     step "Layout"
     if [ "$CHECK" = 1 ]; then
@@ -1152,9 +1200,16 @@ write_configs() {
     set_conf "$ws" Updates.EnableDatabases 7
     set_conf "$ws" Updates.AutoSetup      1
     set_conf "$ws" PlayerLimit            1000
+    # Travel is dead time on a handheld. 2 = instant flight, but each flight master keeps a toggle so
+    # the player can still fly normally; 1 = every taxi node known from login; 50.0 = the top of the
+    # core's flight-speed clamp (values above 50 are rejected and fall back to the 32 default).
+    set_conf "$ws" InstantFlightPaths     2
+    set_conf "$ws" AllFlightPaths         1
+    set_conf "$ws" TaxiFlightSpeed        50.0
     set_conf "$ws" LoginDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_auth\""
     set_conf "$ws" WorldDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_world\""
     set_conf "$ws" CharacterDatabaseInfo  "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_characters\""
+    log "worldserver.conf: InstantFlightPaths=$(conf_get "$ws" InstantFlightPaths) AllFlightPaths=$(conf_get "$ws" AllFlightPaths) TaxiFlightSpeed=$(conf_get "$ws" TaxiFlightSpeed)"
     set_conf "$as" LogsDir                "\"$ROOT/logs\""
     set_conf "$as" SourceDirectory        "\"$SRC_DIR\""
     set_conf "$as" MySQLExecutable        "\"$mysql_bin\""
@@ -1524,6 +1579,41 @@ run_checks() {   # run_checks FIX(0|1)
     done
     if [ "$problems" = 0 ] && [ -f "$ws" ]; then ok "worldserver.conf: DataDir/SourceDirectory/BindIP set"; fi
     if [ "$fix" = 1 ] && [ "$problems" = 1 ]; then write_configs || true; fi
+    if [ -f "$ws" ]; then
+        # Travel settings the installer writes. An older config, or one edited by hand, can hold the
+        # blizzlike 0/0/32.0, which costs the player travel time on every flight. TaxiFlightSpeed is
+        # validated by the core as 0.01 < v <= 50 (WorldConfig.cpp), and 32.0 is the stock value, so
+        # only something above it can be the installer's setting.
+        local ifp afp tfs travel_wrong=0
+        ifp="$(conf_get "$ws" InstantFlightPaths)"
+        if [ "$ifp" = 2 ]; then
+            ok "worldserver.conf: InstantFlightPaths=$ifp"
+        else
+            bad "worldserver.conf: InstantFlightPaths is '$ifp', expected 2"
+            travel_wrong=1
+        fi
+        afp="$(conf_get "$ws" AllFlightPaths)"
+        if [ "$afp" = 1 ]; then
+            ok "worldserver.conf: AllFlightPaths=$afp"
+        else
+            bad "worldserver.conf: AllFlightPaths is '$afp', expected 1"
+            travel_wrong=1
+        fi
+        tfs="$(conf_get "$ws" TaxiFlightSpeed)"
+        if awk -v v="$tfs" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/ && v + 0 > 32 && v + 0 <= 50) }'; then
+            ok "worldserver.conf: TaxiFlightSpeed=$tfs"
+        else
+            bad "worldserver.conf: TaxiFlightSpeed is '$tfs', expected a number in (32, 50]"
+            travel_wrong=1
+        fi
+        if [ "$travel_wrong" = 1 ] && [ "$fix" = 1 ]; then
+            FIXES=$((FIXES + 1))
+            set_conf "$ws" InstantFlightPaths 2
+            set_conf "$ws" AllFlightPaths     1
+            set_conf "$ws" TaxiFlightSpeed    50.0
+            ok "worldserver.conf travel keys set to InstantFlightPaths=2 AllFlightPaths=1 TaxiFlightSpeed=50.0"
+        fi
+    fi
     if [ -f "$pb" ] && [ "$(conf_get "$pb" Playerbots.MaxRandomBots)" != "$BOTS" ]; then
         bad "playerbots.conf bots is $(conf_get "$pb" Playerbots.MaxRandomBots), state says $BOTS"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); set_conf "$pb" Playerbots.MinRandomBots "$BOTS"; set_conf "$pb" Playerbots.MaxRandomBots "$BOTS"; ok "bots set to $BOTS"; fi
@@ -1651,14 +1741,22 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi
         fi
     done
-    local loot_sql
-    loot_sql="$(find "$SRC_DIR/data/sql/custom/db_world" -maxdepth 1 -name 'loot_bags_*.sql' -print -quit 2>/dev/null || true)"
-    if [ -n "$loot_sql" ]; then
-        ok "sql sources: loot-bag patch ($(basename "$loot_sql"))"
-    else
-        bad "loot-bag patch missing: $SRC_DIR/data/sql/custom/db_world/loot_bags_*.sql"
-        if [ "$fix" = 1 ]; then warn "re-run the install to restore it: bash thor-install.sh --force"; fi
-    fi
+    local sql_name sql_label sql_file
+    # Only the families that ship. The graveyard patch was generated, reviewed and reverted
+    # (docs/GRAVEYARDS-DESIGN.md), so probing for it would report a permanent failure.
+    for sql_name in loot_bags travel_portals; do
+        case "$sql_name" in
+            loot_bags)      sql_label="loot-bag patch" ;;
+            travel_portals) sql_label="travel-portal patch" ;;
+        esac
+        sql_file="$(find "$SRC_DIR/data/sql/custom/db_world" -maxdepth 1 -name "${sql_name}_*.sql" -print -quit 2>/dev/null || true)"
+        if [ -n "$sql_file" ]; then
+            ok "sql sources: $sql_label ($(basename "$sql_file"))"
+        else
+            bad "$sql_label missing: $SRC_DIR/data/sql/custom/db_world/${sql_name}_*.sql"
+            if [ "$fix" = 1 ]; then warn "re-run the install to restore it: bash thor-install.sh --force"; fi
+        fi
+    done
 
     # 5. database
     if ! have mysql; then
