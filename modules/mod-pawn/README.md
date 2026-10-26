@@ -6,8 +6,8 @@ in [docs/PAWN-INTEGRATION-PLAN.md](../../docs/PAWN-INTEGRATION-PLAN.md).
 
 A pawn is a **type-2 "AddClass" character** from the playerbots pool — a real character on a real
 account, in a real group. Everything that makes that work already exists upstream: the character
-earns group XP at the normal rate, keeps its gear, and saves itself. This module adds the four
-things the pool does not have:
+keeps its gear and saves itself. It does **not** gain XP — a pawn is pinned to the level it was hired
+at (see "A pawn is what you hired" below). This module adds the four things the pool does not have:
 
 1. **A roster** (`pawn_roster`, characters database, created at startup by
    `PawnMgr::EnsureSchema`) so a recruited pawn comes back after a relog and after a world-server
@@ -18,9 +18,9 @@ things the pool does not have:
    dismiss, and the party cap all live there. The picker shows a random 10-15 of the pool per
    visit, not the whole pool — see below.
 3. **A level window** (`Pawn.LevelWindow`, default ±2). Each pool pawn gets a stable level inside
-   the window, derived from the player and pawn guids. A pawn already inside the window keeps its
-   level; one that has drifted outside it is re-levelled into it on its next login — so a pawn is
-   never useless and never a clone of the player's level.
+   the window, derived from the player and pawn guids, so offers vary instead of all snapping to the
+   player's exact level. The same window is what makes a pawn *current*: once the player is more
+   than that many levels ahead of it, the party row at the inn says it has fallen behind.
 4. **An archetype**: one premade PvE spec plus a hard blacklist of the other specs' signature
    abilities. A prot warrior pawn without Shield Wall cannot tank; a shadow priest pawn without
    Resurrection cannot heal. The toolkit is the reason to swap.
@@ -31,8 +31,33 @@ things the pool does not have:
    two-hander with no shield. The pass is
    `PlayerbotFactory::AutoGear`'s sequence (equip, ammo, enchants and gems, durability) with the
    gear-score cap taken from the player, so a pawn is never better geared than its owner. It runs
-   once, recorded by the roster's `built` column: after that the pawn keeps what it wears, and
-   playerbots' own level-up maintenance keeps it current as it levels with you.
+   once, recorded by the roster's `built` column: after that the pawn keeps what it wears, and the
+   pass only runs again if the level it was hired at has to be restored.
+
+## A pawn is what you hired
+
+A pawn does not level with its owner. It is pinned to the level it was offered at, and the pin is
+enforced two ways:
+
+- **No XP.** With `Pawn.GainXP = 0` (the default) the pawn carries the core's
+  `PLAYER_FLAGS_NO_XP_GAIN` player flag. `Player::GiveXP` checks it before anything else, and every
+  XP source in the core funnels through that one call — kill credit (`KillRewarder.cpp:185`), quests
+  (`PlayerQuest.cpp:773`), exploration (`Player.cpp:6000`) and battlegrounds (`Player.cpp:6407`) —
+  so there is no path around it. The flag lives on the character and is saved with it.
+- **A level pin.** playerbots rebuilds a type-2 bot at its master's exact level on login when the gap
+  is more than three (`PlayerbotMgr.cpp:640`), so the module applies the pin *after* that pass: the
+  login drain runs on the world thread from `WorldScript::OnUpdate`, later than the bot's own login
+  hook. A pawn the snap moved is rebuilt at the level recorded in `pawn_roster.target_level`.
+
+`Pawn.GainXP = 1` turns the whole thing off: the pawn levels in the party, the roster follows its
+level instead of holding it, and exchanging becomes a choice rather than something progression
+forces.
+
+So as the player levels, a pawn falls behind by design. That is what the roster is for: the inn is
+where you exchange it. A pawn more than `Pawn.LevelWindow` levels behind is marked `fallen behind` in
+the party row, and hiring a level-appropriate replacement costs a fee — the same fee whether you
+pick a new face or the same one, because taking the same pawn on at a new level is a new build with
+new gear. Re-hiring at the level it is already standing at stays free.
 
 ## The hire fee
 
@@ -68,8 +93,9 @@ The price is on the picker row and in a confirmation box. The charge itself happ
 `PawnMgr::Recruit`, after every check has passed, and not through the gossip box's money: the core
 deducts box money *after* the script hook and unconditionally, so a recruit refused for a full party
 would still be paid for, and an empty purse would still hire. A pawn this owner has already paid for
-is free to call back (the roster's `paid` column), so swapping companions costs nothing after the
-first time — the fee buys a companion, not the right to swap.
+at the level it is standing at is free to call back (the roster's `paid` column), so dismissing and
+re-hiring to rearrange a party costs nothing. A hire at a *new* level is a new fee: the fee buys a
+companion at that level, and a pawn you have outgrown is a different companion.
 
 ## The party cap
 
@@ -100,13 +126,15 @@ Two hooks carry the behaviour. `PlayerScript::OnPlayerCanLearnSpell` refuses a b
 the top of `Player::learnSpell`, so no learn path — factory, trainer, level-up maintenance, quest —
 can undo a restriction. `PlayerScript::OnLogin` only *marks* a pawn; `WorldScript::OnUpdate` applies
 its level and archetype once it is in the world, which is what puts that work after playerbots' own
-login re-level pass.
+login pass — the pass that would otherwise rebuild the pawn at its owner's level.
 
 ## Configuration
 
-`conf/mod-pawn.conf.dist`: `Pawn.Enable`, `Pawn.MaxPawns`, `Pawn.LevelWindow`, `Pawn.OfferedPerPage`,
-`Pawn.FeaturedMin`/`FeaturedMax`, `Pawn.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Pawn.Debug`,
-and one `Pawn.Blacklist.<class>.<spec_no>` list per archetype. Spell names in the blacklist are
+`conf/mod-pawn.conf.dist`: `Pawn.Enable`, `Pawn.MaxPawns`, `Pawn.LevelWindow`, `Pawn.GainXP`,
+`Pawn.HireFeePercent`, `Pawn.HireFeeHeldPercent`, `Pawn.GearFloorPercent`, `Pawn.GearCapPercent`,
+`Pawn.OfferedPerPage`, `Pawn.FeaturedMin`/`FeaturedMax`,
+`Pawn.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Pawn.Debug`, and one
+`Pawn.Blacklist.<class>.<spec_no>` list per archetype. Spell names in the blacklist are
 resolved once at startup; an unresolved name is logged as an error rather than ignored.
 
 ## The pool and the featured draw

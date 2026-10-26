@@ -27,9 +27,9 @@ struct PawnConfig
     bool   Enabled              = true;
     uint8  MaxPawns             = 2;
     uint8  LevelWindow          = 2;
-    // What a hire costs: HireFeePercent of the pawn's level cubed, in copper, times
-    // the pawn's own gear ratio (below), times HireFeeHeldPercent of that again for
-    // every pawn already in the party.
+    // What a hire costs: HireFeePercent of the player's level cubed, in copper,
+    // times the pawn's own gear ratio (below), times HireFeeHeldPercent of that
+    // again for every pawn already in the party.
     uint32 HireFeePercent       = 100;
     uint32 HireFeeHeldPercent   = 100;
     // The band of the per-pawn gear ratio, and of the hire fee with it: a pawn is
@@ -39,6 +39,10 @@ struct PawnConfig
     // player's strength and the extremes are rare.
     uint32 GearFloorPercent     = 85;
     uint32 GearCapPercent       = 150;
+    // Whether a hired pawn keeps the XP it earns in the party. Off by default: a
+    // pawn that levels with its owner never needs exchanging, and the roster is
+    // meant to be a set of contracts that expire as the player outgrows them.
+    bool   GainXP               = false;
     uint8  OfferedPerPage       = 12;
     // A picker instance shows a random subsample of the pool, not the pool: the
     // count is drawn from [FeaturedMin, FeaturedMax] every time the menu opens.

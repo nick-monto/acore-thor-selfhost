@@ -244,7 +244,14 @@ private:
             sCharacterCache->GetCharacterNameByGuid(row.Bot, name);
 
             std::string text = "Dismiss " + (name.empty() ? std::string("your pawn") : name);
-            text += " (" + std::string(RoleName(row.Role)) + ")";
+            text += " (" + std::string(RoleName(row.Role)) + ", level " +
+                    std::to_string(uint32(row.TargetLevel)) + ")";
+
+            // A pawn is pinned to the level it was hired at, so the party row is
+            // where a player sees one fall behind - and the offers below are the
+            // inn's answer to it.
+            if (row.TargetLevel + sPawnMgr.Config().LevelWindow < player->GetLevel())
+                text += " - fallen behind";
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, text, GOSSIP_SENDER_MAIN, PAWN_ACTION_DISMISS + i);
         }
 

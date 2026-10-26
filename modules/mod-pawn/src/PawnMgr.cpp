@@ -81,6 +81,7 @@ void PawnMgr::LoadConfig()
     _config.LevelWindow = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.LevelWindow", 2), 0, 10));
     _config.HireFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeePercent", 100), 0, 10000));
     _config.HireFeeHeldPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeeHeldPercent", 100), 0, 1000));
+    _config.GainXP = sConfigMgr->GetOption<bool>("Pawn.GainXP", false);
     _config.GearFloorPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearFloorPercent", 85), 25, 100));
     _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearCapPercent", 150), 100, 300));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
@@ -480,21 +481,33 @@ void PawnMgr::ApplyPawn(Player* bot)
     if (!row || !row->Recruited)
         return;
 
-    // The invariant is the window, not one exact level: a pawn anywhere inside
-    // +/- Pawn.LevelWindow of its owner is left alone, which also keeps
-    // playerbots' own login pass (it snaps a type-2 bot to its master's exact
-    // level when the gap is more than three) from being undone for no reason.
-    // Outside the window the pawn is re-levelled to the level it would be
-    // offered at, so a player who outlevels a pawn pulls it back in on its next
-    // login instead of carrying a liability.
+    // A pawn is what was hired, at the level it was hired at. It does not follow
+    // the owner up: the level is pinned to the row's target, so a player who
+    // outlevels a pawn carries it behind them until they exchange it at the inn.
+    // That is the whole point of the pin - the roster is a set of contracts, not
+    // a set of pets that grow.
+    //
+    // playerbots' own login pass rebuilds a type-2 bot at its master's exact level
+    // when the gap is more than three, so the pin has to be applied after it:
+    // this drain runs on the world thread, from WorldScript::OnUpdate, which is
+    // later than the bot's login hook. A pawn the snap moved is rebuilt here at
+    // the level it was hired at.
     Player* owner = ObjectAccessor::FindConnectedPlayer(row->Owner);
-    uint8 const wanted = owner ? DeriveLevel(row->Owner, row->Bot, owner->GetLevel(), bot->getClass()) : 0;
-    bool const reLevel = owner && bot->GetLevel() != wanted &&
-                         std::abs(int(bot->GetLevel()) - int(owner->GetLevel())) > int(_config.LevelWindow);
+    uint8 const hiredAt = row->TargetLevel ? row->TargetLevel : bot->GetLevel();
+    bool const rePin = !_config.GainXP && bot->GetLevel() != hiredAt;
 
-    if (reLevel || !row->Built)
+    // The core's one XP choke point, Player::GiveXP, drops every source - kills,
+    // quests, exploration, battlegrounds - for a player carrying this flag. The
+    // flag is on the character and saved with it, so the pin holds even if some
+    // other path would have levelled the pawn.
+    if (_config.GainXP)
+        bot->RemovePlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
+    else
+        bot->SetPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
+
+    if (rePin || !row->Built)
     {
-        uint8 const level = reLevel ? wanted : bot->GetLevel();
+        uint8 const level = hiredAt;
         // The per-item score ceiling the gear pass is held to: the owner's own
         // average item score, times this pawn's gear ratio. The ratio is what makes
         // one pawn stronger - and dearer - than another offered at the same level,
@@ -505,9 +518,10 @@ void PawnMgr::ApplyPawn(Player* bot)
                      GearRatio(row->Owner, row->Bot) / 100)
             : 0;
 
-        if (reLevel)
-            LOG_INFO("module", "Pawn: pawn {}: level {} -> {} (owner {})", bot->GetName(),
-                     uint32(bot->GetLevel()), uint32(wanted), uint32(owner->GetLevel()));
+        if (rePin)
+            LOG_INFO("module", "Pawn: pawn {}: level {} -> {} (hired at that level; owner {})",
+                     bot->GetName(), uint32(bot->GetLevel()), uint32(hiredAt),
+                     owner ? owner->GetName() : "offline");
 
         uint32 const guildBefore = bot->GetGuildId();
 
@@ -577,9 +591,11 @@ void PawnMgr::ApplyPawn(Player* bot)
     else
         sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo);
 
-    // The roster records the level the pawn actually has, so the fallback used
-    // when the owner is offline is the truth rather than an old target.
-    if (bot->GetLevel() != row->TargetLevel)
+    // With Pawn.GainXP the pawn does level in the party, so the roster follows it
+    // instead of pinning it: the row's target is what the fee and the party row
+    // are measured against either way, and with the pin off the bot's level is
+    // the truth.
+    if (_config.GainXP && bot->GetLevel() != row->TargetLevel)
     {
         row->TargetLevel = bot->GetLevel();
         Upsert(*row);
@@ -609,10 +625,13 @@ uint32 PawnMgr::HireFee(Player* player, PawnOffer const& offer) const
     if (!player || !_config.HireFeePercent || !offer.Bot)
         return 0;
 
-    // A pawn this player has already paid for is free to call back: the fee buys
-    // a companion, not the right to keep swapping companions.
+    // A pawn this player has already paid for at this level is free to call back:
+    // the fee buys a companion, not the right to keep swapping companions. At a
+    // new level it is a new hire - Recruit's sameHire test is the same one - and
+    // the price is charged again.
     if (auto it = _rows.find(offer.Bot.GetCounter());
-        it != _rows.end() && it->second.Owner == player->GetGUID() && it->second.Paid)
+        it != _rows.end() && it->second.Owner == player->GetGUID() && it->second.Paid &&
+        it->second.TargetLevel == offer.Level)
         return 0;
 
     // The baseline is the player's own level cubed, in copper - see the conf
@@ -701,11 +720,18 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
     // geared against their level and paid for by them. The gear also only
     // survives while the spec is unchanged, since a different spec means the
     // items on it were scored for the old one.
+    //
+    // Both carry the level with them. A pawn is pinned to the level it was hired
+    // at, so taking it on again at a *new* offer level is a new hire - a new
+    // build, new gear, a new fee - and that is what makes exchanging companions
+    // as you level cost something whether you pick a new face or the same one.
+    // Re-hiring at the level it is standing at stays free.
     if (auto it = _rows.find(offer.Bot.GetCounter());
         it != _rows.end() && it->second.Owner == player->GetGUID())
     {
-        row.Built = it->second.Built && it->second.SpecNo == offer.SpecNo;
-        row.Paid = it->second.Paid;
+        bool const sameHire = it->second.TargetLevel == offer.Level;
+        row.Built = it->second.Built && it->second.SpecNo == offer.SpecNo && sameHire;
+        row.Paid = it->second.Paid && sameHire;
     }
 
     if (fee)

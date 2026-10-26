@@ -43,9 +43,11 @@ roster and the UI are missing.
 
 Two consequences worth stating plainly:
 
-- **Levelling needs no new code.** A pawn is a real character in a real group. It earns group XP,
-  and it is re-levelled and re-geared on the next login if it fell behind. There is no "sync pawn
-  level" feature to write.
+- **Levelling needs no new code.** A pawn is a real character in a real group, and the level it is
+  built to is set by the module on recruit. It is deliberately *not* levelled by play: a pawn that
+  gained XP would never need exchanging, so the roster would stop being a set of contracts. The pin
+  is `PLAYER_FLAGS_NO_XP_GAIN` plus a rebuild at the hired level, which is cheaper than a sync
+  feature and needs no XP plumbing of its own.
 - **The pawn pool already exists on the device, most likely.** The installer sets
   `Playerbots.MinRandomBots`/`MaxRandomBots` (`scripts/thor-install.sh:1266-1267`) but never touches
   `AddClassAccountPoolSize`, so the shipped default of 50 accounts applies. **[INFERENCE]** the
@@ -257,8 +259,9 @@ how many strangers are around while the pawns are in the party.
    `FreeMethodLoot = 0`.
 5. **Death** — a dead pawn stays in the roster and in the group; playerbots' own resurrection
    behaviour applies. Nothing is auto-released, so a wipe costs a walk back, not a re-recruit.
-6. **Level window** — pawns are offered, and kept, within `Pawn.LevelWindow` (default ±2) levels of
-   the player, instead of snapping to the player's exact level.
+6. **Level window** — pawns are offered within `Pawn.LevelWindow` (default ±2) levels of the player,
+   instead of snapping to the player's exact level, and the same window decides when a hired pawn has
+   fallen behind and wants exchanging.
 7. **Archetypes** — each pawn is one premade PvE spec plus a blacklist of the other specs' signature
    abilities, so the toolkit is the reason to swap pawns.
 8. **Party cap** — the player plus two pawns; a third needs strangers from the world, which are not
@@ -288,8 +291,8 @@ playerbots runtime behaviour rather than a compile-time contract.
    .playerbots bot remove <name>      # it leaves
    ```
    If that works in game, the pawn model is sound and everything else is UI and persistence.
-3. **Level alongside** — level the player 3+ levels with the pawn in the party; the pawn should have
-   gained group XP, and on its next login it should be re-levelled and re-geared if it lagged.
+3. **The pin** — level the player 3+ levels with the pawn in the party; the pawn should not move,
+   and after a relog it should still be at the level it was hired at rather than snapped up.
 4. **Roster** — recruit, relog, confirm the pawn returns; restart the world server, confirm again.
 5. **Obelisk** — the gossip menu opens from the object, pages, and recruiting from it produces the
    same result as the command in step 2.

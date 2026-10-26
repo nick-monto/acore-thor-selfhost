@@ -9,8 +9,10 @@
 # docs/PAWN-SYSTEM-DESIGN.md and docs/PAWN-INTEGRATION-PLAN.md.
 #
 # A pawn is a type-2 "AddClass" character from the playerbots pool: a real
-# character in a real group, so it earns group XP, keeps its gear and saves
-# itself. This module adds the four things the pool does not have on its own:
+# character in a real group, so it keeps its gear and saves itself. It does not
+# gain XP (Pawn.GainXP): it stays at the level it was hired at, and exchanging
+# it for a fresher one as the player levels is the point of the roster. This
+# module adds the four things the pool does not have on its own:
 #
 #   1. a roster, so a recruited pawn comes back after a relog or a restart;
 #   2. a doorway on every innkeeper, with a paged picker that shows a rotating
@@ -46,8 +48,28 @@ Pawn.MaxPawns = 2
 # pawn gets a stable offset inside this window, derived from the player and
 # pawn guids, so the same pawn is always offered at the same level for the same
 # player. 0 makes every pawn the player's exact level.
+#
+# It is also the band a pawn is still "current" in: one the player has outgrown
+# by more than this is marked as fallen behind at the inn, and taking it on
+# again at the new level is a new hire with a new fee.
 # Default: 2
 Pawn.LevelWindow = 2
+
+# Whether a hired pawn keeps the experience it earns in the party. Off by
+# default, and the default is the design: a pawn that levels with its owner
+# never needs exchanging, so the roster would stop being a set of contracts that
+# expire. With it off the pawn carries the core's no-XP-gain player flag, which
+# Player::GiveXP checks before anything else - kills, quests, exploration and
+# battlegrounds all go through that one call - and it is pinned to the level it
+# was hired at even if something else moves it (playerbots rebuilds a type-2 bot
+# at its master's level on login when the gap is more than three; the pin is
+# applied after that pass).
+#
+# Set it to 1 to let pawns level in the party. The pin goes with it: the roster
+# then follows the pawn's level instead of holding it, and exchanging companions
+# becomes a choice rather than something progression forces.
+# Default: 0 (a pawn does not gain XP)
+Pawn.GainXP = 0
 
 # What a hire costs, in copper, as a percentage of the player's level cubed:
 #
@@ -78,6 +100,12 @@ Pawn.LevelWindow = 2
 # the same as the player levels instead of vanishing at 80 or being impossible at
 # 10; quest money and vendor trash make it cheaper in practice, so treat those as
 # upper bounds. 0 makes every hire free.
+#
+# A fee is per pawn *and per level*: calling back a pawn this owner has already
+# paid for at the level it is standing at is free, so dismissing and re-hiring to
+# rearrange a party costs nothing. Taking the same pawn on again at a new offer
+# level is a new hire - a new build, new gear, a new fee - exactly as hiring a
+# different pawn would be.
 # Default: 100
 Pawn.HireFeePercent = 100
 

@@ -324,7 +324,7 @@ Same shape as 5a and 5b, for `mod-pawn`:
 ```bash
 # 1. the module conf the worldserver actually reads
 ls -l /opt/acore/etc/modules/mod-pawn.conf
-grep -E '^Pawn\.(Enable|MaxPawns|LevelWindow|Featured|PoolRefresh)' /opt/acore/etc/modules/mod-pawn.conf
+grep -E '^Pawn\.(Enable|MaxPawns|LevelWindow|GainXP|Featured|PoolRefresh)' /opt/acore/etc/modules/mod-pawn.conf
 
 # 2. the pool the picker draws from: 15 AddClass accounts, about 150 characters
 mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_playerbots \
@@ -353,8 +353,8 @@ grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
   repeats the same number from the module's own view.
 - (3) prints the ten columns and `0` rows on a fresh realm. `built` is `1` once a pawn has been
   equipped for its pinned spec, which is what keeps a returning pawn's gear untouched; `paid` is `1`
-  once that owner has paid its hire fee, which is what makes a re-hire free. A non-zero `in_party`
-  is a pawn currently in someone's party.
+  once that owner has paid its hire fee at the level in `target_level`, which is what makes a re-hire
+  at that level free. A non-zero `in_party` is a pawn currently in someone's party.
 - (4) is the important one: `module.pawn: archetypes: N specs named, ... R blacklisted spells
   resolved, U names unresolved`. Any `Pawn.Blacklist.<class>.<spec>: no spell is named '...'` line
   is an ERROR and means that particular restriction does nothing - fix the name in
@@ -365,8 +365,9 @@ Then talk to any innkeeper - the capital inns and the town inns all carry the li
 appearing next to "make this inn your home" with the bind option still working, the paged menu, that
 two openings show different 10-15 subsets, the level and spec each row advertises, that the recruited
 pawn arrives at that level with that spec, that a third recruit is refused, that a blacklisted spell
-is refused when the pawn tries to learn it, that both pawns pass on a drop, and that the party comes
-back after a relog and a world-server restart.
+is refused when the pawn tries to learn it, that both pawns pass on a drop, that a pawn stays at its
+hired level when the player levels past it (no XP, and `fallen behind` in the party row), and that the
+party comes back after a relog and a world-server restart.
 
 ## Part 6 — Prove it with a client before touching the launcher
 

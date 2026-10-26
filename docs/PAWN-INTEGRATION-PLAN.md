@@ -102,6 +102,7 @@ Pawn.HireFeeHeldPercent = 100      # each pawn held adds the base fee again
 Pawn.GearFloorPercent = 85         # the per-pawn gear ratio's band, and the price band
 Pawn.GearCapPercent = 150
 Pawn.LevelWindow = 2               # D1, in levels either way
+Pawn.GainXP = 0                    # a pawn is pinned to the level it was hired at
 Pawn.OfferedPerPage = 12           # gossip carries at most 16 rows per page
 Pawn.FeaturedMin = 10              # per picker instance, drawn from the pool
 Pawn.FeaturedMax = 15
@@ -171,11 +172,11 @@ the world, and this way the pawn's own level is applied **after** playerbots' re
 fires on login when the pawn is more than three levels from its master
 (`PlayerbotMgr.cpp:639-651`). Applied work:
 
-1. If the pawn is **outside** the window (`|bot level - owner level| > Pawn.LevelWindow`), re-level
-   it to the level it would be offered at: `PlayerbotFactory factory(bot, wanted, ...)` then
-   `factory.Randomize(false)`, mirroring the existing re-level block. A pawn already inside the
-   window is left alone — the invariant is the window, not one exact level — and the roster then
-   records the level the pawn actually has.
+1. If the pawn's level is not the one it was hired at (`pawn_roster.target_level`), rebuild it
+   there: `PlayerbotFactory factory(bot, target, ...)` then `factory.Randomize(false)`. This is what
+   undoes playerbots' login pass, which rebuilds a type-2 bot at its master's exact level when the
+   gap is more than three — a pawn does not follow its owner up. It also sets
+   `PLAYER_FLAGS_NO_XP_GAIN` unless `Pawn.GainXP`, so the level cannot drift between logins.
 2. `PlayerbotFactory::InitTalentsBySpecNo(bot, spec_no, true)` — the archetype's spec, pinned
    (`PlayerbotFactory.cpp:1802`).
 3. Prune every blacklisted spell the pawn still has (`Player::removeSpell`).
@@ -222,12 +223,13 @@ comes from the AI's strategies (`TankWarriorStrategy` declares `STRATEGY_TYPE_TA
 `GetPlayerSpecTab`. Steps 3 and 4 are what make those agree with the pinned spec.
 
 That pass runs **once**: the roster's `built` column records it, so afterwards the pawn keeps
-whatever it wears, including gear the player gives it, and playerbots' own level-up maintenance
-(`AutoMaintenanceOnLevelupAction` → `InitEquipment(true)`, also spec-weighted) keeps it current as
-it levels in the party. A pawn that is re-levelled because it fell outside the window is rebuilt and
-re-geared, which is the price of pulling it back into the window. A dismissed pawn keeps its `built`
-flag, so re-recruiting it does not strip the gear it earned — unless the recruit names a different
-spec, in which case the gear on it was scored for the old one and the pass runs again.
+whatever it wears, including gear the player gives it. A pawn is pinned to the level it was hired at,
+so it does not level in the party and there is no maintenance pass to follow it up. The pass runs
+again only when the pin has to be restored — playerbots rebuilt the bot at its master's level on
+login, or the pawn was re-hired at a new offer level — and then it re-gears at that level with the
+owner's gear score as the ceiling. A dismissed pawn keeps its `built` flag, so re-recruiting it at
+the same level does not strip the gear it earned — unless the recruit names a different spec or a
+new level, in which case the gear on it was scored for the old build and the pass runs again.
 
 ### Picker
 
@@ -326,4 +328,5 @@ cross-checked before the 40-minute build rather than after it. The in-game steps
    (`OnPlayerCanLearnSpell` refuses), and the spell is absent from its spellbook.
 6. Kill something with a drop: both pawns pass; the corpse is the player's under free-for-all.
 7. Relog, then restart the world server: both pawns return without being re-recruited.
-8. Level past the window with a pawn in the party: on its next login it is re-levelled into ±2.
+8. Level past the window with a pawn in the party: it stays at its hired level, the inn marks it
+   `fallen behind`, and hiring it again at the new offer level charges the fee once.
