@@ -35,7 +35,7 @@ and both refuse bot-controlled sessions.
 4. Marks the position on the player's map (addon message; see §7). There is no ghost phase
    and no corpse marker to fall back on, so the addon pin is the only pointer at the
    container.
-5. Wakes the character **alive at the closest graveyard**, at half health, with no
+5. Wakes the character **alive at the closest graveyard**, at full health, with no
    resurrection sickness, and turns the corpse into bones (§5.9). There is no release and no
    run back to a body: the walk back is to the container, which stays where the character
    died.
@@ -272,7 +272,7 @@ nothing.
 ### 5.9 Waking at the graveyard
 
 A survivor death leaves no ghost and no corpse run. In the same hook that lifts the gear,
-the character is revived **alive at the closest graveyard**, at half health, with no
+the character is revived **alive at the closest graveyard**, at full health, with no
 resurrection sickness, and the corpse is turned into bones. The container stays at the death
 position, so the walk back is to the container, not to a body. Paths below are relative to
 `src/server/game/` in the pinned core:
@@ -282,9 +282,11 @@ position, so the walk back is to the container, not to a body. Paths below are r
   `ResurrectPlayer(0.5f); SpawnCorpseBones();` (`Entities/Player/Player.cpp:5024-5030`) and
   then teleports to `sGraveyard->GetClosestGraveyard(this, GetTeamId())`
   (`Player.cpp:5034-5049`) [V]. The survivor path generalizes a path the realm already runs,
-  rather than inventing one.
+  rather than inventing one; it passes `1.0f` where the core passes `0.5f`, because the gear
+  is already the penalty and a half-health walk back with no equipment only invites a second
+  death.
 - `ResurrectPlayer(float restore_percent, bool applySickness = false)` (`Player.h:2074`, impl
-  `Player.cpp:4564`) turns the `0.5f` into half health, applies no sickness by default,
+  `Player.cpp:4564`) turns the `1.0f` into full health, applies no sickness by default,
   removes the ghost auras, sets `DeathState::Alive`, clears `m_deathTimer`, and sends
   `SMSG_DEATH_RELEASE_LOC` with `-1`, which drops the spirit-healer marker [V].
 - `SpawnCorpseBones(bool triggerSave = true)` (`Player.h:2066`, impl `Player.cpp:4782-4798`)
@@ -455,9 +457,9 @@ What was run, and what it proves:
   -> `:244-248` `target_include_directories(... PUBLIC ...)`), so `#include
   "PlayerbotFactory.h"` resolves the same way mod-hardcore's `#include "Playerbots.h"` does.
 - **Graveyard revival, compile-level only.** What was checked is the core contract the path
-  relies on, not a running server: `ResurrectPlayer(0.5f)` is the call `RepopAtGraveyard`
-  already makes for unreachable deaths (`Player.cpp:5024-5030`), `applySickness` defaults to
-  `false` (`Player.h:2074`), `SpawnCorpseBones` converts the corpse and clears
+  relies on, not a running server: `ResurrectPlayer` is the call the core's own unreachable-death
+  branch makes (`Player.cpp:5024-5030`, at `0.5f`; the module passes `1.0f`), `applySickness`
+  defaults to `false` (`Player.h:2074`), `SpawnCorpseBones` converts the corpse and clears
   `_corpseLocation` (`Player.cpp:4782-4798`), and the destination is
   `sGraveyard->GetClosestGraveyard(this, GetTeamId())` (`Player.cpp:5034-5049`). The module
   still compiles against the pinned headers. Nothing in this path was run in a client or on
@@ -465,5 +467,5 @@ What was run, and what it proves:
 - **Not verifiable here:** the in-game feel - that the container is visible at the death
   spot, that the loot window lists the items, that the map pin lands on the right coordinates,
   that a looted item comes back enchanted, and that the character wakes alive at the closest
-  graveyard at half health, with no resurrection sickness and bones where the corpse was.
+  graveyard at full health, with no resurrection sickness and bones where the corpse was.
   Those need a client session on the Thor.

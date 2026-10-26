@@ -98,7 +98,7 @@ exactly `Addmod_survivorScripts`, defined in
 * `PlayerScript::OnPlayerUpdate` revives a survivor queued by the death. The
   revive cannot run inside `OnPlayerJustDied` (it is inside `Player::Kill`, before
   the corpse exists), so the guid waits in an in-memory set and the next update
-  calls `Player::ResurrectPlayer(0.5f)`, `Player::SpawnCorpseBones()` and
+  calls `Player::ResurrectPlayer(1.0f)`, `Player::SpawnCorpseBones()` and
   `Player::RepopAtGraveyard()` - the same sequence the core uses for a death it
   treats as unreachable. A logout that beats the tick is covered by
   `HandleLogin` (flagged, dead, unclaimed row), a Release by

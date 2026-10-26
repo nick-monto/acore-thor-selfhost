@@ -168,7 +168,7 @@ The admin escape hatch is the database: delete the character's `hardcore_flags` 
 equipped items and the bag contents are lifted into a lootable container at the death position, the
 position is re-sent to the player's map add-on, and a bot-controlled death destroys and re-rolls the
 gear instead of dropping it. There is no ghost phase and no corpse run: the character is revived
-alive at the closest graveyard, at half health, without resurrection sickness, and the corpse is
+alive at the closest graveyard, at full health, without resurrection sickness, and the corpse is
 turned to bones, so the walk back is to the container. Battleground and arena deaths keep the core's
 own handling. The mechanism, the core hooks it uses and their evidence are in
 [`SURVIVOR-DESIGN.md`](SURVIVOR-DESIGN.md).
@@ -181,7 +181,7 @@ own handling. The mechanism, the core hooks it uses and their evidence are in
 | Tables | `survivor_flags`, `survivor_corpses` and `survivor_corpse_items` in the characters database, created programmatically at startup - deliberately no module SQL for them, because a failing module SQL file aborts the worldserver boot on this fork | `docs/SURVIVOR-DESIGN.md` §Schema [V] |
 | Bot modifier | with `Survivor.ApplyToBots = 1` a bot death strips the equipped gear with `PlayerbotFactory::DestroyEquippedGear` and the bags with `PlayerbotFactory::InitBags(true)`, then re-rolls gear for the bot's own class, level and spec on its next `OnPlayerUpdate` with `PlayerbotFactory::AutoGear`; no container unless `Survivor.BotDropContainer = 1` (default off: it would be a free-gear faucet) | `PlayerbotFactory.cpp:3978-4003` [V] |
 | Mutual exclusion | `.survivor on` refuses a Hardcore-flagged character and `.hardcore on` refuses a Survivor-flagged one; each reads the other's table directly and tolerates it being absent, so neither module links the other | `modules/mod-hardcore`, `docs/SURVIVOR-DESIGN.md` §Activation [V] |
-| Verified | what was checked is what `docs/SURVIVOR-DESIGN.md` §Verification lists (the core APIs against pin `8a4e76e`, the gameobject entry against the base dump). The in-game behaviour - the container at the death spot, the loot window, the map pin, the enchanted item coming back, and waking alive at the closest graveyard at half health with bones where the corpse was - needs a client session on the Thor and was **not** run in a client or on the Thor | **not a build, client or Thor run** |
+| Verified | what was checked is what `docs/SURVIVOR-DESIGN.md` §Verification lists (the core APIs against pin `8a4e76e`, the gameobject entry against the base dump). The in-game behaviour - the container at the death spot, the loot window, the map pin, the enchanted item coming back, and waking alive at the closest graveyard at full health with bones where the corpse was - needs a client session on the Thor and was **not** run in a client or on the Thor | **not a build, client or Thor run** |
 
 ## 14. Travel and death on a solo realm
 

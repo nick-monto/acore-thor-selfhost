@@ -24,7 +24,7 @@
  *   - The position is also sent to the player's addon ('SURV\tsite ...'), which
  *     draws the map pin; the addon outlives the corpse and the resurrection.
  *   - The character is then revived at the closest graveyard on its next update:
- *     at half health, without resurrection sickness and without a ghost, so a
+ *     at full health, without resurrection sickness and without a ghost, so a
  *     death costs the gear and the walk back, never a corpse run.
  *   - Bot-controlled characters are stripped and re-rolled with playerbots'
  *     own factory: same bot, fresh kit for its class, level and specs.
@@ -618,7 +618,7 @@ namespace
     }
 
     // Replaces the ghost the core would leave behind with a live character at
-    // the closest graveyard, at half health and without resurrection sickness.
+    // the closest graveyard, at full health and without resurrection sickness.
     // Does nothing when there is no death to undo.
     //
     // The order is the one Player::RepopAtGraveyard uses for an unreachable
@@ -638,7 +638,7 @@ namespace
         if (player->InBattleground() || player->InArena())
             return;
 
-        player->ResurrectPlayer(0.5f);
+        player->ResurrectPlayer(1.0f);
         player->SpawnCorpseBones();
         player->RepopAtGraveyard();
 
