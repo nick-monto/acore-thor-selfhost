@@ -59,6 +59,11 @@ choosing between.
 Nothing rotational is ever in a pool: a pawn missing its rotation is broken, not different. Nor are
 capstone talents — the pools ship trainer abilities and small talents only.
 
+Every shipped name was validated against the 3.3.5 spell table on 2026-10-26: 152 distinct names over
+the 293 entries of the 31 blacklists and 31 variant pools, all resolving, none naming an ability only
+another class can learn. That check is not part of the build, so a name added later is proven by the
+`archetypes:` line in `Server.log` at the next startup.
+
 ## A pawn is what you hired
 
 A pawn does not level with its owner. It is pinned to the level it was offered at, and the pin is

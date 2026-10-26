@@ -201,6 +201,12 @@ Pawn.Debug = 0
 # nothing is logged as an error - a restriction that silently does nothing is
 # worse than a loud one. Two known aliases are harmless: a spell that is shared
 # between two specs ("Swipe", "Mangle") blacklists every spell of that name.
+#
+# Every name in this section and in the variant pools below was checked against
+# the 3.3.5 spell table on 2026-10-26: 152 distinct names over 293 entries, all
+# of them resolve, and none names an ability that only another class can learn.
+# That check is a one-off and not part of the build, so a name added later is
+# only proven by the `archetypes:` line in Server.log at the next startup.
 
 # Warrior: arms, fury, prot
 Pawn.Blacklist.1.0 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam, Spell Reflection
