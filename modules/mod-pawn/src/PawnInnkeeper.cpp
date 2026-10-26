@@ -100,6 +100,19 @@ namespace
         }
     }
 
+    // Playerbots.PremadeSpecName carries its own vocabulary ("prot pve", "shadow
+    // pve"). The player does not need the suffix - the row already names the
+    // role - so it is trimmed for display only; the stored name is what RoleFor
+    // and the blacklist keys use.
+    std::string DisplaySpec(std::string spec)
+    {
+        static std::string const suffix = " pve";
+        if (spec.size() > suffix.size() &&
+            spec.compare(spec.size() - suffix.size(), suffix.size(), suffix) == 0)
+            spec.erase(spec.size() - suffix.size());
+        return spec;
+    }
+
     void Notify(Player* player, std::string const& text)
     {
         if (!text.empty())
@@ -246,7 +259,7 @@ private:
             std::string text = offer.Name;
             if (text.empty())
                 text = "An unnamed pawn";
-            text += " - " + std::string(ClassName(offer.Class)) + ", " + offer.SpecName +
+            text += " - " + std::string(ClassName(offer.Class)) + ", " + DisplaySpec(offer.SpecName) +
                     ", level " + std::to_string(uint32(offer.Level)) +
                     " (" + RoleName(offer.Role) + ")";
 
