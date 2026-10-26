@@ -1,0 +1,143 @@
+[worldserver]
+
+########################################
+# mod-pawn configuration
+########################################
+#
+# Pawns: named bots you recruit at an obelisk in town, keep in your party, and
+# level alongside. The model, the route and the acceptance criteria are in
+# docs/PAWN-SYSTEM-DESIGN.md and docs/PAWN-INTEGRATION-PLAN.md.
+#
+# A pawn is a type-2 "AddClass" character from the playerbots pool: a real
+# character in a real group, so it earns group XP, keeps its gear and saves
+# itself. This module adds the four things the pool does not have on its own:
+#
+#   1. a roster, so a recruited pawn comes back after a relog or a restart;
+#   2. a doorway, the obelisk gameobject, with a paged picker;
+#   3. a level window, so the pawns offered are within Pawn.LevelWindow levels
+#      of the player instead of snapping to the player's exact level;
+#   4. an archetype per pawn: one premade PvE spec plus a hard spellbook
+#      blacklist, so a pawn is a specialist and the player has to swap pawns
+#      to get a different toolkit.
+#
+# The party cap (Pawn.MaxPawns) counts pawns only. Strangers met in the world
+# are ordinary random bots and are not counted, so a full group still needs
+# them - that is deliberate.
+#
+# Playerbots settings this module expects, written by scripts/thor-install.sh:
+#   Playerbots.AddClassCommand = 0        the obelisk is the only pawn doorway
+#   Playerbots.LootNeedRollLevel = 0      a pawn passes instead of needing
+#   Playerbots.LootGreedRollLevel = 0     a pawn passes instead of greeding
+#   Playerbots.FreeMethodLoot = 0         a pawn leaves free-for-all corpses
+#   Playerbots.KeepAltsInGroup = 1        a pawn stays when the player relogs
+
+# Master switch. 0 disables the obelisk and the login hooks; existing roster
+# rows stay in the database and nothing is logged out.
+# Default: 1 (enabled)
+Pawn.Enable = 1
+
+# How many pawns one player may keep in the party at once. The third recruit is
+# refused at the obelisk.
+# Default: 2
+Pawn.MaxPawns = 2
+
+# How many levels above or below the player an offered pawn may be. Each pool
+# pawn gets a stable offset inside this window, derived from the player and
+# pawn guids, so the same pawn is always offered at the same level for the same
+# player. 0 makes every pawn the player's exact level.
+# Default: 2
+Pawn.LevelWindow = 2
+
+# Offers per gossip page. The gossip packet carries at most 16 rows and the
+# server aborts on a 33rd, so this is clamped to 16 minus the party rows and
+# the two navigation rows.
+# Default: 12
+Pawn.OfferedPerPage = 12
+
+# The obelisk gameobject entry. Must match the template in
+# data/sql/world/base/pawn_10_obelisk.sql.
+# Default: 5000010
+Pawn.ObeliskEntry = 5000010
+
+# Log every recruit, dismiss, level and prune at INFO level. Leave 0 in normal
+# play: the login path is noisy otherwise.
+# Default: 0 (disabled)
+Pawn.Debug = 0
+
+########################################
+# Archetypes: the spellbook a pawn never has
+########################################
+#
+# One block per class and premade spec number, spelled
+#   Pawn.Blacklist.<class>.<spec_no> = Spell Name, Spell Name, ...
+#
+# <class> is the ChrClasses id:
+#   1 warrior   2 paladin   3 hunter   4 rogue   5 priest
+#   6 death knight   7 shaman   8 mage   9 warlock   11 druid
+#
+# <spec_no> is the Playerbots.PremadeSpecLink number for that class, and the
+# names are the ones Playerbots.PremadeSpecName gives it. Only the PvE specs
+# are offered to a player, so only those need a block.
+#
+# Each list holds the signature abilities of the *other* specs of the same
+# class: the spells a pawn must not have if it is to be a specialist. A prot
+# warrior without Shield Wall cannot tank a boss for the player who brought an
+# arms pawn; a shadow priest without Resurrection cannot replace the healer.
+# That is the point: the toolkit is the reason to swap.
+#
+# Names, not ids, because a name is reviewable and a bare id is not. They are
+# resolved against the spell table once at startup, and a name that resolves to
+# nothing is logged as an error - a restriction that silently does nothing is
+# worse than a loud one. Two known aliases are harmless: a spell that is shared
+# between two specs ("Swipe", "Mangle") blacklists every spell of that name.
+
+# Warrior: arms, fury, prot
+Pawn.Blacklist.1.0 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam, Spell Reflection
+Pawn.Blacklist.1.1 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam, Spell Reflection
+Pawn.Blacklist.1.2 = Mortal Strike, Bloodthirst, Bladestorm, Recklessness, Sweeping Strikes
+
+# Paladin: holy, prot, ret
+Pawn.Blacklist.2.0 = Crusader Strike, Divine Storm, Avenger's Shield, Hammer of the Righteous, Righteous Defense
+Pawn.Blacklist.2.1 = Holy Light, Flash of Light, Holy Shock, Redemption, Divine Storm, Crusader Strike
+Pawn.Blacklist.2.2 = Holy Light, Flash of Light, Holy Shock, Redemption, Avenger's Shield, Hammer of the Righteous, Righteous Defense
+
+# Hunter: beast mastery, marksmanship, survival
+Pawn.Blacklist.3.0 = Aimed Shot, Chimera Shot, Explosive Shot, Black Arrow
+Pawn.Blacklist.3.1 = Bestial Wrath, Kill Command, Explosive Shot, Black Arrow
+Pawn.Blacklist.3.2 = Aimed Shot, Chimera Shot, Bestial Wrath, Kill Command
+
+# Rogue: assassination, combat, subtlety. Subtlety keeps the crowd control.
+Pawn.Blacklist.4.0 = Blade Flurry, Adrenaline Rush, Shadowstep, Premeditation, Hemorrhage, Sap, Blind, Vanish
+Pawn.Blacklist.4.1 = Mutilate, Hunger for Blood, Shadowstep, Premeditation, Hemorrhage, Sap, Blind, Vanish
+Pawn.Blacklist.4.2 = Mutilate, Hunger for Blood, Blade Flurry, Adrenaline Rush
+
+# Priest: discipline, holy, shadow. Shadow keeps no resurrection and no group heal.
+Pawn.Blacklist.5.0 = Shadowform, Mind Flay, Vampiric Touch, Devouring Plague, Mind Blast
+Pawn.Blacklist.5.1 = Shadowform, Mind Flay, Vampiric Touch, Devouring Plague, Mind Blast
+Pawn.Blacklist.5.2 = Greater Heal, Circle of Healing, Prayer of Healing, Holy Nova, Resurrection, Renew
+
+# Death knight: blood, frost, unholy
+Pawn.Blacklist.6.0 = Howling Blast, Frost Strike, Scourge Strike, Summon Gargoyle, Unholy Blight
+Pawn.Blacklist.6.1 = Vampiric Blood, Rune Tap, Scourge Strike, Summon Gargoyle, Unholy Blight
+Pawn.Blacklist.6.2 = Vampiric Blood, Rune Tap, Howling Blast, Frost Strike
+
+# Shaman: elemental, enhancement, restoration
+Pawn.Blacklist.7.0 = Stormstrike, Lava Lash, Riptide, Chain Heal, Healing Wave, Lesser Healing Wave, Ancestral Spirit
+Pawn.Blacklist.7.1 = Chain Lightning, Lava Burst, Chain Heal, Riptide, Ancestral Spirit
+Pawn.Blacklist.7.2 = Stormstrike, Lava Lash, Chain Lightning, Lava Burst, Lightning Bolt
+
+# Mage: arcane, fire, frost
+Pawn.Blacklist.8.0 = Fireball, Pyroblast, Fire Blast, Combustion, Frostbolt, Ice Lance, Icy Veins, Blizzard, Summon Water Elemental
+Pawn.Blacklist.8.1 = Arcane Blast, Arcane Missiles, Arcane Barrage, Frostbolt, Ice Lance, Icy Veins, Blizzard, Summon Water Elemental
+Pawn.Blacklist.8.2 = Arcane Blast, Arcane Missiles, Arcane Barrage, Fireball, Pyroblast, Fire Blast, Combustion
+
+# Warlock: affliction, demonology, destruction
+Pawn.Blacklist.9.0 = Incinerate, Chaos Bolt, Conflagrate, Soul Fire, Summon Felguard, Demonic Empowerment
+Pawn.Blacklist.9.1 = Unstable Affliction, Haunt, Incinerate, Chaos Bolt, Conflagrate, Soul Fire
+Pawn.Blacklist.9.2 = Unstable Affliction, Haunt, Summon Felguard, Demonic Empowerment
+
+# Druid: balance, bear, restoration, cat
+Pawn.Blacklist.11.0 = Mangle, Shred, Rip, Maul, Swipe, Growl, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility
+Pawn.Blacklist.11.1 = Starfire, Wrath, Starfall, Moonfire, Shred, Rip, Pounce, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility
+Pawn.Blacklist.11.2 = Starfire, Wrath, Starfall, Mangle, Shred, Rip, Maul, Swipe, Growl
+Pawn.Blacklist.11.3 = Starfire, Wrath, Starfall, Maul, Swipe, Growl, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility

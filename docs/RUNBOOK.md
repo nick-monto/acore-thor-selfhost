@@ -317,6 +317,47 @@ grep -i "mod-survivor\|survivor" /opt/acore/logs/Server.log | tail -5
 
 Then opt a character in with `.survivor on` and die once (opt-in is one-way: there is no `.survivor off`, and a character promoted with `.hardcore on` loses the Survivor flag and can never get it back). That is the point where the container, the loot window, the map pin and the recovered item's enchantments need a client - and where the revival has to be watched: the character should wake alive at the closest graveyard, full health, no resurrection sickness, bones where the corpse was. None of it has been exercised in a client or on the Thor.
 
+## Part 5c — Prove the pawn module is live
+
+Same shape as 5a and 5b, for `mod-pawn`:
+
+```bash
+# 1. the module conf the worldserver actually reads
+ls -l /opt/acore/etc/modules/mod-pawn.conf
+grep -E '^Pawn\.(Enable|MaxPawns|LevelWindow|ObeliskEntry)' /opt/acore/etc/modules/mod-pawn.conf
+
+# 2. the obelisk template and its two spawns reached the world database
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
+  -e "SELECT entry, type, displayId, name, ScriptName FROM gameobject_template WHERE entry = 5000010;
+      SELECT guid, map, zoneId, position_x, position_y, position_z FROM gameobject WHERE id = 5000010;"
+
+# 3. the roster table was created at startup (programmatically, not by module SQL)
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_characters \
+  -e "SHOW COLUMNS FROM pawn_roster;
+      SELECT COUNT(*) AS rows_total, SUM(state = 1) AS in_party FROM pawn_roster;"
+
+# 4. the module registered itself and resolved every archetype blacklist name
+grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
+```
+
+- (1) prints the file and the four switches. `Pawn.MaxPawns = 2` and `Pawn.LevelWindow = 2` are the
+  installer's values; `Pawn.Enable = 0` turns the obelisk off and leaves existing rows alone.
+- (2) prints one template row (`5000010`, type `10`, `displayId` 7017, `ScriptName go_pawn_obelisk`)
+  and two spawn rows (map 0 Stormwind, map 1 Orgrimmar). No template row means the module SQL never
+  applied; no spawn row means the obelisk is not in the world but the code is live.
+- (3) prints the seven columns and `0` rows on a fresh realm. A non-zero `in_party` is a pawn
+  currently in someone's party.
+- (4) is the important one: `module.pawn: archetypes: N specs named, ... R blacklisted spells
+  resolved, U names unresolved`. Any `Pawn.Blacklist.<class>.<spec>: no spell is named '...'` line
+  is an ERROR and means that particular restriction does nothing - fix the name in
+  `/opt/acore/etc/modules/mod-pawn.conf` and restart. The config is read at load, not per use.
+
+Then walk to the obelisk in Stormwind's Trade District or at the Orgrimmar Valley of Strength and
+use it. What needs a client session, and has not been run on the Thor: the paged menu itself, the
+level and spec each row advertises, that the recruited pawn arrives at that level with that spec, that
+a third recruit is refused, that a blacklisted spell is refused when the pawn tries to learn it, that
+both pawns pass on a drop, and that the party comes back after a relog and a world-server restart.
+
 ## Part 6 — Prove it with a client before touching the launcher
 
 On a PC with the same 3.3.5a client: set `Data/<locale>/realmlist.wtf` to `set realmlist <thor-lan-ip>`, log in with the account from Part 5. This closes **G3** without any Android-specific risk.

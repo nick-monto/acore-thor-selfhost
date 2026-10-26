@@ -166,40 +166,49 @@ gate: `0` disables trading with them outright, `2` ("only buy") still accepts gi
 
 ## What has to be written
 
+**Superseded by [PAWN-INTEGRATION-PLAN.md](PAWN-INTEGRATION-PLAN.md).** That document carries the
+decisions taken since this study, the component list, the ordered phases and the acceptance
+criteria. What follows is the study's original sketch, kept for the reasoning; where the two
+disagree, the plan wins.
+
 ### Roster schema
 
-One table in the playerbots schema, so it lives beside the bot data it describes:
+The final table is `pawn_roster` in the **characters** database, created programmatically at startup
+(`CREATE TABLE IF NOT EXISTS`) rather than by module SQL, because a failing module SQL file aborts
+the worldserver boot on this fork (`SERVER-STACK.md` §13):
 
 ```sql
-CREATE TABLE IF NOT EXISTS `playerbots_pawn_roster` (
-  `owner_guid`  INT UNSIGNED NOT NULL,   -- the real player's character guid
-  `bot_guid`    INT UNSIGNED NOT NULL,   -- the pawn's character guid
-  `role`        TINYINT UNSIGNED NOT NULL DEFAULT 0,  -- 0 auto, 1 tank, 2 healer, 3 dps
-  `state`       TINYINT UNSIGNED NOT NULL DEFAULT 0,  -- 0 offered, 1 recruited, 2 released
-  `recruited_at` DATETIME NULL,
-  PRIMARY KEY (`owner_guid`, `bot_guid`)
+CREATE TABLE IF NOT EXISTS `pawn_roster` (
+  `owner_guid`   INT UNSIGNED NOT NULL,          -- the real player's character
+  `bot_guid`     INT UNSIGNED NOT NULL,          -- the pawn
+  `spec_no`      TINYINT UNSIGNED NOT NULL,      -- Playerbots.PremadeSpecLink.<class>.<spec_no>
+  `role`         TINYINT UNSIGNED NOT NULL,      -- 1 tank, 2 healer, 3 dps
+  `state`        TINYINT UNSIGNED NOT NULL,      -- 1 in the party, 0 dismissed
+  `target_level` TINYINT UNSIGNED NOT NULL,      -- the level the pawn was recruited at
+  `updated_at`   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`owner_guid`, `bot_guid`),
+  KEY `bot_guid` (`bot_guid`),
+  KEY `owner_state` (`owner_guid`, `state`)
 );
 ```
 
-No `characters` change and no `world` change beyond the obelisk spawn.
+No `characters` change beyond that table and no `world` change beyond the obelisk spawn.
 
-### Patch surface
+### Module, not patch
 
-The work belongs in the playerbots patch, beside `playerbots-player-centric.patch`, not in a new
-module: the code needs `PlayerbotMgr`/`RandomPlayerbotMgr` internals, and the patch route is the one
-this repository has already proven builds and applies on the pinned commit. A separate module would
-have to reach those headers from a different CMake target, which is unverified.
+This study recommended extending `playerbots-player-centric.patch`, because a separate module
+"would have to reach those headers from a different CMake target, which is unverified". That is now
+verified, and the work is a module (`modules/mod-pawn`) instead:
 
-The patch adds:
+- Every module's `src` is added to one shared include list and static modules compile into a single
+  library (`modules/CMakeLists.txt:270-300`, `-DMODULES=static` in `server-aarch64.yml:132`), so
+  `#include "Bot/PlayerbotMgr.h"` resolves from another module.
+- Nothing needs to be *inside* a playerbots function: `PlayerScript::OnLogin` fires for bot sessions
+  (`CharacterHandler.cpp:1126`), `PlayerScript::OnPlayerCanLearnSpell` refuses a spell at the top of
+  `Player::learnSpell` (`Player.cpp:3428-3431`), and `PlayerbotWorldThreadProcessor::QueueOperation`
+  is a public API for deferred world-thread work.
 
-1. `PawnRoster` — load, save, and `Recruit(Player*, ObjectGuid)` / `Dismiss(Player*, ObjectGuid)`
-   wrapping `AddPlayerBot` and `LogoutPlayerBot`, plus the role-to-strategy preset.
-2. `PlayerbotMgr::OnPlayerLogin` extension — re-recruit every `state = 1` row for that character
-   before falling through to `BotAutologin` (`src/Bot/PlayerbotMgr.cpp:1710-1760`).
-3. The obelisk `GameObjectScript`: `OnGossipHello` builds the page, `OnGossipSelect` routes recruit,
-   dismiss and paging, both returning `true`.
-4. The `PAWN` addon-whisper protocol, answered the way `mod-e-interact` answers `EINT`
-   (`modules/mod-e-interact/src/e_interact.cpp:1-20` documents the pattern).
+The patch is untouched by the pawn work.
 
 ### Client side
 
@@ -224,19 +233,27 @@ zone tier. The two features compose: pawns are *added* bots (`PlayerbotMgr`), th
 *world* bots (`RandomPlayerbotMgr`). The crowd cap (`RandomBotNearPlayersMaxPerPlayer`) still governs
 how many strangers are around while the pawns are in the party.
 
-## Decisions to take before coding
+## Decisions taken
 
-1. **Pool size.** 50 accounts (500 characters) is the shipped default and probably too much: it
-   bloats the characters database and makes the picker meaningless. 3 accounts gives 30 pawns,
-   enough for a rift-like roster. This is a one-line installer change.
-2. **Offered roster.** Random stable subset of the pool per player (e.g. 12, keyed by character
-   guid), or the whole pool paged by class. The first reads like Dragon's Dogma; the second is more
-   useful for "I want a healer now".
-3. **Own-account pawns allowed?** Cheap to allow (`AllowAccountBots` already does), and it is the
-   only way to have a pawn the player actually built.
-4. **Loot sharing** — see above. Recommend: pawns never compete.
-5. **Death.** Pawns die and are resurrected by normal playerbots behaviour. Whether a dead pawn is
-   auto-released from the roster, or waits in the group, is a taste decision.
+1. **Pool size** — 5 accounts (50 characters across both teams), written by the installer as
+   `Playerbots.AddClassAccountPoolSize = 5`. 50 accounts was 500 characters and made the picker a
+   database dump.
+2. **Offered roster** — the whole team-and-class pool, paged, with a stable level and spec per pawn
+   derived from the two guids. No per-player subset: a stable subset would hide the class the
+   player wants, and paging already keeps the page short.
+3. **Own-account pawns** — allowed by the pool rules (`AllowAccountBots`), but the obelisk is the
+   only doorway, and `Playerbots.AddClassCommand = 0` keeps the command GM-only so the party cap
+   cannot be sidestepped.
+4. **Loot sharing** — pawns never compete: `LootNeedRollLevel = 0`, `LootGreedRollLevel = 0`,
+   `FreeMethodLoot = 0`.
+5. **Death** — a dead pawn stays in the roster and in the group; playerbots' own resurrection
+   behaviour applies. Nothing is auto-released, so a wipe costs a walk back, not a re-recruit.
+6. **Level window** — pawns are offered, and kept, within `Pawn.LevelWindow` (default ±2) levels of
+   the player, instead of snapping to the player's exact level.
+7. **Archetypes** — each pawn is one premade PvE spec plus a blacklist of the other specs' signature
+   abilities, so the toolkit is the reason to swap pawns.
+8. **Party cap** — the player plus two pawns; a third needs strangers from the world, which are not
+   pool pawns and are not counted.
 
 ## Risks
 
@@ -271,16 +288,18 @@ playerbots runtime behaviour rather than a compile-time contract.
 
 ## Effort
 
-Ordered by cost, and each step is independently useful:
+What was built, against the plan's phases:
 
-| Step | Work | Size |
+| Step | Work | State |
 |---|---|---|
-| 1 | Prove the model in game with `.playerbots bot addclass` (no code) | minutes |
-| 2 | Roster table + recruit/dismiss + relog persistence in the patch | ~350 lines C++, 1 SQL file |
-| 3 | Obelisk: `gameobject_template` row, spawns, `GameObjectScript` with a paged menu | ~250 lines C++, 2 SQL files |
-| 4 | `PAWN` protocol + `Pawn` addon + launcher wiring | ~250 lines Lua, ~30 lines Kotlin |
-| 5 | Config keys, installer and workflow wiring, runbook | ~100 lines |
+| 1 | Prove the model in game with `.playerbots bot addclass` (no code) | **done in game**: `.playerbots bot addclass warrior` recruits, levels and gears a pool pawn |
+| 2 | Roster: schema, load, recruit/dismiss, relog persistence | **built** in `modules/mod-pawn/src/PawnMgr.cpp` |
+| 3 | Obelisk: `gameobject_template` row, two spawns, paged `GameObjectScript` | **built** in `data/sql/world/base/pawn_10_obelisk.sql` and `src/PawnObelisk.cpp` |
+| 4 | Level window and archetypes: spec pinning, spellbook blacklist, learn gate | **built** in `src/PawnArchetype.cpp` and `src/PawnScripts.cpp` |
+| 5 | Config keys, installer and workflow wiring, runbook | **built** |
+| 6 | `PAWN` addon channel and a `Pawn` addon for the launcher | **not built**: the gossip picker is the complete doorway, and the addon was never requested |
 
-The feature is feasible. The uncertainty is concentrated in step 3 and 4 presentation, not in the
-model: the party, the levelling, the persistence and the pool are upstream behaviour that only
-needs a roster and a doorway in front of it.
+The feature is feasible and now implemented server-side. What remains unverified is the same thing
+the study named: the in-game feel - the menu, the level window, the archetype restrictions and the
+loot behaviour all need a client session on the Thor. The offline checks and the arm64 compile gate
+are the only verification that exists without one; see the plan's verification section.

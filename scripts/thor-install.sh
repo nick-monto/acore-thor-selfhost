@@ -63,7 +63,8 @@ CORE_REPO="https://github.com/mod-playerbots/azerothcore-wotlk"
 CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
 PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
-# mod-creature-gear, mod-hardcore, mod-e-interact and mod-survivor live in *this* repository
+# mod-creature-gear, mod-hardcore, mod-e-interact, mod-survivor and mod-pawn live in *this*
+# repository
 # (modules/), not in repositories of their own, so --from-source has to fetch this one's tarball as
 # well when the script is installed from a copy of the repo. --github-token (THOR_GH_TOKEN) is what
 # makes that work while private.
@@ -106,6 +107,17 @@ SURVIVOR_CONF_DEFAULTS=(
     "Survivor.ApplyToBots=1"
     "Survivor.BotRegenOnDeath=1"
     "Survivor.BotDropContainer=1"
+)
+# mod-pawn's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. Same contract as
+# the survivor list: a key outside its range is silently replaced by the module's own fallback, so
+# write_configs() restores it from here.
+PAWN_CONF_DEFAULTS=(
+    "Pawn.Enable=1"
+    "Pawn.MaxPawns=2"
+    "Pawn.LevelWindow=2"
+    "Pawn.OfferedPerPage=12"
+    "Pawn.ObeliskEntry=5000010"
+    "Pawn.Debug=0"
 )
 DB_USER="acore"
 DB_PASS=""
@@ -254,6 +266,28 @@ conf_get() {   # conf_get FILE KEY - print the live value (last uncommented defi
 }
 
 conf_get_unquoted() { conf_get "$1" "$2" | tr -d '"'; }
+
+pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn accepts
+    # Pawn.Enable and Pawn.Debug are 0|1, MaxPawns 0-4 (the gossip page has room for four party
+    # rows), LevelWindow 0-10, OfferedPerPage 1-14, and the obelisk is a custom entry in the
+    # 5000000 range the custom SQL owns.
+    local key="$1" val="$2"
+    case "$val" in ''|*[!0-9]*) return 1 ;; esac
+    case "$key" in
+        Pawn.Enable|Pawn.Debug)
+            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
+        Pawn.MaxPawns)
+            [ "$val" -ge 0 ] && [ "$val" -le 4 ] ;;
+        Pawn.LevelWindow)
+            [ "$val" -ge 0 ] && [ "$val" -le 10 ] ;;
+        Pawn.OfferedPerPage)
+            [ "$val" -ge 1 ] && [ "$val" -le 14 ] ;;
+        Pawn.ObeliskEntry)
+            [ "$val" -ge 5000000 ] && [ "$val" -le 5099999 ] ;;
+        *)
+            return 1 ;;
+    esac
+}
 
 survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one the module accepts
     # The ranges are the ones mod-survivor's own conf comments state: the 0|1 switches, a minimum
@@ -897,7 +931,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-pawn, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -999,8 +1033,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     # $parent/<module-name>.
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
         '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' '*/modules/mod-e-interact*' \
-        '*/modules/mod-survivor*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact and modules/mod-survivor out of $SELF_REPO@$SELF_REF"; }
+        '*/modules/mod-survivor*' '*/modules/mod-pawn*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor and modules/mod-pawn out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -1031,7 +1065,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-e-interact (wrong SELF_REF?)"
     [ -d "$parent/mod-survivor" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-survivor (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-e-interact and $parent/mod-survivor"
+    [ -d "$parent/mod-pawn" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-pawn (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-e-interact, $parent/mod-survivor and $parent/mod-pawn"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1215,7 +1251,7 @@ conf_pair() {   # print the live config file, creating it from NAME.conf.dist on
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-pawn}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -1224,7 +1260,7 @@ write_configs() {
     local mysql_bin
     mysql_bin="$(command -v mysql)"
 
-    local ws as pb cg hc ei sv
+    local ws as pb cg hc ei sv pw
     ws="$(conf_pair worldserver)"
     as="$(conf_pair authserver)"
     set_conf "$ws" DataDir                "\"$DATA_DIR\""
@@ -1283,6 +1319,17 @@ write_configs() {
         # rings around the player. Left in an older config they would look like they still do
         # something, so they are dropped here.
         sed -i -E '/^[[:space:]]*Playerbots\.RandomBotNearPlayers(Radius|InnerCount|OuterRadius|ZoneCount)[[:space:]]*=/d' "$pb"
+        # Pawn system (mod-pawn). The obelisk is the only doorway to a pool pawn, so addclass
+        # stays a GM command; the pool is cut to five accounts (50 characters, both teams) so the
+        # roster reads like a rift rather than a database dump; and pawns pass on every roll and
+        # leave free-for-all corpses alone, so the loot-bag economy stays the player's.
+        set_conf "$pb" Playerbots.AddClassCommand         0
+        set_conf "$pb" Playerbots.AddClassAccountPoolSize 5
+        set_conf "$pb" Playerbots.LootNeedRollLevel       0
+        set_conf "$pb" Playerbots.LootGreedRollLevel      0
+        set_conf "$pb" Playerbots.FreeMethodLoot          0
+        set_conf "$pb" Playerbots.KeepAltsInGroup         1
+        set_conf "$pb" Playerbots.SummonWhenGroup         1
         set_conf "$pb" PlayerbotsDatabaseInfo           "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_playerbots\""
         set_conf "$pb" Playerbots.Updates.EnableDatabases 1
         log "playerbots.conf: enabled=$(conf_get "$pb" Playerbots.Enabled) bots=$(conf_get "$pb" Playerbots.MaxRandomBots)"
@@ -1360,6 +1407,24 @@ write_configs() {
         log "mod-survivor.conf: Enable=$(conf_get "$sv" Survivor.Enable) MinLevelToFlag=$(conf_get "$sv" Survivor.MinLevelToFlag) DropEquipped=$(conf_get "$sv" Survivor.DropEquipped) DropBags=$(conf_get "$sv" Survivor.DropBags) ApplyToBots=$(conf_get "$sv" Survivor.ApplyToBots)"
     else
         warn "no $CONF_DIR/modules/mod-survivor.conf.dist - the artifact was built without the module, survivor mode is unavailable"
+    fi
+    if [ -f "$CONF_DIR/modules/mod-pawn.conf.dist" ] || [ -f "$CONF_DIR/modules/mod-pawn.conf" ]; then
+        pw="$(conf_pair modules/mod-pawn)"
+        # The shipped .dist already holds these values; each is read back because a key the module
+        # cannot use is silently replaced by its own default. Only a value outside its range is
+        # rewritten, so a deliberate Pawn.Enable=0 (obelisk off) survives a repair.
+        local pw_default pw_key pw_val
+        for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
+            pw_key="${pw_default%%=*}"
+            pw_val="$(conf_get "$pw" "$pw_key")"
+            if ! pawn_value_ok "$pw_key" "$pw_val"; then
+                warn "mod-pawn.conf: $pw_key is '$pw_val', restoring the shipped default ${pw_default#*=}"
+                set_conf "$pw" "$pw_key" "${pw_default#*=}"
+            fi
+        done
+        log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) ObeliskEntry=$(conf_get "$pw" Pawn.ObeliskEntry)"
+    else
+        warn "no $CONF_DIR/modules/mod-pawn.conf.dist - the artifact was built without the module, the obelisk is unavailable"
     fi
     log "worldserver.conf: DataDir=$(conf_get "$ws" DataDir) BindIP=$(conf_get "$ws" BindIP)"
 }
@@ -1625,10 +1690,11 @@ run_checks() {   # run_checks FIX(0|1)
     local ws="$CONF_DIR/worldserver.conf" as="$CONF_DIR/authserver.conf" pb="$CONF_DIR/modules/playerbots.conf"
     local cg="$CONF_DIR/modules/mod-creature-gear.conf" hc="$CONF_DIR/modules/mod_hardcore.conf"
     local ei="$CONF_DIR/modules/mod_e_interact.conf" sv="$CONF_DIR/modules/mod-survivor.conf"
-    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$ei" ] && [ -f "$sv" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf, modules/mod-survivor.conf"
+    local pw="$CONF_DIR/modules/mod-pawn.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$ei" ] && [ -f "$sv" ] && [ -f "$pw" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf, modules/mod-survivor.conf, modules/mod-pawn.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf/modules/mod-survivor.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf/modules/mod-survivor.conf/modules/mod-pawn.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -1712,6 +1778,29 @@ run_checks() {   # run_checks FIX(0|1)
                     fi
                 done
                 ok "survivor keys restored to their shipped defaults"
+            fi
+        fi
+    fi
+    if [ -f "$pw" ]; then
+        local pw_default pw_key pw_val pw_bad=""
+        for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
+            pw_key="${pw_default%%=*}"
+            pw_val="$(conf_get "$pw" "$pw_key")"
+            if ! pawn_value_ok "$pw_key" "$pw_val"; then pw_bad="$pw_bad $pw_key=$pw_val"; fi
+        done
+        if [ -z "$pw_bad" ]; then
+            ok "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) ObeliskEntry=$(conf_get "$pw" Pawn.ObeliskEntry)"
+        else
+            bad "mod-pawn.conf: unusable value(s):$pw_bad"
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
+                    pw_key="${pw_default%%=*}"
+                    if ! pawn_value_ok "$pw_key" "$(conf_get "$pw" "$pw_key")"; then
+                        set_conf "$pw" "$pw_key" "${pw_default#*=}"
+                    fi
+                done
+                ok "mod-pawn.conf: values restored"
             fi
         fi
     fi
@@ -1819,7 +1908,7 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); ensure_client_data || true; fi
         fi
     done
-    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql"; do
+    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql" "$SRC_DIR/modules/mod-pawn/data/sql"; do
         if [ -d "$d" ]; then ok "sql sources: $d"; else
             bad "sql sources missing: $d (the DB updater cannot run)"
             if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi
