@@ -351,7 +351,8 @@ grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
   boot after the pool was widened (the log line `Creating random bot characters for account` marks
   it, and it is a one-time cost). `Pawn: pool: N offline characters, next roll in M min` in (4)
   repeats the same number from the module's own view.
-- (3) prints the eight columns and `0` rows on a fresh realm. A non-zero `in_party` is a pawn
+- (3) prints the nine columns and `0` rows on a fresh realm. `built` is `1` once a pawn has been
+  equipped for its pinned spec, which is what keeps a returning pawn's gear untouched. A non-zero `in_party` is a pawn
   currently in someone's party.
 - (4) is the important one: `module.pawn: archetypes: N specs named, ... R blacklisted spells
   resolved, U names unresolved`. Any `Pawn.Blacklist.<class>.<spec>: no spell is named '...'` line

@@ -174,6 +174,31 @@ learn path — factory initialisation (`PlayerbotFactory.cpp:899-923`), trainer
 (`TrainerAction.cpp:166`), level-up maintenance (`AutoMaintenanceOnLevelupAction.cpp:50-68`) and
 quest rewards — so a restriction cannot be undone by any of them.
 
+### Gear
+
+A pawn has to arrive dressed for the spec it was pinned to, at its own level — not in the gear the
+factory rolled for a spec it no longer has. The order in `PawnMgr::ApplyPawn` is therefore:
+
+1. if the pawn is outside the level window, `PlayerbotFactory::Randomize` (level, spells, talents,
+   and gear for whatever spec it happened to roll);
+2. `PawnArchetype::Apply` — the pinned spec's talents, and the blacklist;
+3. `DestroyEquippedGear`, because step 1's items were chosen for the other spec;
+4. `InitEquipment` at the pawn's level, then ammo, enchants/gems and a durability repair.
+
+Step 4 is `PlayerbotFactory::AutoGear`'s own sequence with one difference: the gear-score cap comes
+from the **owner** (`GetMixedGearScore(owner) * AutoInitEquipLevelLimitRatio`) instead of an item
+level, so a pawn is never better equipped than the player it follows. Item choice is spec-aware
+because `InitEquipment` scores every candidate with `StatsWeightCalculator`, whose collector type
+comes from `IsTank`/`IsHeal`/`IsCaster` and whose tab comes from `GetPlayerSpecTab` — both read the
+bot's talents, which step 2 has already replaced.
+
+That pass runs **once**: the roster's `built` column records it, so afterwards the pawn keeps
+whatever it wears, including gear the player gives it, and playerbots' own level-up maintenance
+(`AutoMaintenanceOnLevelupAction` → `InitEquipment(true)`, also spec-weighted) keeps it current as
+it levels in the party. A pawn that is re-levelled because it fell outside the window is rebuilt and
+re-geared, which is the price of pulling it back into the window. A dismissed pawn keeps its `built`
+flag, so re-recruiting it does not strip the gear it earned.
+
 ### Picker
 
 A `CreatureScript`, not a gameobject: `OnGossipHello` returns `false` for every creature except an

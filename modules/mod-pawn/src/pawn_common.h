@@ -75,6 +75,11 @@ struct PawnRosterRow
     PawnRole   Role        = PAWN_ROLE_NONE;
     bool       Recruited   = false;
     uint8      TargetLevel = 0;
+    // Set once the pawn has been equipped for its pinned spec at its level. A
+    // fresh pool character is level 1 in a start outfit, so "not built yet" is
+    // the one case that must always run the gear pass; afterwards the pawn keeps
+    // whatever it wears, including anything the player gives it.
+    bool       Built       = false;
 };
 
 #endif

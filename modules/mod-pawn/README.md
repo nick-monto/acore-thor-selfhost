@@ -24,6 +24,13 @@ things the pool does not have:
 4. **An archetype**: one premade PvE spec plus a hard blacklist of the other specs' signature
    abilities. A prot warrior pawn without Shield Wall cannot tank; a shadow priest pawn without
    Resurrection cannot heal. The toolkit is the reason to swap.
+5. **Gear for that spec at its level.** The spec is pinned *before* the equipment pass, because
+   playerbots scores every candidate item against the bot's own talents — a pawn equipped first and
+   pinned second ends up a prot warrior in a fury two-hander with no shield. The pass is
+   `PlayerbotFactory::AutoGear`'s sequence (equip, ammo, enchants and gems, durability) with the
+   gear-score cap taken from the player, so a pawn is never better geared than its owner. It runs
+   once, recorded by the roster's `built` column: after that the pawn keeps what it wears, and
+   playerbots' own level-up maintenance keeps it current as it levels with you.
 
 ## The party cap
 
@@ -44,7 +51,7 @@ PASS), `Playerbots.LootGreedRollLevel = 0` (GREED becomes PASS) and `Playerbots.
 
 | Piece | Where |
 |---|---|
-| Roster schema, I/O, offers, recruit/dismiss | `src/PawnMgr.cpp` |
+| Roster schema, I/O, offers, recruit/dismiss, the gear pass | `src/PawnMgr.cpp` |
 | Spec pinning and the spellbook blacklist | `src/PawnArchetype.cpp` |
 | The innkeeper line and the gossip menu | `src/PawnInnkeeper.cpp` |
 | Login queue and the learn-spell gate | `src/PawnScripts.cpp` |

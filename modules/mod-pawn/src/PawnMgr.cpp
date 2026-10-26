@@ -152,7 +152,9 @@ void PawnMgr::EnsureSchema()
     // Created here rather than by module SQL on purpose: a failing module SQL file aborts the
     // worldserver boot on this fork (docs/SERVER-STACK.md section 13), and a table this module
     // cannot work without is not worth that risk. IF NOT EXISTS makes it a no-op afterwards.
-    CharacterDatabase.Execute(
+    // DirectExecute, not Execute: the roster is read on the next line of
+    // LoadRoster, and the asynchronous form only queues the statement.
+    CharacterDatabase.DirectExecute(
         "CREATE TABLE IF NOT EXISTS `pawn_roster` ("
         "`owner_guid` INT UNSIGNED NOT NULL,"
         "`bot_guid` INT UNSIGNED NOT NULL,"
@@ -160,11 +162,22 @@ void PawnMgr::EnsureSchema()
         "`role` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`state` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`target_level` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+        "`built` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
         "PRIMARY KEY (`owner_guid`, `bot_guid`),"
         "KEY `bot_guid` (`bot_guid`),"
         "KEY `owner_state` (`owner_guid`, `state`)"
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    // CREATE TABLE IF NOT EXISTS does not add a column to a table an earlier
+    // build created, and ADD COLUMN IF NOT EXISTS is MariaDB-only, so the column
+    // is looked up first. information_schema is portable to both.
+    QueryResult hasBuilt = CharacterDatabase.Query(
+        "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+        "AND TABLE_NAME = 'pawn_roster' AND COLUMN_NAME = 'built'");
+    if (hasBuilt && hasBuilt->Fetch()[0].Get<uint64>() == 0)
+        CharacterDatabase.DirectExecute(
+            "ALTER TABLE `pawn_roster` ADD COLUMN `built` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `state`");
 }
 
 void PawnMgr::LoadRoster()
@@ -173,7 +186,7 @@ void PawnMgr::LoadRoster()
     _rows.clear();
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level FROM pawn_roster");
+        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level, built FROM pawn_roster");
     if (!result)
     {
         LOG_INFO("module", "Pawn: roster: empty");
@@ -192,6 +205,7 @@ void PawnMgr::LoadRoster()
         row.Role = PawnRole(fields[3].Get<uint8>());
         row.Recruited = fields[4].Get<uint8>() == 1;
         row.TargetLevel = fields[5].Get<uint8>();
+        row.Built = fields[6].Get<uint8>() == 1;
 
         if (row.Recruited)
             ++recruited;
@@ -436,23 +450,61 @@ void PawnMgr::ApplyPawn(Player* bot)
     // Outside the window the pawn is re-levelled to the level it would be
     // offered at, so a player who outlevels a pawn pulls it back in on its next
     // login instead of carrying a liability.
-    if (Player* owner = ObjectAccessor::FindConnectedPlayer(row->Owner))
+    Player* owner = ObjectAccessor::FindConnectedPlayer(row->Owner);
+    uint8 const wanted = owner ? DeriveLevel(row->Owner, row->Bot, owner->GetLevel(), bot->getClass()) : 0;
+    bool const reLevel = owner && bot->GetLevel() != wanted &&
+                         std::abs(int(bot->GetLevel()) - int(owner->GetLevel())) > int(_config.LevelWindow);
+
+    if (reLevel || !row->Built)
     {
-        uint8 const ownerLevel = owner->GetLevel();
-        uint8 const wanted = DeriveLevel(row->Owner, row->Bot, ownerLevel, bot->getClass());
-        int const gap = int(bot->GetLevel()) - int(ownerLevel);
+        uint8 const level = reLevel ? wanted : bot->GetLevel();
+        uint32 const gearScoreLimit = owner
+            ? uint32(PlayerbotAI::GetMixedGearScore(owner, true, false, 12) *
+                     sPlayerbotAIConfig.AutoInitEquipLevelLimitRatio)
+            : 0;
 
-        if (std::abs(gap) > int(_config.LevelWindow) && bot->GetLevel() != wanted)
-        {
-            uint32 const gearScore = uint32(PlayerbotAI::GetMixedGearScore(owner, true, false, 12) *
-                                            sPlayerbotAIConfig.AutoInitEquipLevelLimitRatio);
-
+        if (reLevel)
             LOG_INFO("module", "Pawn: pawn {}: level {} -> {} (owner {})", bot->GetName(),
-                     uint32(bot->GetLevel()), uint32(wanted), uint32(ownerLevel));
-            PlayerbotFactory factory(bot, wanted, ITEM_QUALITY_LEGENDARY, gearScore);
-            factory.Randomize(false);
+                     uint32(bot->GetLevel()), uint32(wanted), uint32(owner->GetLevel()));
+
+        // A full playerbots build, at the level the pawn is meant to have: level,
+        // stats, spells, a random spec, gear, bags, food and reagents. Its gear is
+        // thrown away two steps down, because it was chosen for the random spec.
+        PlayerbotFactory factory(bot, level, ITEM_QUALITY_LEGENDARY, gearScoreLimit);
+        factory.Randomize(false);
+
+        // Pin the spec before the gear pass. InitEquipment scores every candidate
+        // item with StatsWeightCalculator, which reads the bot's own talents
+        // (IsTank/IsHeal/IsCaster and GetPlayerSpecTab), so anything equipped
+        // before the pin is gear for whatever spec Randomize rolled - a prot pawn
+        // in a fury warrior's two-hander and no shield.
+        sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo);
+
+        // Then gear the pawn for the spec it now has, at its level, with the
+        // owner's gear score as the ceiling so a pawn is never better equipped
+        // than the player it follows. This is PlayerbotFactory::AutoGear's
+        // sequence with that ceiling, plus DestroyEquippedGear because the items
+        // Randomize just equipped were chosen for the other spec.
+        PlayerbotFactory::DestroyEquippedGear(bot);
+        PlayerbotFactory gear(bot, level, ITEM_QUALITY_LEGENDARY, gearScoreLimit);
+        gear.InitEquipment(false, sPlayerbotAIConfig.TwoRoundsGearInit);
+        gear.InitAmmo();
+        if (bot->GetLevel() >= sPlayerbotAIConfig.MinEnchantingBotLevel)
+            gear.ApplyEnchantAndGemsNew();
+        bot->DurabilityRepairAll(false, 1.0f, false);
+
+        LOG_INFO("module", "Pawn: pawn {}: {} at level {} for {} (gear score cap {})",
+                 bot->GetName(), row->Built ? "re-geared" : "geared", uint32(bot->GetLevel()),
+                 sPawnArchetype.SpecName(bot->getClass(), row->SpecNo), uint32(gearScoreLimit));
+
+        if (!row->Built)
+        {
+            row->Built = true;
+            Upsert(*row);
         }
     }
+    else
+        sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo);
 
     // The roster records the level the pawn actually has, so the fallback used
     // when the owner is offline is the truth rather than an old target.
@@ -462,7 +514,6 @@ void PawnMgr::ApplyPawn(Player* bot)
         Upsert(*row);
     }
 
-    sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo);
     bot->SaveToDB(false, false);
 }
 
@@ -506,6 +557,11 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
     row.Role = offer.Role;
     row.Recruited = true;
     row.TargetLevel = offer.Level;
+
+    // A dismissed pawn keeps its row, so a returning one keeps the gear it
+    // earned: without this the next login would re-equip it from scratch.
+    if (auto it = _rows.find(offer.Bot.GetCounter()); it != _rows.end())
+        row.Built = it->second.Built;
 
     Upsert(row);
     _rows[offer.Bot.GetCounter()] = row;
@@ -565,8 +621,8 @@ bool PawnMgr::IsSpellForbidden(Player* bot, uint32 spellId) const
 void PawnMgr::Upsert(PawnRosterRow const& row)
 {
     CharacterDatabase.Execute(
-        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level) "
-        "VALUES ({}, {}, {}, {}, {}, {})",
+        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built) "
+        "VALUES ({}, {}, {}, {}, {}, {}, {})",
         row.Owner.GetCounter(), row.Bot.GetCounter(), uint32(row.SpecNo), uint32(row.Role),
-        row.Recruited ? 1 : 0, uint32(row.TargetLevel));
+        row.Recruited ? 1 : 0, uint32(row.TargetLevel), row.Built ? 1 : 0);
 }
