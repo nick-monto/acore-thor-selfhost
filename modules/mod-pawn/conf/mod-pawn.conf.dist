@@ -142,11 +142,21 @@ Pawn.GearCapPercent = 150
 Pawn.OfferedPerPage = 12
 
 # How many pawns one picker shows: a random count in [FeaturedMin, FeaturedMax]
-# is drawn from the whole pool every time a player opens the picker, and the
-# draw is kept while they browse it. Two players opening at once see different
-# subsets, and so does the same player opening it twice - the pool is far larger
-# than this on purpose, so the roster reads like a rift rather than a database
-# dump. Recruiting or dismissing does not redraw; only reopening does.
+# is taken from the pool every time a player opens the picker, and the result is
+# kept while they browse it. Two players opening at once see different subsets,
+# and so does the same player opening it twice.
+#
+# The pool is dealt, not sampled: each player gets a shuffled deck of the eligible
+# pool and is dealt off the top of it, so no face comes round again until the whole
+# deck has been dealt out - a fresh roll of the pool reshuffles it, and the visit
+# before a reshuffle is dealt last in the new order, so a face never repeats in the
+# very next visit either. On a pool of 75 per team a face comes back after about
+# six visits, instead of the two or three faces out of twelve that a straight
+# sample repeats on every visit.
+#
+# The pool is far larger than this on purpose, so the roster reads like a rift
+# rather than a database dump. Recruiting or dismissing does not redraw; only
+# reopening does.
 # Defaults: 10 and 15
 Pawn.FeaturedMin = 10
 Pawn.FeaturedMax = 15

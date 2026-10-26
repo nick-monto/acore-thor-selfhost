@@ -44,6 +44,10 @@ public:
     // FeaturedMin and FeaturedMax rows. Two calls return different rows, so the
     // list is drawn once per menu and kept for as long as the player browses it.
     [[nodiscard]] std::vector<PawnOffer> DrawOffers(Player* player);
+
+    // Drops a player's deal order. Called on logout with the picker's own cache,
+    // so a character that is never seen again leaves nothing behind.
+    void ForgetPlayer(ObjectGuid player);
     [[nodiscard]] std::vector<PawnRosterRow> ListParty(ObjectGuid owner) const;
     [[nodiscard]] uint32 CountParty(ObjectGuid owner) const;
 
@@ -68,6 +72,21 @@ private:
     void ApplyPawn(Player* bot);
     void Upsert(PawnRosterRow const& row);
 
+    // A player's deck: the eligible pool in a random deal order, dealt without
+    // replacement, so the same crowd is not on offer twice - no face comes round
+    // until the deck has been dealt out, and the last visit's faces are dealt last
+    // after a reshuffle, so none of them lands in the next visit. Counters, not
+    // pointers: the pool is re-read under it, and an entry that is no longer a
+    // candidate is skipped when it comes up.
+    struct PawnDeck
+    {
+        std::vector<uint32> Order;
+        size_t              Cursor = 0;
+        // The faces the last visit showed. A reshuffle deals them last, so the
+        // one moment a repeat could land in the very next visit does not.
+        std::vector<uint32> Recent;
+    };
+
     PawnConfig                                _config;
     std::vector<PawnPoolChar>                 _pool;           // type-2 characters, offline at refresh
     uint32                                    _poolRefreshDue = 0;  // GetMSTime() when the pool is re-read
@@ -75,6 +94,7 @@ private:
     std::unordered_map<uint32, PawnRosterRow> _rows;           // bot counter -> row
     std::unordered_set<uint32>                _pendingPawns;   // bot counters
     std::unordered_set<uint32>                _pendingOwners;  // player counters
+    std::unordered_map<uint32, PawnDeck>      _decks;          // player counter -> deal order
 };
 
 #define sPawnMgr PawnMgr::instance()

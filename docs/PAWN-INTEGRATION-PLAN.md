@@ -259,14 +259,21 @@ it is still empty — a boot can finish before playerbots has created the pool c
 does **not** read `sRandomPlayerbotMgr.addclassCache`: that cache is only filled when
 `Playerbots.AddClassCommand` is on, and the installer turns it off (D5).
 
-Each picker instance draws a random count in `[Pawn.FeaturedMin, Pawn.FeaturedMax]` of candidates
-with a seeded Fisher-Yates shuffle (SplitMix64 seeded from the player and a per-draw counter, so the
-global RNG is untouched). Same team only, the same death-knight level gate the addclass command
-applies, and no candidate that is already in this player's party or online. The draw is kept for the
-menu instance so paging and dismissing do not move rows; recruiting removes that row; reopening draws
-again. A pawn's level and spec stay a pure function of the two guids, so the same face keeps the same
-level and spec however often it is drawn. The installer widens the pool to 15 accounts (about 150
-characters) precisely because a 10-15 draw from 50 would repeat too often.
+Each picker instance takes a random count in `[Pawn.FeaturedMin, Pawn.FeaturedMax]` of candidates,
+dealt off a per-player **deck** rather than sampled: the eligible pool is shuffled with Fisher-Yates
+(SplitMix64 seeded from the player and a per-draw counter, so the global RNG is untouched), the next
+rows are handed out, and the cursor carries across visits until the deck is exhausted — then it is
+reshuffled, with the previous visit's faces dealt last so the reshuffle cannot put a repeat in the
+very next visit, and with a visit never straddling a reshuffle (the skipped tail goes into the next
+shuffle). No face repeats until the whole deck has been dealt, and a pool refresh reshuffles every
+deck. Same team only, the same death-knight level gate the addclass command applies, and no candidate
+that is already in this player's party or online; a dealt counter that stopped being a candidate is
+skipped when it comes up. The result is kept for the menu instance so paging and dismissing do not
+move rows; recruiting removes that row; reopening deals again. A pawn's level and spec stay a pure
+function of the two guids, so the same face keeps the same level and spec however often it comes
+round. The installer widens the pool to 15 accounts (about 150 characters, roughly 75 per team):
+12 dealt from 75 is about six visits before a repeat, where 12 sampled from 75 repeats two faces on
+every visit.
 
 ### Loot (D4)
 

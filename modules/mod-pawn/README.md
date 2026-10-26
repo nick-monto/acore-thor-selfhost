@@ -144,12 +144,26 @@ The pool is every offline character on a type-2 AddClass account — about 150 w
 startup, on a random 40-60 minute timer, and on demand if it is still empty (a boot can finish
 before playerbots has created the pool characters).
 
-Each time the picker opens it draws a random count in `[FeaturedMin, FeaturedMax]` (10-15) from the
-pool with a seeded shuffle, restricted to the player's team and to candidates that are neither in
-the party nor online. That draw is kept for the menu instance, so paging and dismissing do not move
-rows under the pointer; recruiting removes the row; closing and reopening draws again. Level and
-spec stay a pure function of the two guids, so a face you have seen keeps its level and spec
-whenever it comes back.
+Each time the picker opens it takes a random count in `[FeaturedMin, FeaturedMax]` (10-15) from the
+pool, restricted to the player's team and to candidates that are neither in the party nor online.
+
+It **deals rather than samples**: `PawnMgr::DrawOffers` keeps a per-player deck — the eligible pool in
+a shuffled order, with a cursor — and hands out the next rows off the top. No face comes round again
+until the deck has been dealt out; a pool refresh reshuffles it, and the deck is dropped at logout.
+
+Two rules keep visits from blurring together. A visit never straddles a reshuffle — if the deck
+cannot cover the whole visit it is reshuffled first, and the tail it skips goes back into the next
+shuffle. And the faces the previous visit showed are dealt *last* in a new order, so the one moment a
+repeat could land in the very next visit does not. A dealt counter that has stopped being a candidate
+(recruited, logged in, dropped by a refresh) is skipped when it comes up, so the deck heals itself.
+
+On a pool of ~75 eligible characters that is a face coming back after about six visits, where a
+straight sample of 12 from 75 repeats two or three faces on every visit.
+
+The result is kept for the menu instance, so paging and dismissing do not move rows under the
+pointer; recruiting removes the row; closing and reopening deals again. Level, spec and gear ratio
+stay a pure function of the two guids, so a face you have seen keeps its level and spec whenever it
+comes back.
 
 ## Why there is no SQL
 
