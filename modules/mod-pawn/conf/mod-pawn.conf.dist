@@ -86,6 +86,12 @@ Pawn.HireFeeHeldPercent = 100
 # price says which ones do. The gear pass is held to
 # GetMixedGearScore(owner) * ratio / 100 as its per-item score ceiling. 100 makes
 # every pawn a match for the player and every price in a band the same.
+#
+# One caveat, and it is why 100 is a sane setting too: the ceiling only bites while
+# the best items available at the pawn's level are above it. A raider at 80 already
+# wears the best gear the level offers, so a ratio of 120 buys the same gear as 100
+# there and only the price differs. Nothing at offer time can tell the two cases
+# apart - the gear does not exist until the pawn is built.
 # Default: 120
 Pawn.GearCapPercent = 120
 
