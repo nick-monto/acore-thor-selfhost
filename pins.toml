@@ -34,6 +34,15 @@ ref = "main"                                                # SELF_REF in thor-i
 # out of its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a
 # tarball from SELF_REPO ($SELF_REF, default main). No third-party hash to keep in step.
 
+[module.survivor]
+repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
+path = "modules/mod-survivor"                               # loader symbol Addmod_survivorScripts()
+ref = "main"                                                # SELF_REF in thor-install.sh (overridable)
+# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-survivor out of
+# its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a tarball
+# from SELF_REPO ($SELF_REF, default main). The module ships one world SQL file (the container
+# gameobject template) and creates its three character tables programmatically.
+
 [data.client_data]
 url = "https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
 size = 1196168257

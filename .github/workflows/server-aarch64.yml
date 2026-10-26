@@ -8,10 +8,11 @@ name: server-aarch64
 #     bin/    authserver, worldserver (+ tools), stripped
 #     etc/    *.conf.dist and modules/*.conf.dist   (and the built-in _CONF_DIR is /opt/acore/etc)
 #     src/    data/sql/, modules/mod-playerbots/data/sql/,
-#             modules/mod-creature-gear/data/sql/ and
+#             modules/mod-creature-gear/data/sql/, modules/mod-survivor/data/sql/ and
 #             data/sql/custom/db_world/ (the loot-bag patch) - the DB updater reads these
 #             (mod-hardcore and mod-e-interact create nothing in the database and have no
-#             SQL tree)
+#             SQL tree; mod-survivor ships one world file, the container gameobject
+#             template, and creates its three character tables programmatically)
 #
 # No data/ in the tarball. GitHub refuses release assets of 2 GiB or more, and the
 # dbc/maps/vmaps/mmaps trees are around 1.2 GiB on their own, which is what pushed the first
@@ -92,6 +93,7 @@ jobs:
           cp -a "$GITHUB_WORKSPACE/modules/mod-creature-gear" core/modules/mod-creature-gear
           cp -a "$GITHUB_WORKSPACE/modules/mod-hardcore" core/modules/mod-hardcore
           cp -a "$GITHUB_WORKSPACE/modules/mod-e-interact" core/modules/mod-e-interact
+          cp -a "$GITHUB_WORKSPACE/modules/mod-survivor" core/modules/mod-survivor
           # The player-centric distribution mode lives on top of the pinned module commit. The
           # patch is maintained here so the upstream pin stays exact; a bad patch fails the build.
           patch -p1 -d core/modules/mod-playerbots < "$GITHUB_WORKSPACE/patches/playerbots-player-centric.patch"
@@ -163,6 +165,10 @@ jobs:
           # gameobject option, so a build that silently dropped the vendored pass fails here.
           test -f "$PREFIX/etc/modules/mod_e_interact.conf.dist"
           grep -q '^EInteract.Use = 1$' "$PREFIX/etc/modules/mod_e_interact.conf.dist"
+          # And for the survivor module: the conf is installed and its master switch is at the
+          # shipped value, so a build that dropped the module is caught here rather than in game.
+          test -f "$PREFIX/etc/modules/mod-survivor.conf.dist"
+          grep -q '^Survivor.Enable = 1$' "$PREFIX/etc/modules/mod-survivor.conf.dist"
 
       - name: Bundle the libraries whose soname is tied to this release
         run: |
@@ -306,10 +312,12 @@ jobs:
           # the destinations outright and create what they need.
           sudo mkdir -p "$PREFIX/src/data" \
                         "$PREFIX/src/modules/mod-playerbots/data" \
-                        "$PREFIX/src/modules/mod-creature-gear/data"
+                        "$PREFIX/src/modules/mod-creature-gear/data" \
+                        "$PREFIX/src/modules/mod-survivor/data"
           sudo cp -a src/core/data/sql "$PREFIX/src/data/sql"
           sudo cp -a src/playerbots/data/sql "$PREFIX/src/modules/mod-playerbots/data/sql"
           sudo cp -a src/core/modules/mod-creature-gear/data/sql "$PREFIX/src/modules/mod-creature-gear/data/sql"
+          sudo cp -a src/core/modules/mod-survivor/data/sql "$PREFIX/src/modules/mod-survivor/data/sql"
           # The CUSTOM slot is already registered in the base database
           # (data/sql/base/db_world/updates_include.sql), so these files ride in
           # under the core's own data/sql/custom/db_world directory.
@@ -318,7 +326,7 @@ jobs:
 
           # check the layout instead of trusting the copies: one level wrong here and the DB
           # updater finds nothing to apply.
-          for d in data/sql modules/mod-playerbots/data/sql modules/mod-creature-gear/data/sql data/sql/custom/db_world; do
+          for d in data/sql modules/mod-playerbots/data/sql modules/mod-creature-gear/data/sql modules/mod-survivor/data/sql data/sql/custom/db_world; do
             n=$(find "$PREFIX/src/$d" -name '*.sql' | wc -l)
             echo "$d: $n .sql files"
             if [ "$n" -eq 0 ]; then
@@ -378,7 +386,7 @@ jobs:
           gh release view server-build -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create server-build -R "$GITHUB_REPOSITORY" --latest \
               --title "Latest arm64 server build" \
-              --notes "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear + mod-hardcore (ghost default) + mod-e-interact (one interact key, with the local gameobject pass), the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh."
+              --notes "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear + mod-hardcore (ghost default) + mod-e-interact (one interact key, with the local gameobject pass) + mod-survivor (death drops the gear into a lootable container), the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh."
           gh release upload server-build -R "$GITHUB_REPOSITORY" \
             acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256 --clobber
 
@@ -389,5 +397,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
             --title "Server build $GITHUB_REF_NAME" \
-            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear + mod-hardcore (ghost default) + mod-e-interact (one interact key, with the local gameobject pass), the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh." \
+            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear + mod-hardcore (ghost default) + mod-e-interact (one interact key, with the local gameobject pass) + mod-survivor (death drops the gear into a lootable container), the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh." \
             acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256

@@ -1,0 +1,119 @@
+[worldserver]
+
+########################################
+# mod-survivor configuration
+########################################
+#
+# Opt-in "death is expensive" ruleset: a character flags itself Survivor
+# ('.survivor on') and from that point on a death lifts the equipped items and
+# everything in the bags off the body and leaves them in a lootable container
+# at the place of death. The character is not killed for good - that is
+# mod-hardcore's job, and the two flags refuse each other.
+#
+# The bank, the mail, the gold and the quest log are never touched: the
+# ruleset is gear and bags only.
+#
+# Bot-controlled characters follow the same rules with one difference: their
+# gear is destroyed and replaced from playerbots' own factory once they are
+# alive again, rather than dropped (see Survivor.BotDropContainer).
+#
+
+#
+#    Survivor.Enable
+#        Master on/off switch for this module. 0 = the module loads, the
+#        '.survivor' command still exists but reports Survivor as disabled,
+#        and no death does anything.
+#        Default: 1
+#
+Survivor.Enable = 1
+
+#
+#    Survivor.MinLevelToFlag
+#        Minimum character level required to run '.survivor on'. Keeps a
+#        brand-new character from opting in before it owns anything.
+#        Default: 10
+#
+Survivor.MinLevelToFlag = 10
+
+#
+#    Survivor.AnnounceDeaths
+#        1 = broadcast a server-wide message when a Survivor character dies
+#        and leaves its belongings behind.
+#        Default: 1
+#
+Survivor.AnnounceDeaths = 1
+
+#
+#    Survivor.DropEquipped
+#        1 = take the equipped items on death. 0 = only the bags are emptied.
+#        The equipped bags themselves follow Survivor.DropBags: a bag is only
+#        ever destroyed together with its contents, so with DropBags = 0 the
+#        equipped bags are kept.
+#        Default: 1
+#
+Survivor.DropEquipped = 1
+
+#
+#    Survivor.DropBags
+#        1 = take the backpack and everything inside the equipped bags.
+#        Default: 1
+#
+Survivor.DropBags = 1
+
+#
+#    Survivor.ContainerLifetimeDays
+#        How many days a container stands before its remaining items are
+#        mailed back to the owner. The container also survives a logout and a
+#        server restart: it is re-summoned from the database when the owner
+#        re-enters its map.
+#        Default: 7
+#
+Survivor.ContainerLifetimeDays = 7
+
+#
+#    Survivor.MarkOnMap
+#        1 = send the SURV addon message ('SURV\tsite ...' / 'SURV\tnone') that
+#        draws the death site on the player's world map and minimap. 0 = the
+#        containers still work, the addon is just not told about them.
+#        Default: 1
+#
+Survivor.MarkOnMap = 1
+
+#
+#    Survivor.ContainerEntry
+#        The gameobject template used for the container. 5000000 is the row
+#        created by this module's
+#        data/sql/world/base/survivor_10_gameobject.sql - a CHEST named
+#        "Remains" with lootId 0 (so the hand-filled loot survives) and
+#        consumable 1 (so the core deletes it once it is emptied). Do not
+#        change this without also supplying a template with the same shape.
+#        Default: 5000000
+#
+Survivor.ContainerEntry = 5000000
+
+#
+#    Survivor.ApplyToBots
+#        1 = the ruleset also applies to bot-controlled characters: on death
+#        their equipment and bags are destroyed, not dropped, and their gear is
+#        re-rolled. 0 = bots keep their gear.
+#        Default: 1
+#
+Survivor.ApplyToBots = 1
+
+#
+#    Survivor.BotRegenOnDeath
+#        1 = rebuild a stripped bot's kit (bags plus class/level/spec gear)
+#        from playerbots' own factory once it is alive again. 0 = leave it
+#        naked until something else gears it.
+#        Default: 1
+#
+Survivor.BotRegenOnDeath = 1
+
+#
+#    Survivor.BotDropContainer
+#        0 = a bot's gear is destroyed outright (DEFAULT). 1 = a bot death also
+#        creates a container, owned by the bot. Off by default: a container of
+#        randombot gear would be a free-gear faucet for the one real player.
+#        Default: 0
+#
+Survivor.BotDropContainer = 0

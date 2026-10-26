@@ -17,5 +17,13 @@
    `WorldSession::IsHeadless()`. Bot sessions cannot run `.hardcore on`, and
    every enforcement hook ignores them.
 3. `conf/mod_hardcore.conf.dist` and `README.md`: document the two changes.
+4. `src/Hardcore.cpp`: `.hardcore on` now refuses a character that mod-survivor
+   has flagged (a live read of `survivor_flags.enabled`, no shared headers, no
+   new build dependency). Survivor and Hardcore are mutually exclusive: a
+   Survivor death is meant to be recoverable - the character's equipped gear
+   and bags are dropped into a lootable container at the death spot - whereas
+   Hardcore makes the death permanent, so allowing both would invalidate the
+   Survivor recovery. A missing `survivor_flags` table (mod-survivor not
+   installed) is treated as "not flagged".
 
 The default policy remains `Hardcore.DeathPolicy = ghost`.

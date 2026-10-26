@@ -85,7 +85,7 @@ sha256sum -c acore-server-arm64.tar.zst.sha256
 tar --zstd -xf acore-server-arm64.tar.zst -C /opt/acore   # → /opt/acore/{bin,etc,lib,src}
 ```
 
-`bin/` is the stripped server, `etc/` the config templates, and `src/` the SQL the DB updater reads (`src/data/sql`, `src/modules/mod-playerbots/data/sql`, `src/modules/mod-creature-gear/data/sql` and the loot-bag and portal patches in `src/data/sql/custom/db_world`). That last part is why the artifact is not just a binary drop: `SourceDirectory` must point at a tree containing those paths (`DBUpdater.cpp:98-195`, `mod-playerbots/src/Script/Playerbots.cpp:77-78`) [V]. The CUSTOM slice is refreshed from this repository after unpacking (Part 4a), so the artifact's copy is only a snapshot.
+`bin/` is the stripped server, `etc/` the config templates, and `src/` the SQL the DB updater reads (`src/data/sql`, `src/modules/mod-playerbots/data/sql`, `src/modules/mod-creature-gear/data/sql`, `src/modules/mod-survivor/data/sql` and the loot-bag and portal patches in `src/data/sql/custom/db_world`). That last part is why the artifact is not just a binary drop: `SourceDirectory` must point at a tree containing those paths (`DBUpdater.cpp:98-195`, `mod-playerbots/src/Script/Playerbots.cpp:77-78`) [V]. The CUSTOM slice is refreshed from this repository after unpacking (Part 4a), so the artifact's copy is only a snapshot.
 
 **Fallback: build in place** (hours; the workflow exists to avoid this):
 
@@ -170,11 +170,13 @@ Edit `/opt/acore/etc/worldserver.conf` and `authserver.conf`:
 | `TaxiFlightSpeed` | `50.0` | 50 is the top of the core's clamp (`WorldConfig.cpp:265`: accepted only when `> 0.01` and `<= 50`); anything higher is rejected and the default 32 stands [V] |
 | Login/world/character database info | `127.0.0.1;3306;acore;changeme;acore_*` | match Part 3 |
 
-The three travel keys are what `thor-install.sh` writes (`scripts/thor-install.sh:1206-1208`) and logs at the end of `write_configs()`. `--status` reads each one back and prints `ok` or `bad` with the value it found, and `--repair` puts all three back to `2` / `1` / `50.0` when any is wrong (`run_checks`, `:1584-1616`). `--check` is a dry run: it calls neither, so it reports nothing about these keys (or about the SQL families in Part 4a). The gate on the third key is `(32, 50]`, not just "not empty": the stock `32.0` counts as not set, and anything above 50 is rejected by the core and falls back to 32. `TaxiFlightSpeed` is `Reloadable::Yes` (`WorldConfig.cpp:265`), so a new value applies with `.reload config` in the worldserver console and no restart; `AllFlightPaths` is granted when a character logs in (`CharacterHandler.cpp:1055`), so a character already online needs a relog before it sees the full taxi map.
+The three travel keys are what `thor-install.sh` writes (`scripts/thor-install.sh:1245-1247`) and logs at the end of `write_configs()`. `--status` reads each one back and prints `ok` or `bad` with the value it found, and `--repair` puts all three back to `2` / `1` / `50.0` when any is wrong (`run_checks`, `:1640-1674`). `--check` is a dry run: it calls neither, so it reports nothing about these keys (or about the SQL families in Part 4a). The gate on the third key is `(32, 50]`, not just "not empty": the stock `32.0` counts as not set, and anything above 50 is rejected by the core and falls back to 32. `TaxiFlightSpeed` is `Reloadable::Yes` (`WorldConfig.cpp:265`), so a new value applies with `.reload config` in the worldserver console and no restart; `AllFlightPaths` is granted when a character logs in (`CharacterHandler.cpp:1055`), so a character already online needs a relog before it sees the full taxi map.
 
 `/opt/acore/etc/modules/mod_hardcore.conf` — the installer creates it from the shipped `.dist` and keeps `Hardcore.DeathPolicy = ghost` unless the file already names `ghost`, `archive` or `delete`. In `ghost` policy, resurrection is refused but graveyard release is allowed so under-map/fatigue deaths can reach a spirit healer. Players opt in with `.hardcore on`; bot-controlled sessions are refused.
 
 `/opt/acore/etc/modules/mod_e_interact.conf` — the interact key: `EInteract.Enable`, `.Loot`, `.Gather`, `.Talk` and `.Use` all default to 1, and the installer puts any of them back to 1 if it finds it off (a silent 0 looks exactly like a dead key in game). The key is a client binding (`Interact with the nearest thing`) registered by the launcher's bundled EInteract add-on: ConsolePort's `/cp` binding menu lists it, so any pad button can be assigned to it, and `/ei key <key>` moves it to a plain key; `/ei` reports whether the server answered. The add-on binds **E** on its first run and the pad profile sends E on the left stick click, so the button works before `/cp` is touched; ConsolePort's own left click can be given that button instead, in `/cp`. If the key says the module is missing, the running worldserver was built without it — check `thor-install.sh --check` for the config warning and rebuild.
+
+`/opt/acore/etc/modules/mod-survivor.conf` — the survivor ruleset: `Survivor.Enable` (master switch), `MinLevelToFlag` (default 10, so a brand-new character cannot opt in before it owns anything), `AnnounceDeaths`, `DropEquipped`, `DropBags`, `ContainerLifetimeDays` (7), `MarkOnMap`, `ContainerEntry` (5000000, the gameobject template the module's SQL creates), `ApplyToBots`, `BotRegenOnDeath` and `BotDropContainer` (0: a bot death is stripped and re-rolled, never lootable). The installer creates the file from the shipped `.dist` and restores any key that is missing or outside its range — the 0|1 switches, `MinLevelToFlag` 1-80, `ContainerLifetimeDays` 1-365, `ContainerEntry` a positive integer — while leaving a deliberate 0 alone. **The two rulesets are mutually exclusive**: `.survivor on` refuses a Hardcore-flagged character and `.hardcore on` refuses a Survivor-flagged one. Only `.survivor on` and `.survivor status` exist, and both refuse bot-controlled sessions.
 
 `/opt/acore/etc/modules/playerbots.conf` — the module ships `Playerbots.Enabled = 1` and **500/500** bots by default; start smaller (Part 5). It also carries its own `PlayerbotsDatabaseInfo` (default database name `acore_playerbots`) and `Playerbots.Updates.EnableDatabases = 1` [V]. The installer sets `Playerbots.RandomBotNearPlayers = 1` with a +/-5 level window and at most 10 bots tied to each player, placed at level-appropriate spots inside the player's zone at least 100 yards away (no rings around the player; 100 is about where the client stops drawing other players), each visiting for 15-40 minutes and away in another zone for 4-10 before it returns. The rest stay normally distributed. Re-running the installer rewrites those keys to the same defaults and drops the retired ring keys. See `docs/BOT-DISTRIBUTION-DESIGN.md` [V].
 
@@ -206,7 +208,7 @@ mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
   -e "SELECT COUNT(*) AS portals FROM gameobject WHERE guid BETWEEN 9800000 AND 9800015;"
 ```
 
-The `updates` table is keyed by `name`; its columns are `name, hash, state, timestamp, speed` [V], so the query above and the deletes below use `name`. `bash thor-install.sh --status` also reports each SQL family as present or missing in `$SRC_DIR/data/sql/custom/db_world/` (`scripts/thor-install.sh:1745-1759`). `--check` does not: it is a pre-install dry run and never calls the check code.
+The `updates` table is keyed by `name`; its columns are `name, hash, state, timestamp, speed` [V], so the query above and the deletes below use `name`. `bash thor-install.sh --status` also reports each SQL family as present or missing in `$SRC_DIR/data/sql/custom/db_world/` (`scripts/thor-install.sh:1831-1844`). `--check` does not: it is a pre-install dry run and never calls the check code.
 
 To change one, edit the generator and regenerate (the README has the commands); do **not** hand-edit the committed SQL. With the shipped `Updates.Redundancy = 1` the updater compares hashes, so a CUSTOM file whose content changed **is** re-applied on the next boot, logged as `Reapplying update "<name>" (it changed)` [V]; the `DELETE` at the top of the file makes that safe. Removing its `updates` row or renaming the file is only needed when redundancy checking is off:
 
@@ -285,6 +287,35 @@ grep -E "Unknown item \(ID=|is not equipable in a hand" /opt/acore/logs/Server.l
 The module's own detail (`mod-creature-gear: loaded N outfit row(s) and M variant row(s) for K creature(s)`, the per-variant / per-drop / per-morph lines) is `LOG_DEBUG`, and `worldserver.conf.dist` ships `Logger.module=4,Console Server` (Info), which filters debug out — set `Logger.module=5` in `worldserver.conf` to see those lines at all. `CreatureGear.Debug` only gates the module's own lines; the logger level gates the channel.
 
 `bash thor-install.sh --status` reports the four keys that activate the three halves (`CreatureGear.Enable`, `CreatureGear.Drop.Enable`, `CreatureGear.Appearance.Enable`, `CreatureGear.Weapons.RerollOnRespawn`); to switch one half off, set it to 0 and type `.reload config` in the worldserver console — no restart is needed. Two further keys tune rather than activate: `CreatureGear.Appearance.VaryPerSpawn` (default 1) gives each spawn point its own sampled face and hair, and `CreatureGear.Debug` (default 0, needs `Logger.module=5` to be visible) logs the sampled values. Which armour a variant carries is data, not a key: `mod_creature_gear_outfit_variant` holds one row per variant per creature and the module picks one per spawn point (`grep "wears outfit variant"` in the log with `Debug = 1`). To stop a worldserver you started by hand in Part 5, type `server exit` in its console (`quit`/`exit` are not console commands in this core; `server shutdown 1` is the timed variant the installer uses).
+
+## Part 5b — Prove the survivor module is live
+
+Same shape as Part 5a, for `mod-survivor`:
+
+```bash
+# 1. the module conf the worldserver actually reads
+ls -l /opt/acore/etc/modules/mod-survivor.conf
+
+# 2. the gameobject template the container is summoned from reached the world database
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
+  -e "SELECT entry, type, displayId, name FROM gameobject_template WHERE entry = 5000000;"
+
+# 3. the three character tables were created at startup (programmatically, not by module SQL)
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_characters \
+  -e "SELECT COUNT(*) AS flags FROM survivor_flags;
+      SELECT COUNT(*) AS corpses FROM survivor_corpses;
+      SELECT COUNT(*) AS items FROM survivor_corpse_items;"
+
+# 4. the module registered itself
+grep -i "mod-survivor\|survivor" /opt/acore/logs/Server.log | tail -5
+```
+
+- (1) prints the file. If it is missing, the artifact was built without the module and `.survivor` does not exist.
+- (2) prints exactly one row: `5000000`, type `3` (chest), `displayId` 4093, name `Remains`. No row means the module SQL never applied - the container is then never summoned and the death drop is lost after the items are taken off the character.
+- (3) prints `0` for all three counters on a fresh realm: the tables exist but nothing has died yet. A non-zero `survivor_flags` means a character opted in, `survivor_corpses` and `survivor_corpse_items` grow with each survivor death.
+- (4) names the module's own lines. The module logs through the core's `module` logger, which `worldserver.conf.dist` ships at `Logger.module=4` (Info); set `Logger.module=5` if you want its debug detail.
+
+Then opt a character in with `.survivor on` and die once. That is the point where the container, the loot window, the map pin and the recovered item's enchantments need a client - none of it has been exercised on the Thor.
 
 ## Part 6 — Prove it with a client before touching the launcher
 

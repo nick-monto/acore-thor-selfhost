@@ -146,6 +146,24 @@ namespace
         return session && session->IsHeadless();
     }
 
+    // Soft cross-module check against mod-survivor, which owns `survivor_flags`.
+    // Survivor and Hardcore are mutually exclusive: a Survivor death drops the
+    // character's gear into a recoverable container, so that death must stay
+    // recoverable - permadeath would invalidate it. The table only exists when
+    // mod-survivor is installed, so a failed query (nullptr) simply means "not
+    // flagged"; this module therefore builds and runs without mod-survivor.
+    // Deliberately no error logging of our own and no cache: the only caller is
+    // the '.hardcore on' command (world thread, once per invocation), never a
+    // per-update hook, so an absent table costs at most one failed query per
+    // command attempt instead of log spam every tick.
+    bool SurvivorFlagged(uint32 guidLow)
+    {
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT `enabled` FROM `survivor_flags` WHERE `guid` = {} AND `enabled` = 1", guidLow);
+
+        return result != nullptr;
+    }
+
     void SendFallenMessage(Player* player)
     {
         if (!player || !player->GetSession())
@@ -413,6 +431,16 @@ public:
         if (!cfg.Enable)
         {
             handler->SendSysMessage("Hardcore is currently disabled on this server.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        // Survivor deaths must stay recoverable (gear is dropped into a
+        // lootable container), so a Survivor-flagged character cannot also be
+        // made permanently dead by Hardcore.
+        if (SurvivorFlagged(player->GetGUID().GetCounter()))
+        {
+            handler->SendSysMessage("This character is flagged Survivor. Survivor and Hardcore are mutually exclusive; a Survivor death must be recoverable.");
             handler->SetSentErrorMessage(true);
             return false;
         }

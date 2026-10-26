@@ -13,6 +13,12 @@
 # block trade/mail/the Auction House. Install mod-self-found alongside it for
 # that.
 #
+# Hardcore and Survivor are mutually exclusive. If mod-survivor is installed
+# and the character is flagged Survivor (a row in its `survivor_flags` table),
+# '.hardcore on' is refused: a Survivor death drops the character's equipment
+# and bags into a lootable container at the death spot, so that death has to
+# stay recoverable, while Hardcore makes it permanent.
+#
 
 #
 #    Hardcore.Enable
