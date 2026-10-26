@@ -12,10 +12,16 @@ everything you carry, but it does not end the character.
 3. summons one lootable container at the death position holding exactly those
    items;
 4. marks that position on the player's map through the `SURV` addon message;
-5. lets the character resurrect normally - the container is independent of the
-   corpse, so a spirit-healer resurrection does not destroy it;
+5. revives the character at the closest graveyard on its next update - half
+   health, no resurrection sickness, no ghost and no corpse run: you wake at the
+   graveyard and walk back to the container;
 6. returns each item, as the *same* instance, when it is looted. Anything that
    does not fit into the bags is mailed, never dropped on the floor.
+
+The container is independent of the corpse, so nothing about the revival can
+lose it: an unclaimed one stays where it fell until it is looted or expires.
+Battleground and arena deaths keep the core's own handling - no drop and no
+revival there.
 
 The bank, the mail, the gold and the quest log are never touched. Opt-in is
 one-way, like Hardcore: there is no `.survivor off`. `.survivor status` reports
@@ -89,6 +95,14 @@ exactly `Addmod_survivorScripts`, defined in
   - Every item is written as `item_instance` -> `survivor_corpse_items` -> the
     live item is destroyed, all three in one characters-DB transaction, so a
     crash can neither lose the instance nor destroy one that was never saved.
+* `PlayerScript::OnPlayerUpdate` revives a survivor queued by the death. The
+  revive cannot run inside `OnPlayerJustDied` (it is inside `Player::Kill`, before
+  the corpse exists), so the guid waits in an in-memory set and the next update
+  calls `Player::ResurrectPlayer(0.5f)`, `Player::SpawnCorpseBones()` and
+  `Player::RepopAtGraveyard()` - the same sequence the core uses for a death it
+  treats as unreachable. A logout that beats the tick is covered by
+  `HandleLogin` (flagged, dead, unclaimed row), a Release by
+  `OnPlayerReleasedGhost`, and a battleground or arena death is left alone.
 * The container is a summoned chest with `SetOwnerGUID` and a hand-filled
   `GameObject::loot`: one `LootItem` per saved instance, `itemIndex` equal to the
   vector index and `unlootedCount` incremented by hand (the core only does that

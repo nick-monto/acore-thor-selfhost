@@ -23,6 +23,9 @@
  *     regenerates enchants, gems and durability).
  *   - The position is also sent to the player's addon ('SURV\tsite ...'), which
  *     draws the map pin; the addon outlives the corpse and the resurrection.
+ *   - The character is then revived at the closest graveyard on its next update:
+ *     at half health, without resurrection sickness and without a ghost, so a
+ *     death costs the gear and the walk back, never a corpse run.
  *   - Bot-controlled characters are stripped and re-rolled with playerbots'
  *     own factory: same bot, fresh kit for its class, level and specs.
  *
@@ -164,6 +167,21 @@ namespace
         static std::unordered_set<uint32> guids;
         return guids;
     }
+
+    // Survivors whose death was handled and that are waiting for the revive at
+    // the closest graveyard. The entry is kept until the character is found
+    // again (the next update, a login, or the ghost release), never dropped on
+    // a timer: a character that logs out mid-tick is picked up by HandleLogin,
+    // and the set can never hold more than one entry per character.
+    std::unordered_set<uint32>& PendingRevive()
+    {
+        static std::unordered_set<uint32> guids;
+        return guids;
+    }
+
+    // The only message a revived survivor sees, at every entry point.
+    constexpr char const* kReviveMessage =
+        "|cffff8000[Survivor]|r You wake at the nearest graveyard. Your belongings are still where you fell.";
 
     uint32 NowSeconds()
     {
@@ -576,6 +594,57 @@ namespace
         }
     }
 
+    // Takes a guid out of the revive queue. True when it was queued.
+    bool TakePendingRevive(uint32 guidLow)
+    {
+        std::lock_guard<std::recursive_mutex> guard(CacheMutex());
+        return PendingRevive().erase(guidLow) > 0;
+    }
+
+    // Queues the revive of a survivor whose death was just handled. Only the
+    // insert runs under the lock; the death itself is over by now.
+    void QueueRevive(uint32 guidLow)
+    {
+        std::lock_guard<std::recursive_mutex> guard(CacheMutex());
+        PendingRevive().insert(guidLow);
+    }
+
+    // True when this character still owns a survivor_corpses row, i.e. a death
+    // this module handled whose belongings have not been recovered yet.
+    bool HasUnclaimedCorpse(uint32 guidLow)
+    {
+        return bool(CharacterDatabase.Query(
+            "SELECT 1 FROM `survivor_corpses` WHERE `guid` = {} LIMIT 1", guidLow));
+    }
+
+    // Replaces the ghost the core would leave behind with a live character at
+    // the closest graveyard, at half health and without resurrection sickness.
+    // Does nothing when there is no death to undo.
+    //
+    // The order is the one Player::RepopAtGraveyard uses for an unreachable
+    // death: resurrect first (it fires OnPlayerCanResurrect and removes the
+    // ghost auras), then turn the corpse into bones while it is still on the
+    // map that created it, and only then teleport. RepopAtGraveyard goes last
+    // for the same reason the core does it last: it fires
+    // OnPlayerCanRepopAtGraveyard and only sends the spirit-healer marker to a
+    // dead player, which we no longer are.
+    void ReviveAtGraveyard(Player* player)
+    {
+        if (!player || !player->IsInWorld() || !player->isDead())
+            return;
+
+        // A battleground or arena death keeps the core's own handling (the
+        // resurrection at the end of the match).
+        if (player->InBattleground() || player->InArena())
+            return;
+
+        player->ResurrectPlayer(0.5f);
+        player->SpawnCorpseBones();
+        player->RepopAtGraveyard();
+
+        player->SendSystemMessage(kReviveMessage);
+    }
+
     // Re-summons every unclaimed container of this player that belongs to the
     // map the player is on right now.
     void RestoreContainers(Player* player)
@@ -876,6 +945,11 @@ namespace Survivor
 
         SendSite(player, player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
                  player->GetZoneId(), corpseId);
+
+        // The revive is deferred: OnPlayerJustDied runs inside Player::Kill,
+        // before the corpse exists and before the death sequence finishes.
+        // The next update of this player brings it back at the graveyard.
+        QueueRevive(player->GetGUID().GetCounter());
     }
 
     void HandleBotUpdate(Player* player)
@@ -919,6 +993,43 @@ namespace Survivor
         PlayerbotFactory factory(player, player->GetLevel());
         factory.InitBags(true);
         PlayerbotFactory::AutoGear(player, 0, 0, false);
+    }
+
+    void HandleReviveUpdate(Player* player)
+    {
+        if (!GetConfig().Enable || !player)
+            return;
+
+        uint32 guidLow = player->GetGUID().GetCounter();
+
+        // Peek under the lock, act outside it: the guid is only consumed by
+        // the update that can actually revive.
+        {
+            std::lock_guard<std::recursive_mutex> guard(CacheMutex());
+            if (PendingRevive().find(guidLow) == PendingRevive().end())
+                return;
+        }
+
+        if (!player->isDead())
+        {
+            // Someone else resurrected the character between the death and this
+            // tick; there is no ghost to replace.
+            TakePendingRevive(guidLow);
+            return;
+        }
+
+        // Mid-teleport or mid-logout: keep the entry and use the next tick that
+        // finds the character fully in the world.
+        if (!player->IsInWorld())
+            return;
+
+        // Battlegrounds and arenas keep the core's resurrection; the entry
+        // waits for a tick that finds the character out of them.
+        if (player->InBattleground() || player->InArena())
+            return;
+
+        TakePendingRevive(guidLow);
+        ReviveAtGraveyard(player);
     }
 
     void HandleLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootGuid)
@@ -1050,10 +1161,23 @@ namespace Survivor
         if (!player || !GetConfig().Enable)
             return;
 
+        // Before the revive below moves the character to the graveyard, so the
+        // container is re-summoned on the map the character logs in on.
         RestoreContainers(player);
 
-        if (!IsBotControlled(player))
-            SendNewestSite(player);
+        if (IsBotControlled(player))
+            return;
+
+        // A survivor who died and logged out before the update tick must not
+        // come back as a ghost. The unclaimed row is the marker of a death this
+        // module handled; once its items are gone there is nothing to undo.
+        if (player->isDead() && IsFlagged(player) && HasUnclaimedCorpse(player->GetGUID().GetCounter()))
+        {
+            TakePendingRevive(player->GetGUID().GetCounter());
+            ReviveAtGraveyard(player);
+        }
+
+        SendNewestSite(player);
     }
 
     void HandleUpdateZone(Player* player)
@@ -1068,6 +1192,12 @@ namespace Survivor
     {
         if (!player || !GetConfig().Enable || IsBotControlled(player))
             return;
+
+        // A release that beats the update tick: revive here instead of letting
+        // the ghost run. Only a death this module queued is affected - an
+        // ordinary ghost, or a Hardcore one, is left to the core.
+        if (TakePendingRevive(player->GetGUID().GetCounter()))
+            ReviveAtGraveyard(player);
 
         SendNewestSite(player);
     }
@@ -1259,11 +1389,12 @@ public:
         Survivor::HandleLootItem(player, item, count, lootguid);
     }
 
-    // Every update, but the queue is empty for everything that is not a bot
-    // waiting for its new kit.
+    // Every update. The bot queue and the survivor revive queue are both empty
+    // for any character with nothing pending.
     void OnPlayerUpdate(Player* player, uint32 /*p_time*/) override
     {
         Survivor::HandleBotUpdate(player);
+        Survivor::HandleReviveUpdate(player);
     }
 
     void OnPlayerLogin(Player* player) override

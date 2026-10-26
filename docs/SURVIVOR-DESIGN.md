@@ -13,7 +13,7 @@ Confidence: **[V]** verified here from source, artifact or API, **[R]** reported
 Hardcore (`modules/mod-hardcore`, `.hardcore on`) is permadeath: one death and the
 character is finished. That is a different game from "death is expensive". Survivor keeps
 the character and makes the death itself the punishment, which is what a solo realm needs:
-losing the gear you spent the evening gathering hurts, and the corpse run to get it back is
+losing the gear you spent the evening gathering hurts, and the run back to the container is
 the content.
 
 The two rulesets cannot coexist. A Hardcore character's death is final, so there is nothing
@@ -32,11 +32,13 @@ and both refuse bot-controlled sessions.
    quest log are untouched.
 3. Spawns one lootable container at the death position, named after the character, holding
    exactly those items.
-4. Marks the position on the player's map (addon message; see §7) and, while the player is
-   a ghost, the client's own corpse marker already points there [V] (`MSG_CORPSE_QUERY`
-   from `Player::_corpseLocation`, `Handlers/QueryHandler.cpp:227-271`).
-5. The character resurrects normally - at the corpse, or at a spirit healer. The container
-   is independent of the corpse, so a spirit-healer resurrection does not destroy it.
+4. Marks the position on the player's map (addon message; see §7). There is no ghost phase
+   and no corpse marker to fall back on, so the addon pin is the only pointer at the
+   container.
+5. Wakes the character **alive at the closest graveyard**, at half health, with no
+   resurrection sickness, and turns the corpse into bones (§5.9). There is no release and no
+   run back to a body: the walk back is to the container, which stays where the character
+   died.
 6. Looting the container returns each item as the *same* instance it was, into a free bag
    slot; anything that does not fit is mailed, never dropped on the floor.
 
@@ -54,8 +56,8 @@ map update), so no session-thread assumptions are allowed in the handler [V].
 
 That is the only hook that sees the items still equipped. `OnPlayerReleasedGhost`
 (`Player.cpp:4561`, at the end of `BuildPlayerRepop`) fires after the corpse exists and is
-reached from both threads [V]; it is used only to re-send the map marker, never to move
-items.
+reached from both threads [V]; a survivor never gets there, because it is revived inside the
+death hook (§5.9) and never becomes a ghost.
 
 ### 5.2 The item snapshot is the item_instance row
 
@@ -156,9 +158,10 @@ The item guid is reused, which is safe because the destroy deleted the row.
 ### 5.5 The container outlives the corpse, and the server
 
 The corpse object is not a container: `Player::SendLoot`'s corpse branch only removes a
-battleground insignia (`Player.cpp:8187`) [V], and `SpawnCorpseBones` clears the corpse on
-resurrection (`Player.cpp:4782-4798`) [V]. The chest is independent, so a spirit-healer
-resurrection, a logout, or a server restart all leave the loot where it was.
+battleground insignia (`Player.cpp:8187`) [V], and the survivor death path calls
+`SpawnCorpseBones` as it revives, so there is not even a corpse left to loot
+(`Player.cpp:4782-4798`) [V]. The chest is independent, so the revival at the graveyard, a
+logout, or a server restart all leave the loot where it was.
 
 Persistence: `survivor_corpses` holds `map, x, y, z, o, zone, created_ts, lifetime` and the
 owner guid. A summoned gameobject is never saved (`SummonGameObject` sets neither
@@ -207,15 +210,16 @@ Messages:
 
 | message | payload | when |
 |---|---|---|
-| `SURV\tsite` | `<mapId> <x> <y> <zoneId> <corpseId>` | on death, on ghost release, on login with an unclaimed container, and as a reply to `SURV\thello` |
+| `SURV\tsite` | `<mapId> <x> <y> <zoneId> <corpseId>` | on death, on login with an unclaimed container, and as a reply to `SURV\thello` |
 | `SURV\tnone` | - | after the container is emptied |
 
 The addon (`acore-thor-launcher/app/src/main/assets/survivor/`) registers the prefix,
 stores the site in SavedVariables, draws a pin on the world map when the matching map is
 shown and a distance arrow on the minimap, and clears it on `none` or `/surv clear`.
 
-While the player is a ghost the client's own corpse marker already points at the body
-(`MSG_CORPSE_QUERY`), so the addon is what survives the resurrection.
+The client's own corpse marker is not an option any more: a survivor is revived and its
+corpse turned to bones in the same death hook, so `MSG_CORPSE_QUERY` has nothing to point
+at. The addon message is the only source of the position.
 
 ### 5.8 Bots: strip and re-roll
 
@@ -264,6 +268,46 @@ is naked, which is the ruleset working.
 Bots are skipped in battlegrounds and arenas, exactly like players: the core restores them
 at the end of the match, and re-rolling gear on every BG death would churn the DB for
 nothing.
+
+### 5.9 Waking at the graveyard
+
+A survivor death leaves no ghost and no corpse run. In the same hook that lifts the gear,
+the character is revived **alive at the closest graveyard**, at half health, with no
+resurrection sickness, and the corpse is turned into bones. The container stays at the death
+position, so the walk back is to the container, not to a body. Paths below are relative to
+`src/server/game/` in the pinned core:
+
+- `Player::RepopAtGraveyard()` already does exactly this for the deaths the core treats as
+  unreachable (a fly-only zone, a death under the map): it calls
+  `ResurrectPlayer(0.5f); SpawnCorpseBones();` (`Entities/Player/Player.cpp:5024-5030`) and
+  then teleports to `sGraveyard->GetClosestGraveyard(this, GetTeamId())`
+  (`Player.cpp:5034-5049`) [V]. The survivor path generalizes a path the realm already runs,
+  rather than inventing one.
+- `ResurrectPlayer(float restore_percent, bool applySickness = false)` (`Player.h:2074`, impl
+  `Player.cpp:4564`) turns the `0.5f` into half health, applies no sickness by default,
+  removes the ghost auras, sets `DeathState::Alive`, clears `m_deathTimer`, and sends
+  `SMSG_DEATH_RELEASE_LOC` with `-1`, which drops the spirit-healer marker [V].
+- `SpawnCorpseBones(bool triggerSave = true)` (`Player.h:2066`, impl `Player.cpp:4782-4798`)
+  clears `_corpseLocation` and converts the corpse to bones [V].
+- `RepopAtGraveyard()` may be called while alive - its own comment says so - and it stops the
+  repop countdown; it sends the spirit-healer position only when the player is dead, so the
+  resurrection comes first and the repop second [V].
+- The destination is script-overridable: `Graveyard::GetClosestGraveyard(Player*, TeamId,
+  bool nearCorpse)` calls `OnPlayerBeforeChooseGraveyard(player, teamId, nearCorpse,
+  uint32& graveyardOverride)` first (`Misc/GameGraveyard.cpp:97-122`) [V], so a later ruleset
+  can move the destination without a core patch.
+- An instance death resolves through that map's `graveyard_zone` rows, so it lands at the
+  instance's own graveyard and the player can walk back in to the container [V].
+
+Why the closest graveyard and not the bound inn: `m_homebindMapId`, `m_homebindX`,
+`m_homebindY` and `m_homebindZ` are public on `Player` (`Player.h:2420-2424`) [V], so
+teleporting to the bound inn would be a two-line change - but the hearthstone already does
+exactly that on demand, and the inn is not on the way to the container: it adds a travel leg
+before the recovery walk without adding a decision. A *nearest* inn would be worse again:
+the core only exposes innkeepers as a per-unit flag (`Unit::IsInnkeeper()`,
+`Entities/Unit/Unit.h:814`) [V], so it would need its own faction-filtered scan of the
+innkeeper spawns. The closest graveyard is the destination the core can already compute
+for every map and instance.
 
 ## Schema
 
@@ -351,11 +395,11 @@ payload is auditable with plain SQL.
 
 | case | behaviour | why |
 |---|---|---|
-| death in an instance | container is created in the instance; the player can only reach it while the instance exists | the row records the instance map and expires; items are mailed on expiry |
-| death in a battleground | **no drop** - the character is restored at the end of the match by the core | a container in a BG would be unreachable after the match |
-| death while duelling | drop happens, same as any death | duel deaths already run the full death path |
-| under-map / fatigue death | drop happens at the death position; the ghost can still release at a graveyard and resurrect at a spirit healer, and the container is still there | the container is not the corpse |
-| logout while dead | nothing special: the container is a DB row, not a live object | §5.5 |
+| death in an instance | container is created in the instance and the character wakes at that instance's closest graveyard, so it can walk back in; the container can only be reached while the instance exists | the row records the instance map and expires; items are mailed on expiry; the instance's `graveyard_zone` row supplies the destination (§5.9) |
+| death in a battleground or arena | **no drop and no revival** - the core's own death handling runs, and the character is restored at the end of the match | a container in a BG would be unreachable after the match, and a graveyard teleport would fight the match logic |
+| death while duelling | drop happens, same as any death; the character wakes at the closest graveyard like any other survivor death | duel deaths already run the full death path |
+| under-map / fatigue death | drop happens at the death position; the character is revived at the closest graveyard exactly as for any other survivor death | same path the core already takes for unreachable deaths (`Player.cpp:5024-5030`); the container is not the corpse |
+| logout after a death, before recovering | nothing special: the character is already alive and the container is a DB row, not a live object | §5.5 |
 | server restart | container re-summons on the owner's next login/map entry | §5.5 |
 | bags full on recovery | item is mailed with the core's recovery mail | §5.4 |
 | bank / mail / gold / quest items | untouched | the ruleset is gear and bags only |
@@ -410,6 +454,16 @@ What was run, and what it proves:
   every module as an include directory (`modules/CMakeLists.txt:208` `CollectIncludeDirectories`
   -> `:244-248` `target_include_directories(... PUBLIC ...)`), so `#include
   "PlayerbotFactory.h"` resolves the same way mod-hardcore's `#include "Playerbots.h"` does.
+- **Graveyard revival, compile-level only.** What was checked is the core contract the path
+  relies on, not a running server: `ResurrectPlayer(0.5f)` is the call `RepopAtGraveyard`
+  already makes for unreachable deaths (`Player.cpp:5024-5030`), `applySickness` defaults to
+  `false` (`Player.h:2074`), `SpawnCorpseBones` converts the corpse and clears
+  `_corpseLocation` (`Player.cpp:4782-4798`), and the destination is
+  `sGraveyard->GetClosestGraveyard(this, GetTeamId())` (`Player.cpp:5034-5049`). The module
+  still compiles against the pinned headers. Nothing in this path was run in a client or on
+  the Thor.
 - **Not verifiable here:** the in-game feel - that the container is visible at the death
   spot, that the loot window lists the items, that the map pin lands on the right coordinates,
-  and that a looted item comes back enchanted. Those need a client session on the Thor.
+  that a looted item comes back enchanted, and that the character wakes alive at the closest
+  graveyard at half health, with no resurrection sickness and bones where the corpse was.
+  Those need a client session on the Thor.

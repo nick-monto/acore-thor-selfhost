@@ -93,6 +93,11 @@ namespace Survivor
     // Map thread (PlayerScript::OnPlayerUpdate).
     void HandleBotUpdate(Player* player);
 
+    // Revives a survivor queued by HandleDeath at the closest graveyard, in
+    // place of the ghost the core would leave. No-op for any character with
+    // nothing queued. Map thread (PlayerScript::OnPlayerUpdate).
+    void HandleReviveUpdate(Player* player);
+
     // Replaces the template-level item the core stored with the saved
     // instance, or mails it when the bags are full. Map thread.
     void HandleLootItem(Player* player, Item* item, uint32_t count, ObjectGuid lootGuid);
