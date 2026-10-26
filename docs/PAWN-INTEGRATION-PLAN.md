@@ -228,7 +228,10 @@ pool pawns and are not counted, which is exactly the intended second route to a 
 The compile gate is the arm64 workflow, as it is for every other module in this repository: this
 host has no Boost headers, so no AzerothCore translation unit can be compiled locally
 (`boost/version.hpp` is absent; the build tree at `azerothcore-wotlk/build` cannot compile). What is
-verifiable offline is checked by `scripts/pawn/check_pawn.py`, and the in-game steps are:
+verifiable offline is checked by `scripts/pawn/check_pawn.py`, which the workflow runs before it
+builds - a module SQL file that fails to apply aborts the worldserver, so the obelisk rows, the
+roster schema and the conf are cross-checked before the 40-minute build rather than after it. The
+in-game steps are:
 
 1. Open the obelisk: the page lists pawns within ±2 levels of the player, each with class, spec and
    level; the list is stable between visits.

@@ -81,6 +81,12 @@ jobs:
             libicu-dev libreadline-dev libncurses-dev \
             libmysqlclient-dev unzip zstd patchelf
 
+      # Cheap, deterministic and it guards the boot: a module SQL file that fails to apply aborts
+      # the worldserver, so the pawn module's obelisk rows, roster schema and conf are checked
+      # against each other before the 40-minute build rather than after it.
+      - name: Check the pawn module's files agree
+        run: python3 scripts/pawn/check_pawn.py
+
       - name: Fetch pinned sources
         run: |
           mkdir -p src && cd src

@@ -11,7 +11,7 @@
  *   * PlayerScript::OnPlayerCanLearnSpell refuses a blacklisted spell. The core
  *     checks it at the top of Player::learnSpell, so no learn path can bypass
  *     it: factory initialisation, trainer, level-up maintenance or a quest.
- *   * PlayerScript::OnLogout drops the picker's per-player cache entry.
+ *   * PlayerScript::OnPlayerLogout drops the picker's per-player cache entry.
  *
  * Released under GNU GPL v2 or (at your option) any later version.
  */
@@ -35,7 +35,7 @@ public:
         sPawnMgr.OnPlayerLogin(player);
     }
 
-    void OnLogout(Player* player) override
+    void OnPlayerLogout(Player* player) override
     {
         // The picker caches one small entry per player; drop it rather than keep
         // it for every character that ever opened an obelisk.
