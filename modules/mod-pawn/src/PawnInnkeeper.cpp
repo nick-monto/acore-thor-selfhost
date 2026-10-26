@@ -256,15 +256,23 @@ private:
         {
             PawnOffer const& offer = state.Offers[i];
 
-            std::string text = offer.Name;
-            if (text.empty())
-                text = "An unnamed pawn";
-            text += " - " + std::string(ClassName(offer.Class)) + ", " + DisplaySpec(offer.SpecName) +
-                    ", level " + std::to_string(uint32(offer.Level)) +
-                    " (" + RoleName(offer.Role) + ")";
+            std::string const name = offer.Name.empty() ? std::string("An unnamed pawn") : offer.Name;
+            uint32 const fee = sPawnMgr.HireFee(player, offer);
+
+            std::string text = name + " - " + std::string(ClassName(offer.Class)) + ", " +
+                               DisplaySpec(offer.SpecName) + ", level " +
+                               std::to_string(uint32(offer.Level)) + " (" + RoleName(offer.Role) +
+                               ") - " + (fee ? FormatMoney(fee) : std::string("free"));
+
+            // The price is in the row so offers can be compared before clicking,
+            // and in the confirmation box so a hire is a decision. The box money
+            // stays 0: the core would deduct it after the recruit has already run,
+            // and PawnMgr::Recruit charges it only once every check has passed.
+            std::string const popup = fee ? "Hire " + name + " for " + FormatMoney(fee) + "?"
+                                          : "Hire " + name + " for nothing?";
 
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, text, GOSSIP_SENDER_MAIN,
-                             PAWN_ACTION_RECRUIT + (i - first));
+                             PAWN_ACTION_RECRUIT + (i - first), popup, 0, false);
         }
 
         if (state.Offers.empty() && partyRows == 0)

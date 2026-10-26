@@ -192,6 +192,8 @@ CREATE TABLE IF NOT EXISTS `pawn_roster` (
   `role`         TINYINT UNSIGNED NOT NULL,      -- 1 tank, 2 healer, 3 dps
   `state`        TINYINT UNSIGNED NOT NULL,      -- 1 in the party, 0 dismissed
   `target_level` TINYINT UNSIGNED NOT NULL,      -- the level the pawn was recruited at
+  `built`        TINYINT UNSIGNED NOT NULL,      -- 1 once the gear pass has run
+  `paid`         TINYINT UNSIGNED NOT NULL,      -- 1 once this owner has paid the hire fee
   `updated_at`   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`owner_guid`, `bot_guid`),
   KEY `bot_guid` (`bot_guid`),

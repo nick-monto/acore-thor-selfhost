@@ -78,21 +78,27 @@ CREATE TABLE IF NOT EXISTS `pawn_roster` (
   `role`         TINYINT UNSIGNED NOT NULL,      -- 1 tank, 2 healer, 3 dps
   `state`        TINYINT UNSIGNED NOT NULL,      -- 1 in the party, 0 dismissed
   `target_level` TINYINT UNSIGNED NOT NULL,      -- the level the pawn was recruited at
+  `built`        TINYINT UNSIGNED NOT NULL,      -- 1 once the gear pass has run
+  `paid`         TINYINT UNSIGNED NOT NULL,      -- 1 once this owner has paid the hire fee
   `updated_at`   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`owner_guid`, `bot_guid`),
   KEY `bot_guid` (`bot_guid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
-A dismissed row is kept (`state = 0`) so the archetype and level survive and re-recruiting the same
-pawn gives the same pawn. `state = 1` rows are the party: they are what the cap counts and what the
-login hook restores.
+A dismissed row is kept (`state = 0`) so the archetype, the level and the paid fee survive and
+re-recruiting the same pawn gives the same pawn for nothing. `state = 1` rows are the party: they are
+what the cap counts and what the login hook restores. `built` and `paid` are added to a table an
+earlier build made through an `information_schema` lookup plus `ALTER`, because
+`ADD COLUMN IF NOT EXISTS` is MariaDB-only.
 
 ## Config
 
 ```ini
 Pawn.Enable = 1
 Pawn.MaxPawns = 2                  # D2
+Pawn.HireFeePercent = 100          # level^3 copper
+Pawn.HireFeeHeldPercent = 100      # each pawn held adds the base fee again
 Pawn.LevelWindow = 2               # D1, in levels either way
 Pawn.OfferedPerPage = 12           # gossip carries at most 16 rows per page
 Pawn.FeaturedMin = 10              # per picker instance, drawn from the pool
@@ -141,8 +147,14 @@ name is `Playerbots.PremadeSpecName.<class>.<spec_no>`.
 1. Refuse when `Pawn.Enable = 0`, when the player is in combat, or when the pawn is already online.
 2. Refuse when the party already holds `Pawn.MaxPawns` pawns (D2). The message names both exits:
    dismiss a pawn at the innkeeper, or recruit strangers in the world.
-3. Upsert the roster row with `spec_no`, `role`, `target_level` and `state = 1`.
-4. `GET_PLAYERBOT_MGR(player)->AddPlayerBot(botGuid, player->GetSession()->GetAccountId())` —
+3. Refuse when the hire fee is unaffordable. The fee is `level^3 * Pawn.HireFeePercent / 100 *
+   (100 + Pawn.HireFeeHeldPercent * pawns_held) / 100` copper, and it is 0 for a pawn this owner has
+   already paid for. Level cubed is calibrated against the loot-bag money table: 10-20 minutes of
+   ordinary farming at every level that matters. It is charged *here*, after every check, and not
+   through the gossip box: the core deducts box money after the script hook and unconditionally, so
+   a recruit refused at step 2 would still be paid for and an empty purse would still hire.
+4. Upsert the roster row with `spec_no`, `role`, `target_level`, `paid` and `state = 1`.
+5. `GET_PLAYERBOT_MGR(player)->AddPlayerBot(botGuid, player->GetSession()->GetAccountId())` —
    playerbots queues the login, the group invite and the summon
    (`PlayerbotMgr.cpp:597-621`).
 

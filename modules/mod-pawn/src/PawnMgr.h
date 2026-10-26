@@ -47,6 +47,10 @@ public:
     [[nodiscard]] std::vector<PawnRosterRow> ListParty(ObjectGuid owner) const;
     [[nodiscard]] uint32 CountParty(ObjectGuid owner) const;
 
+    // Copper a hire of this offer costs this player, right now: 0 when the fee
+    // is switched off or this owner has already paid for this pawn.
+    [[nodiscard]] uint32 HireFee(Player* player, PawnOffer const& offer) const;
+
     bool Recruit(Player* player, PawnOffer const& offer, std::string& message);
     bool Dismiss(Player* player, ObjectGuid bot, std::string& message);
     [[nodiscard]] bool IsSpellForbidden(Player* bot, uint32 spellId) const;

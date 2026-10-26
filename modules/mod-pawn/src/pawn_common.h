@@ -27,6 +27,10 @@ struct PawnConfig
     bool   Enabled              = true;
     uint8  MaxPawns             = 2;
     uint8  LevelWindow          = 2;
+    // What a hire costs: HireFeePercent of the pawn's level cubed, in copper, and
+    // HireFeeHeldPercent of that again for every pawn already in the party.
+    uint32 HireFeePercent       = 100;
+    uint32 HireFeeHeldPercent   = 100;
     uint8  OfferedPerPage       = 12;
     // A picker instance shows a random subsample of the pool, not the pool: the
     // count is drawn from [FeaturedMin, FeaturedMax] every time the menu opens.
@@ -80,6 +84,14 @@ struct PawnRosterRow
     // the one case that must always run the gear pass; afterwards the pawn keeps
     // whatever it wears, including anything the player gives it.
     bool       Built       = false;
+    // Set once this owner has paid the hire fee for this pawn. Re-hiring a pawn
+    // you have already paid for is free, so swapping companions costs nothing
+    // after the first time.
+    bool       Paid        = false;
 };
+
+// "51g 20s" / "20s 5c" / "0c": the price strings the picker and the recruit
+// message show. Zero components are dropped, so the smallest fee is "1c".
+std::string FormatMoney(uint32 copper);
 
 #endif

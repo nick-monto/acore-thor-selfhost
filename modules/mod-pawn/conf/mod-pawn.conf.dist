@@ -49,6 +49,29 @@ Pawn.MaxPawns = 2
 # Default: 2
 Pawn.LevelWindow = 2
 
+# What a hire costs, in copper, as a percentage of the pawn's level cubed:
+#
+#   fee = level^3 * HireFeePercent / 100 * (100 + HireFeeHeldPercent * pawns_held) / 100
+#
+# Level cubed copper is the point of the default. Measured against this server's
+# own loot-bag money table (scripts/loot-bags/gen_loot_bags.py: normal creatures
+# drop a bag 10% of the time, and the tier shares and money ranges are in MONEY),
+# level^3 copper is about 10-20 minutes of ordinary farming at 100 kills an hour
+# at every level that matters: 7 minutes at 10, 16 at 20, 20 at 30, 21 at 40-50,
+# 18 at 60, 14 at 70, 10 at 80. The fee in copper is 80s at 20, 2g 70s at 30,
+# 6g 40s at 40, 21g 60s at 60, 51g 20s at 80. The work it asks for therefore stays
+# the same as the player levels instead of vanishing at 80 or being impossible at
+# 10; quest money and vendor trash make it cheaper in practice, so treat those as
+# upper bounds. 0 makes every hire free.
+# Default: 100
+Pawn.HireFeePercent = 100
+
+# What each pawn already in the party adds to the price, as a percentage of the
+# base fee: 100 means the second pawn costs twice the first, the third three
+# times. A full party is an achievement, not the default state.
+# Default: 100
+Pawn.HireFeeHeldPercent = 100
+
 # Offers per gossip page. The gossip packet carries at most 16 rows and the
 # server aborts on a 33rd, so this is clamped to 16 minus the party rows and
 # the two navigation rows.

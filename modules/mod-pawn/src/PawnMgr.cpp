@@ -79,6 +79,8 @@ void PawnMgr::LoadConfig()
     _config.Enabled = sConfigMgr->GetOption<bool>("Pawn.Enable", true);
     _config.MaxPawns = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.MaxPawns", 2), 0, 4));
     _config.LevelWindow = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.LevelWindow", 2), 0, 10));
+    _config.HireFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeePercent", 100), 0, 10000));
+    _config.HireFeeHeldPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeeHeldPercent", 100), 0, 1000));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
     _config.FeaturedMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMin", 10), 1, 50));
     _config.FeaturedMax = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMax", 15), 1, 50));
@@ -91,10 +93,11 @@ void PawnMgr::LoadConfig()
     if (_config.PoolRefreshMaxMinutes < _config.PoolRefreshMinMinutes)
         std::swap(_config.PoolRefreshMaxMinutes, _config.PoolRefreshMinMinutes);
 
-    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min",
+    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/pawn",
              _config.Enabled, uint32(_config.MaxPawns), uint32(_config.LevelWindow),
              uint32(_config.OfferedPerPage), uint32(_config.FeaturedMin), uint32(_config.FeaturedMax),
-             uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes));
+             uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes),
+             _config.HireFeePercent, _config.HireFeeHeldPercent);
 }
 
 void PawnMgr::RefreshPool()
@@ -149,6 +152,18 @@ void PawnMgr::RefreshPool()
     LOG_INFO("module", "Pawn: pool: {} offline characters, next roll in {} min", uint32(_pool.size()), minutes);
 }
 
+// The roster table is created by this module, so a column added in a later build
+// has to be added to a table an earlier build already made. The lookup is what
+// makes that portable: ADD COLUMN IF NOT EXISTS is MariaDB-only.
+static void AddMissingColumn(std::string const& column, std::string const& definition)
+{
+    QueryResult has = CharacterDatabase.Query(
+        "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+        "AND TABLE_NAME = 'pawn_roster' AND COLUMN_NAME = '" + column + "'");
+    if (has && has->Fetch()[0].Get<uint64>() == 0)
+        CharacterDatabase.DirectExecute("ALTER TABLE `pawn_roster` ADD COLUMN " + definition);
+}
+
 void PawnMgr::EnsureSchema()
 {
     // Created here rather than by module SQL on purpose: a failing module SQL file aborts the
@@ -165,6 +180,7 @@ void PawnMgr::EnsureSchema()
         "`state` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`target_level` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`built` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+        "`paid` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
         "PRIMARY KEY (`owner_guid`, `bot_guid`),"
         "KEY `bot_guid` (`bot_guid`),"
@@ -172,14 +188,10 @@ void PawnMgr::EnsureSchema()
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     // CREATE TABLE IF NOT EXISTS does not add a column to a table an earlier
-    // build created, and ADD COLUMN IF NOT EXISTS is MariaDB-only, so the column
+    // build created, and ADD COLUMN IF NOT EXISTS is MariaDB-only, so each column
     // is looked up first. information_schema is portable to both.
-    QueryResult hasBuilt = CharacterDatabase.Query(
-        "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
-        "AND TABLE_NAME = 'pawn_roster' AND COLUMN_NAME = 'built'");
-    if (hasBuilt && hasBuilt->Fetch()[0].Get<uint64>() == 0)
-        CharacterDatabase.DirectExecute(
-            "ALTER TABLE `pawn_roster` ADD COLUMN `built` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `target_level`");
+    AddMissingColumn("built", "`built` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `target_level`");
+    AddMissingColumn("paid", "`paid` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `built`");
 }
 
 void PawnMgr::LoadRoster()
@@ -188,7 +200,7 @@ void PawnMgr::LoadRoster()
     _rows.clear();
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level, built FROM pawn_roster");
+        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level, built, paid FROM pawn_roster");
     if (!result)
     {
         LOG_INFO("module", "Pawn: roster: empty");
@@ -208,6 +220,7 @@ void PawnMgr::LoadRoster()
         row.Recruited = fields[4].Get<uint8>() == 1;
         row.TargetLevel = fields[5].Get<uint8>();
         row.Built = fields[6].Get<uint8>() == 1;
+        row.Paid = fields[7].Get<uint8>() == 1;
 
         if (row.Recruited)
             ++recruited;
@@ -547,6 +560,45 @@ void PawnMgr::ApplyPawn(Player* bot)
     bot->SaveToDB(false, false);
 }
 
+std::string FormatMoney(uint32 copper)
+{
+    uint32 const gold = copper / 10000;
+    uint32 const silver = (copper % 10000) / 100;
+    uint32 const rest = copper % 100;
+
+    std::string out;
+    if (gold)
+        out = std::to_string(gold) + "g";
+    if (silver)
+        out += (out.empty() ? "" : " ") + std::to_string(silver) + "s";
+    if (rest || out.empty())
+        out += (out.empty() ? "" : " ") + std::to_string(rest) + "c";
+    return out;
+}
+
+uint32 PawnMgr::HireFee(Player* player, PawnOffer const& offer) const
+{
+    if (!player || !_config.HireFeePercent || !offer.Bot)
+        return 0;
+
+    // A pawn this player has already paid for is free to call back: the fee buys
+    // a companion, not the right to keep swapping companions.
+    if (auto it = _rows.find(offer.Bot.GetCounter());
+        it != _rows.end() && it->second.Owner == player->GetGUID() && it->second.Paid)
+        return 0;
+
+    // The level cubed, in copper - see the conf comment for why that curve. 64-bit
+    // because the two percentages multiply on top of it.
+    uint64 fee = uint64(offer.Level) * uint64(offer.Level) * uint64(offer.Level);
+    fee = fee * _config.HireFeePercent / 100;
+    fee = fee * (100 + uint64(_config.HireFeeHeldPercent) * CountParty(player->GetGUID())) / 100;
+
+    // 80^3 * 100x * 6 pawns is far below this; the cap is only here so a nonsense
+    // percentage cannot overflow, and it stays inside int32 because the charge is
+    // a negative int32.
+    return uint32(std::min<uint64>(fee, 2000000000ull));
+}
+
 bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& message)
 {
     if (!_config.Enabled)
@@ -580,6 +632,25 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
         return false;
     }
 
+    // The fee is charged here, not through the gossip box: the core deducts box
+    // money after the script hook has run and unconditionally, so a recruit that
+    // fails on a full party or a pawn already in the world would still be paid
+    // for, and an empty purse would still hire. The picker shows the price and
+    // asks for confirmation instead.
+    uint32 const fee = HireFee(player, offer);
+    if (fee && !player->HasEnoughMoney(fee))
+    {
+        message = offer.Name + " asks " + FormatMoney(fee) + ", and you cannot afford that.";
+        return false;
+    }
+
+    PlayerbotHolder* mgr = GET_PLAYERBOT_MGR(player);
+    if (!mgr)
+    {
+        message = "Your pawn could not be called; no bot manager.";
+        return false;
+    }
+
     PawnRosterRow row;
     row.Owner = player->GetGUID();
     row.Bot = offer.Bot;
@@ -589,27 +660,36 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
     row.TargetLevel = offer.Level;
 
     // A dismissed pawn keeps its row, so a returning one keeps the gear it
-    // earned: without this the next login would re-equip it from scratch. Only
-    // while the spec is unchanged - a different spec means the gear on it was
-    // scored for the old one.
-    if (auto it = _rows.find(offer.Bot.GetCounter()); it != _rows.end())
+    // earned and the fee it was already charged: without this the next login
+    // would re-equip it from scratch and the next recruit would charge again.
+    // Only this owner's row counts - a pawn that belonged to someone else was
+    // geared against their level and paid for by them. The gear also only
+    // survives while the spec is unchanged, since a different spec means the
+    // items on it were scored for the old one.
+    if (auto it = _rows.find(offer.Bot.GetCounter());
+        it != _rows.end() && it->second.Owner == player->GetGUID())
+    {
         row.Built = it->second.Built && it->second.SpecNo == offer.SpecNo;
+        row.Paid = it->second.Paid;
+    }
+
+    if (fee)
+    {
+        player->ModifyMoney(-int32(fee));
+        row.Paid = true;
+    }
 
     Upsert(row);
     _rows[offer.Bot.GetCounter()] = row;
 
-    PlayerbotHolder* mgr = GET_PLAYERBOT_MGR(player);
-    if (!mgr)
-    {
-        message = "Your pawn could not be called; no bot manager.";
-        return false;
-    }
-
     mgr->AddPlayerBot(offer.Bot, player->GetSession()->GetAccountId());
 
-    LOG_INFO("module", "Pawn: {} recruited {} ({} {}, level {})", player->GetName(), offer.Name,
-             offer.SpecName, RoleName(offer.Role), uint32(offer.Level));
+    LOG_INFO("module", "Pawn: {} recruited {} ({} {}, level {}) for {}", player->GetName(),
+             offer.Name, offer.SpecName, RoleName(offer.Role), uint32(offer.Level),
+             fee ? FormatMoney(fee) : std::string("free"));
     message = offer.Name + " joins you as a " + offer.SpecName + " " + RoleName(offer.Role) + ".";
+    if (fee)
+        message += " The innkeeper takes " + FormatMoney(fee) + ".";
     return true;
 }
 
@@ -653,8 +733,8 @@ bool PawnMgr::IsSpellForbidden(Player* bot, uint32 spellId) const
 void PawnMgr::Upsert(PawnRosterRow const& row)
 {
     CharacterDatabase.Execute(
-        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built) "
-        "VALUES ({}, {}, {}, {}, {}, {}, {})",
+        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built, paid) "
+        "VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
         row.Owner.GetCounter(), row.Bot.GetCounter(), uint32(row.SpecNo), uint32(row.Role),
-        row.Recruited ? 1 : 0, uint32(row.TargetLevel), row.Built ? 1 : 0);
+        row.Recruited ? 1 : 0, uint32(row.TargetLevel), row.Built ? 1 : 0, row.Paid ? 1 : 0);
 }

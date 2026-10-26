@@ -34,6 +34,22 @@ things the pool does not have:
    once, recorded by the roster's `built` column: after that the pawn keeps what it wears, and
    playerbots' own level-up maintenance keeps it current as it levels with you.
 
+## The hire fee
+
+A hire costs `level^3` copper (`Pawn.HireFeePercent`, default 100), and each pawn already in the
+party adds that much again (`Pawn.HireFeeHeldPercent`, default 100 — so the second pawn is twice the
+price). Level cubed is calibrated against this server's own money supply, the loot-bag table in
+`scripts/loot-bags/gen_loot_bags.py`: 80s at level 20, 2g 70s at 30, 6g 40s at 40, 21g 60s at 60,
+51g 20s at 80 — ten to twenty minutes of ordinary farming at every level that matters, so the work
+asked for stays constant instead of evaporating at 80 or being impossible at 10.
+
+The price is on the picker row and in a confirmation box. The charge itself happens inside
+`PawnMgr::Recruit`, after every check has passed, and not through the gossip box's money: the core
+deducts box money *after* the script hook and unconditionally, so a recruit refused for a full party
+would still be paid for, and an empty purse would still hire. A pawn this owner has already paid for
+is free to call back (the roster's `paid` column), so swapping companions costs nothing after the
+first time — the fee buys a companion, not the right to swap.
+
 ## The party cap
 
 `Pawn.MaxPawns` (default 2) counts **pawns**, not group members. The installer sets
