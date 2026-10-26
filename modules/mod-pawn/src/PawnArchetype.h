@@ -38,14 +38,20 @@ public:
     [[nodiscard]] PawnRole RoleFor(uint8 cls, uint8 spec) const;
     [[nodiscard]] bool IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const;
 
-    // Pins the spec and removes every blacklisted spell the pawn still knows.
-    // Called on every pawn login, after any re-levelling.
-    void Apply(Player* bot, uint8 cls, uint8 spec) const;
+    // The variant pool of a spec: abilities a pawn of it may or may not have.
+    // Empty for a spec with no Pawn.Variant.<class>.<spec> block.
+    [[nodiscard]] std::vector<PawnVariantSpell> const& Variants(uint8 cls, uint8 spec) const;
+
+    // Pins the spec and removes every blacklisted spell the pawn still knows,
+    // plus the variant abilities this pawn was not dealt. Called on every pawn
+    // login, after any re-levelling.
+    void Apply(Player* bot, uint8 cls, uint8 spec, std::vector<PawnVariantSpell> const& withheld = {}) const;
 
 private:
     static uint32 Key(uint8 cls, uint8 spec) { return (uint32(cls) << 8) | uint32(spec); }
 
     std::unordered_map<uint32, std::vector<uint32>> _forbidden;   // Key -> spell ids
+    std::unordered_map<uint32, std::vector<PawnVariantSpell>> _variants;  // Key -> variant pool
     std::unordered_map<uint32, std::string>         _specNames;   // Key -> premade spec name
     std::unordered_map<uint8, std::vector<uint8>>   _pveSpecs;    // class -> spec numbers
 };

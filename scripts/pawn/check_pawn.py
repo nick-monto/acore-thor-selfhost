@@ -94,7 +94,7 @@ def check_config_keys() -> dict[str, str]:
 
     # Blacklist keys: class must be playable, spec inside the premade spec table.
     for key in sorted(keys):
-        match = re.fullmatch(r"Pawn\.Blacklist\.(\d+)\.(\d+)", key)
+        match = re.fullmatch(r"Pawn\.(?:Blacklist|Variant)\.(\d+)\.(\d+)", key)
         if not match:
             continue
         cls, spec = int(match.group(1)), int(match.group(2))
@@ -106,7 +106,8 @@ def check_config_keys() -> dict[str, str]:
             fail(f"conf: {key} is empty")
 
     notes.append(f"conf: {len(keys)} keys, {len(used)} read by the code, "
-                 f"{sum(1 for k in keys if k.startswith('Pawn.Blacklist.'))} blacklist blocks")
+                 f"{sum(1 for k in keys if k.startswith('Pawn.Blacklist.'))} blacklist blocks, "
+                 f"{sum(1 for k in keys if k.startswith('Pawn.Variant.'))} variant blocks")
     return keys
 
 
@@ -133,7 +134,7 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
 
     # The other direction: every non-blacklist key is one the repair path can restore.
     for key in sorted(keys):
-        if key.startswith("Pawn.Blacklist."):
+        if key.startswith(("Pawn.Blacklist.", "Pawn.Variant.")):
             continue
         if key not in defaults:
             fail(f"installer: {key} is in the conf but not in PAWN_CONF_DEFAULTS; a repair "

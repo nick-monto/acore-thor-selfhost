@@ -13,7 +13,7 @@ Every claim about existing behaviour carries a `path:line` reference against
 |---|---|---|
 | D1 | Pawns are offered at **player level ± 2** | A pawn you cannot use at your level is noise; a pawn that snaps to your exact level erases the choice. |
 | D2 | A party holds **the player plus two pawns**; a third requires strangers from the world | Keeps the pawns special and makes the ambient crowd useful. |
-| D3 | Each pawn is a **restricted archetype**: one premade PvE spec plus a hard spellbook blacklist | The player must swap pawns to get a toolkit, not just a body. |
+| D3 | Each pawn is a **restricted archetype**: one premade PvE spec plus a hard spellbook blacklist, plus a per-pawn variant of its own spec's situational abilities | The player must swap pawns to get a toolkit, not just a body, and two pawns of one spec are different companions. |
 | D4 | Pawns **never compete for loot**: they pass on every roll and never loot a free-for-all corpse | Loot bags are this realm's progression system. |
 | D5 | The pawn doorway is the **innkeeper line only**: `Playerbots.AddClassCommand = 0` | Makes D2 strict by construction, with no patch to the command. The pool is read directly for the same reason. |
 | D6 | The pawn layer is a **new module**, `modules/mod-pawn`, not an extension of the playerbots patch | See "Route" below: the two facts the study called unverified are now verified. |
@@ -53,7 +53,7 @@ The player-centric patch is untouched by this work.
 
 | File | Responsibility |
 |---|---|
-| `modules/mod-pawn/conf/mod-pawn.conf.dist` | `Pawn.*` keys: master switch, cap, level window, page size, featured count and pool refresh, per-archetype blacklists |
+| `modules/mod-pawn/conf/mod-pawn.conf.dist` | `Pawn.*` keys: master switch, cap, level window, page size, featured count and pool refresh, per-archetype blacklists and per-spec variant pools |
 | `modules/mod-pawn/src/pawn_common.h` | Config struct, role enum, shared types |
 | `modules/mod-pawn/src/PawnArchetype.h/.cpp` | Spec choice, blacklist name→id resolution, apply and prune |
 | `modules/mod-pawn/src/PawnMgr.h/.cpp` | Config load, pool refresh, featured draw, roster I/O, offer derivation, recruit/dismiss, login queue |
@@ -179,7 +179,8 @@ fires on login when the pawn is more than three levels from its master
    `PLAYER_FLAGS_NO_XP_GAIN` unless `Pawn.GainXP`, so the level cannot drift between logins.
 2. `PlayerbotFactory::InitTalentsBySpecNo(bot, spec_no, true)` — the archetype's spec, pinned
    (`PlayerbotFactory.cpp:1802`).
-3. Prune every blacklisted spell the pawn still has (`Player::removeSpell`).
+3. Prune every blacklisted spell the pawn still has (`Player::removeSpell`), and the variant
+   abilities this pawn was not dealt.
 4. `bot->SaveToDB(false, false)` so the next login starts from the right state.
 
 The player's own login restores `state = 1` rows by calling `AddPlayerBot` for each, which is what

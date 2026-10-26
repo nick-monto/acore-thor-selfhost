@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -82,6 +83,7 @@ void PawnMgr::LoadConfig()
     _config.HireFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeePercent", 100), 0, 10000));
     _config.HireFeeHeldPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeeHeldPercent", 100), 0, 1000));
     _config.GainXP = sConfigMgr->GetOption<bool>("Pawn.GainXP", false);
+    _config.VariantWithholdMax = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.VariantWithholdMax", 2), 0, 5));
     _config.GearFloorPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearFloorPercent", 85), 25, 100));
     _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearCapPercent", 150), 100, 300));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
@@ -295,6 +297,43 @@ uint8 PawnMgr::DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLevel, u
     return uint8(level);
 }
 
+std::vector<PawnVariantSpell> PawnMgr::WithheldVariants(ObjectGuid owner, ObjectGuid bot, uint8 cls, uint8 spec) const
+{
+    std::vector<PawnVariantSpell> withheld;
+    if (!_config.VariantWithholdMax)
+        return withheld;
+
+    auto const& pool = sPawnArchetype.Variants(cls, spec);
+    if (pool.empty())
+        return withheld;
+
+    uint64 const seed = owner.GetCounter() ^ (bot.GetCounter() * 2654435761u);
+
+    // How many of the pool this pawn is missing: bounded by the configuration and
+    // by the pool, drawn from the same seed as everything else about the pawn.
+    uint64 state = seed;
+    uint32 const count = std::min<uint32>(Mix(state) % (uint32(_config.VariantWithholdMax) + 1), uint32(pool.size()));
+
+    // Which ones: the entries with the lowest hash of their own first id, so the
+    // choice is independent per ability rather than "the first N of the list" -
+    // a pool is a set, not an order the configuration means to imply.
+    std::vector<std::pair<uint64, size_t>> ranked;
+    ranked.reserve(pool.size());
+    for (size_t i = 0; i < pool.size(); ++i)
+    {
+        uint64 rank = seed ^ (uint64(pool[i].Ids.front()) * 0x9E3779B97F4A7C15ull);
+        ranked.emplace_back(Mix(rank), i);
+    }
+
+    std::partial_sort(ranked.begin(), ranked.begin() + count, ranked.end());
+
+    withheld.reserve(count);
+    for (uint32 i = 0; i < count; ++i)
+        withheld.push_back(pool[ranked[i].second]);
+
+    return withheld;
+}
+
 uint16 PawnMgr::GearRatio(ObjectGuid owner, ObjectGuid bot) const
 {
     // A third slice of the same seed the level and the spec use, so a pawn's
@@ -329,6 +368,7 @@ PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uin
         offer.SpecNo = specs[(seed >> 8) % specs.size()];
         offer.SpecName = sPawnArchetype.SpecName(poolChar.Class, offer.SpecNo);
         offer.Role = sPawnArchetype.RoleFor(poolChar.Class, offer.SpecNo);
+        offer.Withheld = WithheldVariants(owner, poolChar.Bot, poolChar.Class, offer.SpecNo);
     }
 
     return offer;
@@ -616,7 +656,8 @@ void PawnMgr::ApplyPawn(Player* bot)
         // bot's spec, so anything equipped before the pin is gear for whatever
         // spec Randomize rolled - a prot pawn in a fury warrior's two-hander and
         // no shield.
-        sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo);
+        sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo,
+                             WithheldVariants(row->Owner, row->Bot, bot->getClass(), row->SpecNo));
 
         // The weight calculator does not read the talent tab: IsTank/IsHeal/
         // IsCaster with bySpec=false test STRATEGY_TYPE_* on the AI's engines,
@@ -657,7 +698,8 @@ void PawnMgr::ApplyPawn(Player* bot)
         }
     }
     else
-        sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo);
+        sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo,
+                             WithheldVariants(row->Owner, row->Bot, bot->getClass(), row->SpecNo));
 
     // With Pawn.GainXP the pawn does level in the party, so the roster follows it
     // instead of pinning it: the row's target is what the fee and the party row
@@ -856,7 +898,17 @@ bool PawnMgr::IsSpellForbidden(Player* bot, uint32 spellId) const
     if (it == _rows.end())
         return false;
 
-    return sPawnArchetype.IsForbidden(bot->getClass(), it->second.SpecNo, spellId);
+    if (sPawnArchetype.IsForbidden(bot->getClass(), it->second.SpecNo, spellId))
+        return true;
+
+    // The pawn's own variant: an ability the spec may have but this pawn was not
+    // dealt. Deterministic, so the gate and the build always agree.
+    for (PawnVariantSpell const& variant : WithheldVariants(it->second.Owner, it->second.Bot,
+                                                            bot->getClass(), it->second.SpecNo))
+        if (std::find(variant.Ids.begin(), variant.Ids.end(), spellId) != variant.Ids.end())
+            return true;
+
+    return false;
 }
 
 void PawnMgr::Upsert(PawnRosterRow const& row)

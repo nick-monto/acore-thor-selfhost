@@ -252,3 +252,86 @@ Pawn.Blacklist.11.0 = Mangle, Shred, Rip, Maul, Swipe, Growl, Healing Touch, Rej
 Pawn.Blacklist.11.1 = Starfire, Wrath, Starfall, Moonfire, Shred, Rip, Pounce, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility
 Pawn.Blacklist.11.2 = Starfire, Wrath, Starfall, Mangle, Shred, Rip, Maul, Swipe, Growl
 Pawn.Blacklist.11.3 = Starfire, Wrath, Starfall, Maul, Swipe, Growl, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility
+
+########################################
+#
+# Per-pawn variants: the second half of an archetype.
+#
+# The blacklist above makes a pawn a specialist. This makes two pawns of the
+# *same* spec different companions: each list is a pool of abilities that a pawn
+# of that spec may or may not arrive with, and each pawn is dealt a subset of it
+# from the same seed as its level, spec and gear ratio - so the same face always
+# arrives with the same toolkit for the same player, and two fury warriors do
+# not.
+#
+# The abilities chosen are the situational ones: interrupts, taunts, cooldowns,
+# dispels and crowd control. Losing an interrupt makes a pawn that cannot stop a
+# heal; losing a cooldown makes it squishier; losing a fear makes it a different
+# fight. Rotational damage or healing is never in a pool - a pawn missing its
+# rotation is broken, not different.
+#
+#   Pawn.Variant.<class>.<spec_no> = Spell Name, Spell Name, ...
+#
+# Same class ids and spec numbers as the blacklist. An empty or missing block
+# means every pawn of that spec arrives with the full toolkit. Names resolve
+# against the spell table once at startup, exactly like the blacklist, and an
+# unresolved name is an ERROR in the log - check the `archetypes:` line in
+# Server.log after a config change.
+
+# How many abilities from a spec's pool a pawn may be missing. 0 turns the
+# variation off and every pawn of a spec arrives with its whole pool; the draw is
+# uniform over 0..this, capped by the pool size, so 2 over a pool of three means
+# a pawn is missing none, one or two of them in equal measure.
+# Default: 2
+Pawn.VariantWithholdMax = 2
+
+# Warrior: arms, fury, prot
+Pawn.Variant.1.0 = Pummel, Mocking Blow, Retaliation
+Pawn.Variant.1.1 = Pummel, Recklessness, Death Wish
+Pawn.Variant.1.2 = Pummel, Spell Reflection, Last Stand
+
+# Paladin: holy, prot, ret
+Pawn.Variant.2.0 = Hammer of Justice, Turn Evil, Lay on Hands
+Pawn.Variant.2.1 = Hammer of Justice, Turn Evil, Divine Protection
+Pawn.Variant.2.2 = Hammer of Justice, Turn Evil, Repentance
+
+# Hunter: beast mastery, marksmanship, survival
+Pawn.Variant.3.0 = Concussive Shot, Feign Death, Deterrence
+Pawn.Variant.3.1 = Concussive Shot, Feign Death, Misdirection
+Pawn.Variant.3.2 = Concussive Shot, Feign Death, Wyvern Sting
+
+# Rogue: assassination, combat, subtlety
+Pawn.Variant.4.0 = Kick, Evasion, Cloak of Shadows
+Pawn.Variant.4.1 = Kick, Evasion, Sprint
+Pawn.Variant.4.2 = Kick, Evasion, Vanish
+
+# Priest: discipline, holy, shadow
+Pawn.Variant.5.0 = Dispel Magic, Shackle Undead, Fear Ward
+Pawn.Variant.5.1 = Dispel Magic, Shackle Undead, Fade
+Pawn.Variant.5.2 = Dispel Magic, Shackle Undead, Psychic Scream
+
+# Death knight: blood, frost, unholy
+Pawn.Variant.6.0 = Mind Freeze, Strangulate, Anti-Magic Shell
+Pawn.Variant.6.1 = Mind Freeze, Strangulate, Chains of Ice
+Pawn.Variant.6.2 = Mind Freeze, Strangulate, Anti-Magic Zone
+
+# Shaman: elemental, enhancement, restoration
+Pawn.Variant.7.0 = Wind Shear, Grounding Totem, Tremor Totem
+Pawn.Variant.7.1 = Wind Shear, Grounding Totem, Frost Shock
+Pawn.Variant.7.2 = Wind Shear, Grounding Totem, Frost Shock
+
+# Mage: arcane, fire, frost
+Pawn.Variant.8.0 = Counterspell, Polymorph, Spellsteal
+Pawn.Variant.8.1 = Counterspell, Polymorph, Blink
+Pawn.Variant.8.2 = Counterspell, Polymorph, Ice Block
+
+# Warlock: affliction, demonology, destruction
+Pawn.Variant.9.0 = Fear, Banish, Curse of Tongues
+Pawn.Variant.9.1 = Fear, Banish, Howl of Terror
+Pawn.Variant.9.2 = Fear, Banish, Shadowfury
+
+# Druid: balance, bear, restoration, cat
+Pawn.Variant.11.0 = Entangling Roots, Hibernate, Cyclone
+Pawn.Variant.11.1 = Bash, Feral Charge, Survival Instincts
+Pawn.Variant.11.2 = Entangling Roots, Hibernate, Nature's Swiftness
+Pawn.Variant.11.3 = Dash, Cower, Survival Instincts

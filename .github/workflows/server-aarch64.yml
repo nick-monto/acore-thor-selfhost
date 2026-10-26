@@ -185,6 +185,7 @@ jobs:
           test -f "$PREFIX/etc/modules/mod-pawn.conf.dist"
           grep -q '^Pawn.Enable = 1$' "$PREFIX/etc/modules/mod-pawn.conf.dist"
           grep -q '^Pawn.Blacklist.1.2 = ' "$PREFIX/etc/modules/mod-pawn.conf.dist"
+          grep -q '^Pawn.Variant.1.1 = ' "$PREFIX/etc/modules/mod-pawn.conf.dist"
           grep -q '^Pawn.FeaturedMin = 10$' "$PREFIX/etc/modules/mod-pawn.conf.dist"
 
       - name: Bundle the libraries whose soname is tied to this release

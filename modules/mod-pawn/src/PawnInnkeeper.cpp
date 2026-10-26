@@ -278,6 +278,20 @@ private:
                         std::to_string(offer.GearRatio > 100 ? uint32(offer.GearRatio) - 100
                                                              : 100 - uint32(offer.GearRatio)) + "% gear";
 
+            // What this pawn of that spec does not bring. Two fury warriors are
+            // different companions partly by which of these they are missing, and
+            // the player is buying the difference, so it is on the row.
+            if (!offer.Withheld.empty())
+            {
+                text += ", no ";
+                for (size_t i = 0; i < offer.Withheld.size(); ++i)
+                {
+                    if (i)
+                        text += "/";
+                    text += offer.Withheld[i].Name;
+                }
+            }
+
             text += " - " + (fee ? FormatMoney(fee) : std::string("free"));
 
             // The price is in the row so offers can be compared before clicking,

@@ -59,6 +59,13 @@ public:
     bool Dismiss(Player* player, ObjectGuid bot, std::string& message);
     [[nodiscard]] bool IsSpellForbidden(Player* bot, uint32 spellId) const;
 
+    // The variant abilities this pawn is missing: a bounded, deterministic
+    // subset of its spec's variant pool, drawn from the same seed as its level,
+    // spec and gear ratio, so two pawns of one spec differ and one pawn does not
+    // change under its owner.
+    [[nodiscard]] std::vector<PawnVariantSpell> WithheldVariants(ObjectGuid owner, ObjectGuid bot,
+                                                                uint8 cls, uint8 spec) const;
+
 private:
     [[nodiscard]] uint8 DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLevel, uint8 cls) const;
     // The gear ratio a pawn is offered (and geared) at, in percent of the owner's

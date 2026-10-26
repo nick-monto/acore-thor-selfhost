@@ -95,6 +95,7 @@ PawnArchetype& PawnArchetype::instance()
 void PawnArchetype::Load()
 {
     _forbidden.clear();
+    _variants.clear();
     _specNames.clear();
     _pveSpecs.clear();
 
@@ -156,8 +157,40 @@ void PawnArchetype::Load()
         }
     }
 
-    LOG_INFO("module", "Pawn: archetypes: {} specs named, {} PvE specs offerable, {} blacklisted spells resolved, {} names unresolved",
-             uint32(_specNames.size()), uint32(_pveSpecs.size()), resolved, missing);
+    // The variant pools: abilities a pawn of the spec may or may not arrive with,
+    // kept as name + every id it resolves to, because the picker names them and
+    // the learn gate has to match the ids.
+    uint32 variantNames = 0;
+    for (uint8 cls : kClasses)
+    {
+        for (uint8 spec = 0; spec < kMaxSpecs; ++spec)
+        {
+            std::string const key = "Pawn.Variant." + std::to_string(cls) + "." + std::to_string(spec);
+            std::string const list = sConfigMgr->GetOption<std::string>(key, "");
+            if (list.empty())
+                continue;
+
+            std::vector<PawnVariantSpell>& pool = _variants[Key(cls, spec)];
+            for (std::string const& name : SplitNames(list))
+            {
+                auto it = nameIndex.find(name);
+                if (it == nameIndex.end())
+                {
+                    ++missing;
+                    LOG_ERROR("module", "Pawn: variant {}.{}: no spell is named '{}'; that pawn variation does nothing",
+                              uint32(cls), uint32(spec), name);
+                    continue;
+                }
+
+                pool.push_back(PawnVariantSpell{name, it->second});
+                ++variantNames;
+            }
+        }
+    }
+
+    LOG_INFO("module", "Pawn: archetypes: {} specs named, {} PvE specs offerable, {} blacklisted spells resolved, {} variant abilities over {} specs, {} names unresolved",
+             uint32(_specNames.size()), uint32(_pveSpecs.size()), resolved, variantNames,
+             uint32(_variants.size()), missing);
 }
 
 std::vector<uint8> const& PawnArchetype::PveSpecs(uint8 cls) const
@@ -192,6 +225,13 @@ PawnRole PawnArchetype::RoleFor(uint8 cls, uint8 spec) const
     return PAWN_ROLE_DPS;
 }
 
+std::vector<PawnVariantSpell> const& PawnArchetype::Variants(uint8 cls, uint8 spec) const
+{
+    static std::vector<PawnVariantSpell> const empty;
+    auto it = _variants.find(Key(cls, spec));
+    return it == _variants.end() ? empty : it->second;
+}
+
 bool PawnArchetype::IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const
 {
     auto it = _forbidden.find(Key(cls, spec));
@@ -200,25 +240,34 @@ bool PawnArchetype::IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const
     return std::binary_search(it->second.begin(), it->second.end(), spellId);
 }
 
-void PawnArchetype::Apply(Player* bot, uint8 cls, uint8 spec) const
+void PawnArchetype::Apply(Player* bot, uint8 cls, uint8 spec, std::vector<PawnVariantSpell> const& withheld) const
 {
     if (!bot)
         return;
 
     PlayerbotFactory::InitTalentsBySpecNo(bot, spec, true);
 
-    auto it = _forbidden.find(Key(cls, spec));
-    if (it == _forbidden.end())
-        return;
-
     uint32 pruned = 0;
-    for (uint32 spellId : it->second)
+    auto const prune = [&](std::vector<uint32> const& ids)
     {
-        if (!bot->HasSpell(spellId))
-            continue;
-        bot->removeSpell(spellId, SPEC_MASK_ALL, false, true);
-        ++pruned;
-    }
+        for (uint32 spellId : ids)
+        {
+            if (!bot->HasSpell(spellId))
+                continue;
+            bot->removeSpell(spellId, SPEC_MASK_ALL, false, true);
+            ++pruned;
+        }
+    };
 
-    LOG_DEBUG("module", "Pawn: pawn {}: spec {} applied, {} blacklisted spells pruned", bot->GetName(), uint32(spec), pruned);
+    if (auto it = _forbidden.find(Key(cls, spec)); it != _forbidden.end())
+        prune(it->second);
+
+    // The pawn's own withheld variants, so a rebuild does not leave one behind:
+    // the learn gate would refuse it anyway, but a spell already in the book is
+    // not a learn attempt.
+    for (PawnVariantSpell const& variant : withheld)
+        prune(variant.Ids);
+
+    LOG_DEBUG("module", "Pawn: pawn {}: spec {} applied, {} spells pruned ({} variant{})", bot->GetName(),
+              uint32(spec), pruned, uint32(withheld.size()), withheld.size() == 1 ? "" : "s");
 }

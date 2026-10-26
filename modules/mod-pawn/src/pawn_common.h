@@ -43,6 +43,10 @@ struct PawnConfig
     // pawn that levels with its owner never needs exchanging, and the roster is
     // meant to be a set of contracts that expire as the player outgrows them.
     bool   GainXP               = false;
+    // How many of a spec's variant abilities a pawn may be missing, 0 to
+    // Pawn.Variant.<class>.<spec>. This is the per-pawn half of the archetype:
+    // two fury warriors differ by which of theirs are withheld.
+    uint8  VariantWithholdMax   = 2;
     uint8  OfferedPerPage       = 12;
     // A picker instance shows a random subsample of the pool, not the pool: the
     // count is drawn from [FeaturedMin, FeaturedMax] every time the menu opens.
@@ -68,6 +72,15 @@ struct PawnPoolChar
     uint8       Level = 0;
 };
 
+// One entry of a spec's variant pool: an ability a pawn of that spec may or may
+// not arrive with. The name is the configured one (the reviewable key); Ids is
+// every spell id that name resolves to, so ranks move together.
+struct PawnVariantSpell
+{
+    std::string         Name;
+    std::vector<uint32> Ids;
+};
+
 // One row of the picker: a pool pawn the player may recruit, with the level and
 // the spec it will have if they do. Both are derived from the two guids, so the
 // same pair always produces the same offer.
@@ -85,6 +98,9 @@ struct PawnOffer
     // the level, so a pawn is always offered at the same strength for the same
     // player, and the hire fee is this ratio applied to the level-cubed baseline.
     uint16      GearRatio = 100;
+    // The variant abilities this pawn does *not* arrive with, drawn from its
+    // spec's variant pool. Empty when the pool is empty or the feature is off.
+    std::vector<PawnVariantSpell> Withheld;
 };
 
 // One row of pawn_roster.

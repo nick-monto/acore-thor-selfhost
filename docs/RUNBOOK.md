@@ -356,15 +356,17 @@ grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
   once that owner has paid its hire fee at the level in `target_level`, which is what makes a re-hire
   at that level free. A non-zero `in_party` is a pawn currently in someone's party.
 - (4) is the important one: `module.pawn: archetypes: N specs named, ... R blacklisted spells
-  resolved, U names unresolved`. Any `Pawn.Blacklist.<class>.<spec>: no spell is named '...'` line
-  is an ERROR and means that particular restriction does nothing - fix the name in
+  resolved, V variant abilities over S specs, U names unresolved`. Any `Pawn.Blacklist.<class>.<spec>:
+  no spell is named '...'` or `Pawn.Variant.<class>.<spec>: no spell is named '...'` line is an ERROR
+  and means that particular restriction or variation does nothing - fix the name in
   `/opt/acore/etc/modules/mod-pawn.conf` and restart. The config is read at load, not per use.
 
 Then talk to any innkeeper - the capital inns and the town inns all carry the line - and pick
 "Recruit companions". What needs a client session, and has not been run on the Thor: the line
 appearing next to "make this inn your home" with the bind option still working, the paged menu, that
 two openings show different 10-15 subsets, the level and spec each row advertises, that the recruited
-pawn arrives at that level with that spec, that a third recruit is refused, that a blacklisted spell
+pawn arrives at that level with that spec and without the abilities its row says it lacks, that two
+pawns of one spec differ in those abilities, that a third recruit is refused, that a blacklisted spell
 is refused when the pawn tries to learn it, that both pawns pass on a drop, that a pawn stays at its
 hired level when the player levels past it (no XP, and `fallen behind` in the party row), and that the
 party comes back after a relog and a world-server restart.

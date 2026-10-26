@@ -23,7 +23,9 @@ at (see "A pawn is what you hired" below). This module adds the four things the 
    than that many levels ahead of it, the party row at the inn says it has fallen behind.
 4. **An archetype**: one premade PvE spec plus a hard blacklist of the other specs' signature
    abilities. A prot warrior pawn without Shield Wall cannot tank; a shadow priest pawn without
-   Resurrection cannot heal. The toolkit is the reason to swap.
+   Resurrection cannot heal. The toolkit is the reason to swap. On top of that, each pawn is dealt a
+   *variant* of its own spec's situational abilities, so two fury warriors are different companions —
+   see "Two pawns of one spec" below.
 5. **Gear for that spec at its level.** The spec is pinned *before* the equipment pass, the AI's
    strategies are rebuilt from it, and the glyphs are re-rolled against its tab, because playerbots
    scores every candidate item against the bot's active strategy (`TankWarriorStrategy` carries
@@ -33,6 +35,29 @@ at (see "A pawn is what you hired" below). This module adds the four things the 
    gear-score cap taken from the player, so a pawn is never better geared than its owner. It runs
    once, recorded by the roster's `built` column: after that the pawn keeps what it wears, and the
    pass only runs again if the level it was hired at has to be restored.
+
+## Two pawns of one spec
+
+The blacklist makes a pawn a specialist; the variant pool makes two specialists of the same spec
+different. `Pawn.Variant.<class>.<spec_no>` is a short list of the spec's *situational* abilities —
+interrupts, taunts, cooldowns, dispels, crowd control — and each pawn is dealt a subset of it:
+`PawnMgr::WithheldVariants` draws a count uniformly from `0..Pawn.VariantWithholdMax` (default 2),
+capped by the pool size, and picks that many entries by the lowest hash of their spell id, all from
+the same seed as the pawn's level, spec and gear ratio.
+
+So the same face always arrives with the same toolkit for the same player, and two fury warriors do
+not: with the shipped pool (`Pummel, Recklessness, Death Wish`) and a cap of 2, a pawn is missing
+none, one or two of them about a third of the time each — seven distinct kits over five thousand
+pawn pairs, and every one of them a fury warrior that fights a little differently.
+
+The withheld set is enforced in the same place as the blacklist — `PlayerScript::OnPlayerCanLearnSpell`
+through `PawnMgr::IsSpellForbidden` — so no learn path, factory or trainer, can undo it, and
+`PawnArchetype::Apply` prunes the ones a rebuild would otherwise leave in the book. The picker row
+says what the pawn lacks (`no Pummel/Recklessness`), because that is part of what the player is
+choosing between.
+
+Nothing rotational is ever in a pool: a pawn missing its rotation is broken, not different. Nor are
+capstone talents — the pools ship trainer abilities and small talents only.
 
 ## A pawn is what you hired
 
