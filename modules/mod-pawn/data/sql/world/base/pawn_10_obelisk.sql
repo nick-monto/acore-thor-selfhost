@@ -23,6 +23,13 @@
 --     transporters is GO_FLAG_INTERACT_COND, which those objects need because
 --     their options unlock with boss progress; nothing here is conditional.
 --
+-- Spawn guids are in the 9800000 band this repository reserves for custom
+-- spawns (the travel portals use 9800000-9800015). The base dump's guids run to
+-- 5714437, so a 5000000-range guid would sit inside a band a core update may
+-- still claim - and a collision on `gameobject`.`guid` fails the updater, which
+-- aborts the boot. The template *entry* is separate from the guid and stays
+-- 5000010, beside mod-survivor's 5000000.
+--
 -- Spawns: one in Stormwind's Trade District and one at the Valley of Strength
 -- entrance in Orgrimmar, each anchored to an existing object at street level
 -- so the Z is the ground the player stands on:
@@ -33,7 +40,7 @@
 
 DELETE FROM `gameobject_template` WHERE `entry` = 5000010;
 DELETE FROM `gameobject_template_addon` WHERE `entry` = 5000010;
-DELETE FROM `gameobject` WHERE `guid` IN (5000010, 5000011);
+DELETE FROM `gameobject` WHERE `guid` IN (9800020, 9800021);
 
 INSERT INTO `gameobject_template`
 (`entry`, `type`, `displayId`, `name`, `IconName`, `castBarCaption`, `unk1`, `size`,
@@ -57,11 +64,11 @@ INSERT INTO `gameobject`
  `rotation0`, `rotation1`, `rotation2`, `rotation3`,
  `spawntimesecs`, `animprogress`, `state`, `ScriptName`, `VerifiedBuild`)
 VALUES
-(5000010, 5000010, 0, 1519, 1519, 1, 1,
+(9800020, 5000010, 0, 1519, 1519, 1, 1,
  -8489.0, 673.0, 102.428, 0,
  0, 0, 0, 1,
  300, 0, 1, '', 0),
-(5000011, 5000010, 1, 1637, 1637, 1, 1,
+(9800021, 5000010, 1, 1637, 1637, 1, 1,
  1766.42, -4219.41, 44.3204, 0,
  0, 0, 0, 1,
  300, 0, 1, '', 0);

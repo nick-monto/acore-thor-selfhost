@@ -49,6 +49,21 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def split_top_level(row: str) -> list[str]:
+    """Split a VALUES row on commas that are not inside a quoted string."""
+    out, cur, quoted = [], "", False
+    for ch in row:
+        if ch == "'":
+            quoted = not quoted
+        if ch == "," and not quoted:
+            out.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    out.append(cur.strip())
+    return out
+
+
 def conf_keys(text: str) -> dict[str, str]:
     """Uncommented KEY = VALUE pairs, in file order."""
     keys: dict[str, str] = {}
@@ -134,15 +149,36 @@ def check_obelisk(keys: dict[str, str]) -> None:
         if f'GameObjectScript("{name}")' not in read(SRC / "PawnObelisk.cpp"):
             fail(f"sql: ScriptName {name} is not the one PawnObelisk.cpp registers")
 
-    # Every spawn must point at the template, and each DELETE must cover what the INSERT writes.
+    # Every spawn must point at the template and live in the custom guid band, and the DELETE must
+    # name exactly the guids the INSERT writes: the base dump's guids run to 5714437, so a
+    # 5000000-range spawn would sit where a core update may still put a row, and a collision on
+    # `gameobject`.`guid` fails the updater, which aborts the boot.
     spawn_block = re.search(r"INSERT INTO `gameobject`.*?VALUES(.*?);", world, re.S)
     spawn_ids = re.findall(r"\((\d+),\s*(\d+),\s*[01],\s*\d+,", spawn_block.group(1) if spawn_block else "")
     for guid, template_id in spawn_ids:
         if template_id != entry:
             fail(f"sql: spawn {guid} uses template {template_id}, not {entry}")
-    deletes = set(re.findall(r"DELETE FROM `gameobject` WHERE `guid` IN \(([^)]*)\)", world))
-    if not deletes:
+        if not 9800000 <= int(guid) <= 9899999:
+            fail(f"sql: spawn guid {guid} is outside the 9800000 custom band")
+
+    delete = re.search(r"DELETE FROM `gameobject` WHERE `guid` IN \(([^)]*)\)", world)
+    if not delete:
         fail("sql: no DELETE for the obelisk spawns; a re-run would duplicate them")
+    else:
+        deleted = {g.strip() for g in delete.group(1).split(",")}
+        written = {g for g, _ in spawn_ids}
+        if deleted != written:
+            fail(f"sql: DELETE covers {sorted(deleted)} but the INSERT writes {sorted(written)}")
+
+    # A VALUES row with a different field count than the column list fails the updater, and a
+    # failing module SQL file aborts the boot.
+    for statement in re.finditer(r"INSERT INTO `(\w+)`\s*\((.*?)\)\s*VALUES(.*?);", world, re.S):
+        name = statement.group(1)
+        columns = [c for c in statement.group(2).split(",") if c.strip()]
+        for row in re.findall(r"\(([^()]*)\)", statement.group(3)):
+            fields = split_top_level(row)
+            if len(fields) != len(columns):
+                fail(f"sql: {name} row has {len(fields)} values for {len(columns)} columns")
 
     notes.append(f"sql: obelisk entry {entry}, {len(spawn_ids)} spawns")
 
