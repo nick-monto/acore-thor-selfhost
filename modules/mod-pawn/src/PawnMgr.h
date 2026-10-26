@@ -57,6 +57,9 @@ public:
 
 private:
     [[nodiscard]] uint8 DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLevel, uint8 cls) const;
+    // The gear ratio a pawn is offered (and geared) at, in percent of the owner's
+    // gear score. A pure function of the two guids, like the level and the spec.
+    [[nodiscard]] uint16 GearRatio(ObjectGuid owner, ObjectGuid bot) const;
     [[nodiscard]] PawnOffer MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uint8 ownerLevel) const;
     [[nodiscard]] bool IsRecruitedBy(ObjectGuid owner, ObjectGuid bot) const;
 

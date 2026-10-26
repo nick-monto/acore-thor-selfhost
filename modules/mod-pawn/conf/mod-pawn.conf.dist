@@ -51,7 +51,14 @@ Pawn.LevelWindow = 2
 
 # What a hire costs, in copper, as a percentage of the pawn's level cubed:
 #
-#   fee = level^3 * HireFeePercent / 100 * (100 + HireFeeHeldPercent * pawns_held) / 100
+#   fee = level^3 * HireFeePercent / 100 * gear_ratio / 100
+#               * (100 + HireFeeHeldPercent * pawns_held) / 100
+#
+# gear_ratio is the pawn's own strength, in percent of the player's gear score: it
+# is drawn per pawn, from the same seed as the level and the spec, uniform over
+# [100, Pawn.GearCapPercent]. A pawn geared like the player costs the baseline; one
+# geared 20% better costs 20% more, and the picker row says so ("+20% gear"), which
+# is the only place the player needs to see it.
 #
 # Level cubed copper is the point of the default. Measured against this server's
 # own loot-bag money table (scripts/loot-bags/gen_loot_bags.py: normal creatures
@@ -71,6 +78,16 @@ Pawn.HireFeePercent = 100
 # times. A full party is an achievement, not the default state.
 # Default: 100
 Pawn.HireFeeHeldPercent = 100
+
+# How far above the player's gear score a pawn may be geared, in percent. This is
+# the ceiling of the per-pawn gear ratio, and the ratio is what the hire fee is
+# scaled by. 120 means the strongest pawn offered to a player is geared 20% above
+# that player's own average item score - so a pawn can out-gear its owner, and the
+# price says which ones do. The gear pass is held to
+# GetMixedGearScore(owner) * ratio / 100 as its per-item score ceiling. 100 makes
+# every pawn a match for the player and every price in a band the same.
+# Default: 120
+Pawn.GearCapPercent = 120
 
 # Offers per gossip page. The gossip packet carries at most 16 rows and the
 # server aborts on a 33rd, so this is clamped to 16 minus the party rows and

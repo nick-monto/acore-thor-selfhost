@@ -27,10 +27,14 @@ struct PawnConfig
     bool   Enabled              = true;
     uint8  MaxPawns             = 2;
     uint8  LevelWindow          = 2;
-    // What a hire costs: HireFeePercent of the pawn's level cubed, in copper, and
-    // HireFeeHeldPercent of that again for every pawn already in the party.
+    // What a hire costs: HireFeePercent of the pawn's level cubed, in copper, times
+    // the pawn's own gear ratio (below), times HireFeeHeldPercent of that again for
+    // every pawn already in the party.
     uint32 HireFeePercent       = 100;
     uint32 HireFeeHeldPercent   = 100;
+    // The ceiling of the per-pawn gear ratio: a pawn is geared to between 100% and
+    // this percentage of the owner's gear score, and pays for what it is given.
+    uint32 GearCapPercent       = 120;
     uint8  OfferedPerPage       = 12;
     // A picker instance shows a random subsample of the pool, not the pool: the
     // count is drawn from [FeaturedMin, FeaturedMax] every time the menu opens.
@@ -68,6 +72,11 @@ struct PawnOffer
     uint8       Level    = 0;
     uint8       SpecNo   = 0;
     PawnRole    Role     = PAWN_ROLE_NONE;
+    // Percent of the owner's gear score this pawn is geared to: 100 is a match,
+    // GearCapPercent is the ceiling. Drawn from the same seed as the level, so a
+    // pawn is always offered at the same strength for the same player, and the
+    // hire fee is this ratio applied to the level-cubed baseline.
+    uint16      GearRatio = 100;
 };
 
 // One row of pawn_roster.

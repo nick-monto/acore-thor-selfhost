@@ -81,6 +81,7 @@ void PawnMgr::LoadConfig()
     _config.LevelWindow = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.LevelWindow", 2), 0, 10));
     _config.HireFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeePercent", 100), 0, 10000));
     _config.HireFeeHeldPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeeHeldPercent", 100), 0, 1000));
+    _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearCapPercent", 120), 100, 300));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
     _config.FeaturedMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMin", 10), 1, 50));
     _config.FeaturedMax = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMax", 15), 1, 50));
@@ -93,11 +94,11 @@ void PawnMgr::LoadConfig()
     if (_config.PoolRefreshMaxMinutes < _config.PoolRefreshMinMinutes)
         std::swap(_config.PoolRefreshMaxMinutes, _config.PoolRefreshMinMinutes);
 
-    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/pawn",
+    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/pawn gearCap={}%",
              _config.Enabled, uint32(_config.MaxPawns), uint32(_config.LevelWindow),
              uint32(_config.OfferedPerPage), uint32(_config.FeaturedMin), uint32(_config.FeaturedMax),
              uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes),
-             _config.HireFeePercent, _config.HireFeeHeldPercent);
+             _config.HireFeePercent, _config.HireFeeHeldPercent, _config.GearCapPercent);
 }
 
 void PawnMgr::RefreshPool()
@@ -286,6 +287,15 @@ uint8 PawnMgr::DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLevel, u
     return uint8(level);
 }
 
+uint16 PawnMgr::GearRatio(ObjectGuid owner, ObjectGuid bot) const
+{
+    // A third slice of the same seed the level and the spec use, so a pawn's
+    // strength is as stable as its level: uniform over [100, GearCapPercent].
+    uint32 const seed = owner.GetCounter() ^ (bot.GetCounter() * 2654435761u);
+    uint32 const span = std::max<uint32>(1, _config.GearCapPercent - 99);
+    return uint16(100 + (seed >> 16) % span);
+}
+
 PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uint8 ownerLevel) const
 {
     PawnOffer offer;
@@ -293,6 +303,7 @@ PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uin
     offer.Name = poolChar.Name;
     offer.Class = poolChar.Class;
     offer.Level = DeriveLevel(owner, poolChar.Bot, ownerLevel, poolChar.Class);
+    offer.GearRatio = GearRatio(owner, poolChar.Bot);
 
     uint32 const seed = owner.GetCounter() ^ (poolChar.Bot.GetCounter() * 2654435761u);
     auto const& specs = sPawnArchetype.PveSpecs(poolChar.Class);
@@ -473,9 +484,14 @@ void PawnMgr::ApplyPawn(Player* bot)
     if (reLevel || !row->Built)
     {
         uint8 const level = reLevel ? wanted : bot->GetLevel();
+        // The per-item score ceiling the gear pass is held to: the owner's own
+        // average item score, times this pawn's gear ratio. The ratio is what makes
+        // one pawn stronger - and dearer - than another offered at the same level,
+        // and Pawn.GearCapPercent is its ceiling, so a pawn can be geared up to
+        // that much above the player.
         uint32 const gearScoreLimit = owner
-            ? uint32(PlayerbotAI::GetMixedGearScore(owner, true, false, 12) *
-                     sPlayerbotAIConfig.AutoInitEquipLevelLimitRatio)
+            ? uint32(uint64(PlayerbotAI::GetMixedGearScore(owner, true, false, 12)) *
+                     GearRatio(row->Owner, row->Bot) / 100)
             : 0;
 
         if (reLevel)
@@ -536,9 +552,10 @@ void PawnMgr::ApplyPawn(Player* bot)
             gear.ApplyEnchantAndGemsNew();
         bot->DurabilityRepairAll(false, 1.0f, false);
 
-        LOG_INFO("module", "Pawn: pawn {}: {} at level {} for {} (gear score cap {})",
+        LOG_INFO("module", "Pawn: pawn {}: {} at level {} for {} (gear score cap {}, ratio {}%)",
                  bot->GetName(), row->Built ? "re-geared" : "geared", uint32(bot->GetLevel()),
-                 sPawnArchetype.SpecName(bot->getClass(), row->SpecNo), uint32(gearScoreLimit));
+                 sPawnArchetype.SpecName(bot->getClass(), row->SpecNo), uint32(gearScoreLimit),
+                 GearRatio(row->Owner, row->Bot));
 
         if (!row->Built)
         {
@@ -587,10 +604,12 @@ uint32 PawnMgr::HireFee(Player* player, PawnOffer const& offer) const
         it != _rows.end() && it->second.Owner == player->GetGUID() && it->second.Paid)
         return 0;
 
-    // The level cubed, in copper - see the conf comment for why that curve. 64-bit
-    // because the two percentages multiply on top of it.
+    // The level cubed, in copper - see the conf comment for why that curve - scaled
+    // by the gear this pawn is built to. 64-bit because the percentages multiply on
+    // top of it.
     uint64 fee = uint64(offer.Level) * uint64(offer.Level) * uint64(offer.Level);
     fee = fee * _config.HireFeePercent / 100;
+    fee = fee * offer.GearRatio / 100;
     fee = fee * (100 + uint64(_config.HireFeeHeldPercent) * CountParty(player->GetGUID())) / 100;
 
     // 80^3 * 100x * 6 pawns is far below this; the cap is only here so a nonsense

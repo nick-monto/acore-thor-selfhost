@@ -99,6 +99,7 @@ Pawn.Enable = 1
 Pawn.MaxPawns = 2                  # D2
 Pawn.HireFeePercent = 100          # level^3 copper
 Pawn.HireFeeHeldPercent = 100      # each pawn held adds the base fee again
+Pawn.GearCapPercent = 120          # ceiling of the per-pawn gear ratio
 Pawn.LevelWindow = 2               # D1, in levels either way
 Pawn.OfferedPerPage = 12           # gossip carries at most 16 rows per page
 Pawn.FeaturedMin = 10              # per picker instance, drawn from the pool
@@ -148,7 +149,8 @@ name is `Playerbots.PremadeSpecName.<class>.<spec_no>`.
 2. Refuse when the party already holds `Pawn.MaxPawns` pawns (D2). The message names both exits:
    dismiss a pawn at the innkeeper, or recruit strangers in the world.
 3. Refuse when the hire fee is unaffordable. The fee is `level^3 * Pawn.HireFeePercent / 100 *
-   (100 + Pawn.HireFeeHeldPercent * pawns_held) / 100` copper, and it is 0 for a pawn this owner has
+   gear_ratio / 100 * (100 + Pawn.HireFeeHeldPercent * pawns_held) / 100` copper, where `gear_ratio`
+   is the pawn's strength in percent of the owner's gear score, and it is 0 for a pawn this owner has
    already paid for. Level cubed is calibrated against the loot-bag money table: 10-20 minutes of
    ordinary farming at every level that matters. It is charged *here*, after every check, and not
    through the gossip box: the core deducts box money after the script hook and unconditionally, so
@@ -205,8 +207,11 @@ factory rolled for a spec it no longer has. The order in `PawnMgr::ApplyPawn` is
 6. `InitEquipment` at the pawn's level, then ammo, enchants/gems and a durability repair.
 
 Step 6 is `PlayerbotFactory::AutoGear`'s own sequence with one difference: the gear-score cap comes
-from the **owner** (`GetMixedGearScore(owner) * AutoInitEquipLevelLimitRatio`) instead of an item
-level, so a pawn is never better equipped than the player it follows. Item choice is spec-aware
+from the **owner** — `GetMixedGearScore(owner, withBags = true, topN = 12)`, the average score of the
+owner's twelve best items — times the pawn's own **gear ratio**, instead of an item level. The ratio
+is drawn per pawn from the same seed as the level and the spec, uniform over `[100, Pawn.GearCapPercent]`,
+so one pawn offered at a level arrives in better gear than another and the hire fee says so. With the
+default cap of 120 a pawn can out-gear its owner by a fifth. Item choice is spec-aware
 because `InitEquipment` scores every candidate with `StatsWeightCalculator`, whose collector type
 comes from the AI's strategies (`TankWarriorStrategy` declares `STRATEGY_TYPE_TANK`, and
 `AddDefaultCombatStrategies` picks it from the talent tab) and whose tab comes from

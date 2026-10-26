@@ -261,8 +261,15 @@ private:
 
             std::string text = name + " - " + std::string(ClassName(offer.Class)) + ", " +
                                DisplaySpec(offer.SpecName) + ", level " +
-                               std::to_string(uint32(offer.Level)) + " (" + RoleName(offer.Role) +
-                               ") - " + (fee ? FormatMoney(fee) : std::string("free"));
+                               std::to_string(uint32(offer.Level)) + " (" + RoleName(offer.Role) + ")";
+
+            // The gear score itself is invisible in the vanilla client, so the ratio
+            // is what explains why two pawns of the same level cost different money:
+            // the dearer one arrives in better gear.
+            if (offer.GearRatio > 100)
+                text += ", +" + std::to_string(uint32(offer.GearRatio) - 100) + "% gear";
+
+            text += " - " + (fee ? FormatMoney(fee) : std::string("free"));
 
             // The price is in the row so offers can be compared before clicking,
             // and in the confirmation box so a hire is a decision. The box money
