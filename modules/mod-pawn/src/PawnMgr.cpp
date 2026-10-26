@@ -24,7 +24,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
-#include <cstdint>
+#include <cstdlib>
 
 namespace
 {
@@ -123,12 +123,6 @@ void PawnMgr::LoadRoster()
 bool PawnMgr::IsPawn(ObjectGuid guid) const
 {
     return _rows.find(guid.GetCounter()) != _rows.end();
-}
-
-PawnRosterRow const* PawnMgr::GetRow(ObjectGuid bot) const
-{
-    auto it = _rows.find(bot.GetCounter());
-    return it == _rows.end() ? nullptr : &it->second;
 }
 
 bool PawnMgr::IsRecruitedBy(ObjectGuid owner, ObjectGuid bot) const
@@ -338,29 +332,36 @@ void PawnMgr::ApplyPawn(Player* bot)
     if (!row || !row->Recruited)
         return;
 
-    // The target follows the owner's current level, so a pawn never drifts out
-    // of the window: the player can outlevel it, and the next login pulls it
-    // back in. The roster's target_level is the fallback for the case where the
-    // owner is not resolvable, and is refreshed whenever it changes.
-    uint8 target = row->TargetLevel;
+    // The invariant is the window, not one exact level: a pawn anywhere inside
+    // +/- Pawn.LevelWindow of its owner is left alone, which also keeps
+    // playerbots' own login pass (it snaps a type-2 bot to its master's exact
+    // level when the gap is more than three) from being undone for no reason.
+    // Outside the window the pawn is re-levelled to the level it would be
+    // offered at, so a player who outlevels a pawn pulls it back in on its next
+    // login instead of carrying a liability.
     if (Player* owner = ObjectAccessor::FindConnectedPlayer(row->Owner))
     {
-        target = DeriveLevel(row->Owner, row->Bot, owner->GetLevel(), bot->getClass());
+        uint8 const ownerLevel = owner->GetLevel();
+        uint8 const wanted = DeriveLevel(row->Owner, row->Bot, ownerLevel, bot->getClass());
+        int const gap = int(bot->GetLevel()) - int(ownerLevel);
 
-        uint32 gearScore = uint32(PlayerbotAI::GetMixedGearScore(owner, true, false, 12) *
-                                  sPlayerbotAIConfig.AutoInitEquipLevelLimitRatio);
-
-        if (target && bot->GetLevel() != target)
+        if (std::abs(gap) > int(_config.LevelWindow) && bot->GetLevel() != wanted)
         {
-            LOG_INFO("module", "Pawn: pawn {}: level {} -> {}", bot->GetName(), uint32(bot->GetLevel()), uint32(target));
-            PlayerbotFactory factory(bot, target, ITEM_QUALITY_LEGENDARY, gearScore);
+            uint32 const gearScore = uint32(PlayerbotAI::GetMixedGearScore(owner, true, false, 12) *
+                                            sPlayerbotAIConfig.AutoInitEquipLevelLimitRatio);
+
+            LOG_INFO("module", "Pawn: pawn {}: level {} -> {} (owner {})", bot->GetName(),
+                     uint32(bot->GetLevel()), uint32(wanted), uint32(ownerLevel));
+            PlayerbotFactory factory(bot, wanted, ITEM_QUALITY_LEGENDARY, gearScore);
             factory.Randomize(false);
         }
     }
 
-    if (target && target != row->TargetLevel)
+    // The roster records the level the pawn actually has, so the fallback used
+    // when the owner is offline is the truth rather than an old target.
+    if (bot->GetLevel() != row->TargetLevel)
     {
-        row->TargetLevel = target;
+        row->TargetLevel = bot->GetLevel();
         Upsert(*row);
     }
 

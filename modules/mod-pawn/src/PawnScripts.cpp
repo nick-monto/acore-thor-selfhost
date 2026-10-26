@@ -1,7 +1,7 @@
 /*
  * mod-pawn: the hooks.
  *
- * Two hooks do the work the playerbots pool cannot do for itself:
+ * Three hooks do the work the playerbots pool cannot do for itself:
  *
  *   * PlayerScript::OnLogin marks a pawn so its archetype is applied once it is
  *     actually in the world, and marks a real player so their party is restored
@@ -11,6 +11,7 @@
  *   * PlayerScript::OnPlayerCanLearnSpell refuses a blacklisted spell. The core
  *     checks it at the top of Player::learnSpell, so no learn path can bypass
  *     it: factory initialisation, trainer, level-up maintenance or a quest.
+ *   * PlayerScript::OnLogout drops the picker's per-player cache entry.
  *
  * Released under GNU GPL v2 or (at your option) any later version.
  */
@@ -22,6 +23,7 @@
 #include "ScriptMgr.h"
 
 void AddPawnObeliskScript();
+void PawnObeliskForgetPlayer(ObjectGuid player);
 
 class PawnPlayerScript : public PlayerScript
 {
@@ -31,6 +33,13 @@ public:
     void OnLogin(Player* player) override
     {
         sPawnMgr.OnPlayerLogin(player);
+    }
+
+    void OnLogout(Player* player) override
+    {
+        // The picker caches one small entry per player; drop it rather than keep
+        // it for every character that ever opened an obelisk.
+        PawnObeliskForgetPlayer(player->GetGUID());
     }
 
     [[nodiscard]] bool OnPlayerCanLearnSpell(Player* player, uint32 spellId) override

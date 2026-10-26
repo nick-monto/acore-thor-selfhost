@@ -34,7 +34,6 @@ public:
 
     [[nodiscard]] PawnConfig const& Config() const { return _config; }
     [[nodiscard]] bool IsPawn(ObjectGuid guid) const;
-    [[nodiscard]] PawnRosterRow const* GetRow(ObjectGuid bot) const;
 
     [[nodiscard]] std::vector<PawnOffer> BuildOffers(Player* player) const;
     [[nodiscard]] std::vector<PawnRosterRow> ListParty(ObjectGuid owner) const;

@@ -17,8 +17,9 @@ things the pool does not have:
 2. **A doorway**: the obelisk gameobject (entry 5000010) with a paged gossip picker. Recruit,
    dismiss, and the party cap all live there.
 3. **A level window** (`Pawn.LevelWindow`, default ±2). Each pool pawn gets a stable level inside
-   the window, derived from the player and pawn guids, and is kept there on every login — so a pawn
-   is never useless and never a clone of the player's level.
+   the window, derived from the player and pawn guids. A pawn already inside the window keeps its
+   level; one that has drifted outside it is re-levelled into it on its next login — so a pawn is
+   never useless and never a clone of the player's level.
 4. **An archetype**: one premade PvE spec plus a hard blacklist of the other specs' signature
    abilities. A prot warrior pawn without Shield Wall cannot tank; a shadow priest pawn without
    Resurrection cannot heal. The toolkit is the reason to swap.

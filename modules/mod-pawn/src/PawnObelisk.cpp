@@ -42,9 +42,11 @@ namespace
 {
     // Action code ranges. The action travels through the gossip menu untouched
     // and comes back in OnGossipSelect, so it is the only state the click needs
-    // beyond the per-player cache below.
-    constexpr uint32 PAWN_ACTION_RECRUIT = 1;    // 1..99   index into the offers
-    constexpr uint32 PAWN_ACTION_DISMISS = 101;  // 101..199 index into the party
+    // beyond the per-player cache below. Both indexes are page-local: a page
+    // holds at most 16 rows, so a page-local index always fits its range however
+    // large the pool is.
+    constexpr uint32 PAWN_ACTION_RECRUIT = 1;    // 1..99   offer on this page
+    constexpr uint32 PAWN_ACTION_DISMISS = 101;  // 101..199 pawn in the party
     constexpr uint32 PAWN_ACTION_NEXT    = 201;
     constexpr uint32 PAWN_ACTION_PREV    = 202;
     constexpr uint32 PAWN_ACTION_SPAN    = 100;
@@ -54,6 +56,7 @@ namespace
         std::vector<PawnOffer>     Offers;
         std::vector<PawnRosterRow> Party;
         uint8                      Page = 0;
+        uint32                     First = 0;   // index of the first offer on the page
     };
 
     // Per-player, rebuilt on every hello. A click on a menu from before a
@@ -140,7 +143,10 @@ public:
 
         if (action >= PAWN_ACTION_RECRUIT && action < PAWN_ACTION_RECRUIT + PAWN_ACTION_SPAN)
         {
-            uint32 const index = action - PAWN_ACTION_RECRUIT;
+            // The action carries the index within the page, not within the pool:
+            // a pool of several hundred pawns would otherwise run past the
+            // dismissal range and collide with the page actions.
+            uint32 const index = state.First + (action - PAWN_ACTION_RECRUIT);
             if (index < state.Offers.size())
             {
                 std::string message;
@@ -183,7 +189,8 @@ private:
         uint32 const partyRows = uint32(state.Party.size());
         uint32 const navigationRows = 2;
         uint32 const maxPage = 16 > partyRows + navigationRows ? 16 - partyRows - navigationRows : 1;
-        uint32 const perPage = std::max<uint32>(1, std::min<uint32>(sPawnMgr.Config().OfferedPerPage, maxPage));
+        uint32 const perPage = std::max<uint32>(1, std::min<uint32>(
+            std::min<uint32>(sPawnMgr.Config().OfferedPerPage, maxPage), PAWN_ACTION_SPAN));
 
         uint32 const pages = state.Offers.empty() ? 1 : uint32((state.Offers.size() + perPage - 1) / perPage);
         state.Page = uint8(std::min<uint32>(page, pages - 1));
@@ -201,6 +208,7 @@ private:
 
         uint32 const first = uint32(state.Page) * perPage;
         uint32 const last = std::min<uint32>(first + perPage, uint32(state.Offers.size()));
+        state.First = first;
 
         for (uint32 i = first; i < last; ++i)
         {
@@ -213,7 +221,8 @@ private:
                     ", level " + std::to_string(uint32(offer.Level)) +
                     " (" + RoleName(offer.Role) + ")";
 
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, text, GOSSIP_SENDER_MAIN, PAWN_ACTION_RECRUIT + i);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, text, GOSSIP_SENDER_MAIN,
+                             PAWN_ACTION_RECRUIT + (i - first));
         }
 
         if (pages > 1)
@@ -232,4 +241,9 @@ private:
 void AddPawnObeliskScript()
 {
     new go_pawn_obelisk();
+}
+
+void PawnObeliskForgetPlayer(ObjectGuid player)
+{
+    g_menus.erase(player.GetCounter());
 }

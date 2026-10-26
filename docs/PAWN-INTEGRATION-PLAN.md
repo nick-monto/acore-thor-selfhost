@@ -152,8 +152,11 @@ the world, and this way the pawn's own level is applied **after** playerbots' re
 fires on login when the pawn is more than three levels from its master
 (`PlayerbotMgr.cpp:639-651`). Applied work:
 
-1. If `bot->GetLevel() != target_level`: `PlayerbotFactory factory(bot, target_level, ...)` then
-   `factory.Randomize(false)`, mirroring the existing re-level block.
+1. If the pawn is **outside** the window (`|bot level - owner level| > Pawn.LevelWindow`), re-level
+   it to the level it would be offered at: `PlayerbotFactory factory(bot, wanted, ...)` then
+   `factory.Randomize(false)`, mirroring the existing re-level block. A pawn already inside the
+   window is left alone — the invariant is the window, not one exact level — and the roster then
+   records the level the pawn actually has.
 2. `PlayerbotFactory::InitTalentsBySpecNo(bot, spec_no, true)` — the archetype's spec, pinned
    (`PlayerbotFactory.cpp:1802`).
 3. Prune every blacklisted spell the pawn still has (`Player::removeSpell`).
