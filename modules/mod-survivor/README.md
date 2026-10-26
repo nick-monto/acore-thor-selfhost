@@ -12,9 +12,10 @@ everything you carry, but it does not end the character.
 3. summons one lootable container at the death position holding exactly those
    items;
 4. marks that position on the player's map through the `SURV` addon message;
-5. revives the character at the closest graveyard on its next update - half
+5. revives the character at the closest graveyard on its next update - full
    health, no resurrection sickness, no ghost and no corpse run: you wake at the
-   graveyard and walk back to the container;
+   graveyard and walk back to the container. This is independent of the drop: a
+   survivor who dies with nothing left to take still wakes up there;
 6. returns each item, as the *same* instance, when it is looted. Anything that
    does not fit into the bags is mailed, never dropped on the floor.
 
@@ -90,7 +91,9 @@ exactly `Addmod_survivorScripts`, defined in
 
 ## How it works
 
-* `PlayerScript::OnPlayerJustDied` (map thread, before the corpse exists) takes
+* `PlayerScript::OnPlayerJustDied` (before the corpse exists; usually the map
+  thread, but the release-before-the-update and logout paths reach it from the
+  session thread) takes
   the instance rows, destroys the live items and summons the container.
   - Every item is written as `item_instance` -> `survivor_corpse_items` -> the
     live item is destroyed, all three in one characters-DB transaction, so a
@@ -100,8 +103,10 @@ exactly `Addmod_survivorScripts`, defined in
   the corpse exists), so the guid waits in an in-memory set and the next update
   calls `Player::ResurrectPlayer(1.0f)`, `Player::SpawnCorpseBones()` and
   `Player::RepopAtGraveyard()` - the same sequence the core uses for a death it
-  treats as unreachable. A logout that beats the tick is covered by
-  `HandleLogin` (flagged, dead, unclaimed row), a Release by
+  treats as unreachable. The guid is queued for every survivor death outside a
+  battleground, so a character with nothing left to drop still revives. A logout
+  that beats the tick is covered by `HandleLogin` (flagged and dead is enough - no
+  container row needed), a Release by
   `OnPlayerReleasedGhost`, and a battleground or arena death is left alone.
 * The container is a summoned chest with `SetOwnerGUID` and a hand-filled
   `GameObject::loot`: one `LootItem` per saved instance, `itemIndex` equal to the

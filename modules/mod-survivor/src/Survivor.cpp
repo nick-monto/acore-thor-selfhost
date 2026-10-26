@@ -180,8 +180,12 @@ namespace
     }
 
     // The only message a revived survivor sees, at every entry point.
+    // Says only what is true of every survivor death: a death with nothing
+    // left to drop wakes here too, and then there is no container to point at.
+    // The container hint is the death announcement, which already fires at the
+    // place of death.
     constexpr char const* kReviveMessage =
-        "|cffff8000[Survivor]|r You wake at the nearest graveyard. Your belongings are still where you fell.";
+        "|cffff8000[Survivor]|r You wake at the nearest graveyard.";
 
     uint32 NowSeconds()
     {
@@ -609,14 +613,6 @@ namespace
         PendingRevive().insert(guidLow);
     }
 
-    // True when this character still owns a survivor_corpses row, i.e. a death
-    // this module handled whose belongings have not been recovered yet.
-    bool HasUnclaimedCorpse(uint32 guidLow)
-    {
-        return bool(CharacterDatabase.Query(
-            "SELECT 1 FROM `survivor_corpses` WHERE `guid` = {} LIMIT 1", guidLow));
-    }
-
     // Replaces the ghost the core would leave behind with a live character at
     // the closest graveyard, at full health and without resurrection sickness.
     // Does nothing when there is no death to undo.
@@ -628,21 +624,22 @@ namespace
     // for the same reason the core does it last: it fires
     // OnPlayerCanRepopAtGraveyard and only sends the spirit-healer marker to a
     // dead player, which we no longer are.
-    void ReviveAtGraveyard(Player* player)
+    bool ReviveAtGraveyard(Player* player)
     {
         if (!player || !player->IsInWorld() || !player->isDead())
-            return;
+            return false;
 
         // A battleground or arena death keeps the core's own handling (the
         // resurrection at the end of the match).
         if (player->InBattleground() || player->InArena())
-            return;
+            return false;
 
         player->ResurrectPlayer(1.0f);
         player->SpawnCorpseBones();
         player->RepopAtGraveyard();
 
         player->SendSystemMessage(kReviveMessage);
+        return true;
     }
 
     // Re-summons every unclaimed container of this player that belongs to the
@@ -651,6 +648,13 @@ namespace
     {
         Survivor::Config const& cfg = Survivor::GetConfig();
         if (!player || !cfg.Enable || !cfg.ContainerEntry || !player->IsInWorld())
+            return;
+
+        // Rows are only ever created for a flagged character (the flag is
+        // one-way), so this hook does no work for anybody else - which matters
+        // because it runs on every zone change, for every player including the
+        // bots.
+        if (!Survivor::IsFlagged(player))
             return;
 
         Map* map = player->GetMap();
@@ -697,6 +701,16 @@ namespace
     {
         if (!player || !Survivor::GetConfig().MarkOnMap)
             return;
+
+        // Only a flagged character can own a row, and the flag is one-way, so a
+        // character that never opted in can never have a site: answer the addon
+        // without paying for the query. The addon re-asks while it has no site,
+        // so it still needs an answer.
+        if (!Survivor::IsFlagged(player))
+        {
+            SendAddon(player, "none");
+            return;
+        }
 
         QueryResult result = CharacterDatabase.Query(
             "SELECT `map`, `x`, `y`, `zone`, `id` FROM `survivor_corpses` WHERE `guid` = {} ORDER BY `id` DESC LIMIT 1",
@@ -886,6 +900,52 @@ namespace Survivor
         FlaggedGuids().insert(guidLow);
     }
 
+    // The drop half of the ruleset: snapshot the items, destroy them, put a
+    // container at the death spot, announce it and pin it on the map. Returns
+    // early when there is nothing to take - a character who already lost
+    // everything still dies, it just leaves no second container.
+    void DropGearAtDeath(Player* player, Survivor::Config const& cfg)
+    {
+        std::vector<SlotRef> slots = CollectDroppableItems(player, cfg);
+        if (slots.empty())
+            return;
+
+        uint32 corpseId = CreateCorpseRow(player, cfg);
+        if (!corpseId)
+            return;
+
+        std::vector<LootSnapshot> snapshot = SnapshotAndDestroy(player, slots, corpseId);
+
+        if (snapshot.empty())
+        {
+            // Every slot vanished between the scan and the snapshot; the row
+            // would only be an empty marker.
+            CharacterDatabase.DirectExecute("DELETE FROM `survivor_corpses` WHERE `id` = {}", corpseId);
+            return;
+        }
+
+        if (!SpawnContainer(player->GetMap(), player->GetGUID(), corpseId, player->GetPositionX(), player->GetPositionY(),
+                            player->GetPositionZ(), player->GetOrientation(), snapshot))
+        {
+            // The template is missing (SQL not applied) or the summon failed.
+            // Nothing to walk back to, so neither the announcement nor the map
+            // pin may claim otherwise; the rows stay, so the expiry sweep still
+            // mails the instances back.
+            player->SendSystemMessage("|cffff8000[Survivor]|r Your belongings could not be placed where you fell; they will be mailed back to you.");
+            return;
+        }
+
+        if (cfg.AnnounceDeaths)
+        {
+            sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING,
+                Acore::StringFormat("|cffff8000[Survivor]|r {} died and left everything at the place of death.",
+                    player->GetName()));
+        }
+
+        SendSite(player, player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
+                 player->GetZoneId(), corpseId);
+    }
+
     void HandleDeath(Player* player)
     {
         Config const& cfg = GetConfig();
@@ -909,46 +969,14 @@ namespace Survivor
         if (!IsFlagged(player))
             return;
 
-        std::vector<SlotRef> slots = CollectDroppableItems(player, cfg);
-        if (slots.empty())
-            return;
+        DropGearAtDeath(player, cfg);
 
-        uint32 corpseId = CreateCorpseRow(player, cfg);
-        if (!corpseId)
-            return;
-
-        std::vector<LootSnapshot> snapshot = SnapshotAndDestroy(player, slots, corpseId);
-
-        if (snapshot.empty())
-        {
-            // Every slot vanished between the scan and the snapshot; the row
-            // would only be an empty marker.
-            CharacterDatabase.DirectExecute("DELETE FROM `survivor_corpses` WHERE `id` = {}", corpseId);
-            return;
-        }
-
-        if (!SpawnContainer(player->GetMap(), player->GetGUID(), corpseId, player->GetPositionX(), player->GetPositionY(),
-                            player->GetPositionZ(), player->GetOrientation(), snapshot))
-        {
-            // The template is missing (SQL not applied) or the summon failed.
-            // The rows stay, so the instances are still recoverable: the sweep
-            // mails them back at expiry instead of losing them.
-            LOG_ERROR("module", "Survivor: death of {} left corpse row {} without a container.", player->GetName(), corpseId);
-        }
-
-        if (cfg.AnnounceDeaths)
-        {
-            sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING,
-                Acore::StringFormat("|cffff8000[Survivor]|r {} died and left everything at the place of death.",
-                    player->GetName()));
-        }
-
-        SendSite(player, player->GetMapId(), player->GetPositionX(), player->GetPositionY(),
-                 player->GetZoneId(), corpseId);
-
-        // The revive is deferred: OnPlayerJustDied runs inside Player::Kill,
-        // before the corpse exists and before the death sequence finishes.
-        // The next update of this player brings it back at the graveyard.
+        // Queued for every survivor death, not only the ones that dropped
+        // something: a character who already lost everything still comes back
+        // at the graveyard instead of ghosting. Deferred, because
+        // OnPlayerJustDied runs inside Player::Kill, before the corpse exists
+        // and before the death sequence finishes; the next update of this
+        // player brings it back.
         QueueRevive(player->GetGUID().GetCounter());
     }
 
@@ -1169,12 +1197,22 @@ namespace Survivor
             return;
 
         // A survivor who died and logged out before the update tick must not
-        // come back as a ghost. The unclaimed row is the marker of a death this
-        // module handled; once its items are gone there is nothing to undo.
-        if (player->isDead() && IsFlagged(player) && HasUnclaimedCorpse(player->GetGUID().GetCounter()))
+        // come back as a ghost. Every death of a flagged character outside a
+        // battleground or arena is handled by this module, so the flag alone
+        // decides it - including a death whose container has already been
+        // swept, where there is nothing left to recover but the ghost is still
+        // wrong. The battleground and arena exclusions live in
+        // ReviveAtGraveyard.
+        if (player->isDead() && IsFlagged(player))
         {
-            TakePendingRevive(player->GetGUID().GetCounter());
-            ReviveAtGraveyard(player);
+            uint32 guidLow = player->GetGUID().GetCounter();
+            TakePendingRevive(guidLow);
+
+            // A login that bounces the character to another map leaves it out of
+            // the world here; queue it so the first update that finds it in the
+            // world finishes the job.
+            if (!ReviveAtGraveyard(player))
+                QueueRevive(guidLow);
         }
 
         SendNewestSite(player);
@@ -1196,8 +1234,9 @@ namespace Survivor
         // A release that beats the update tick: revive here instead of letting
         // the ghost run. Only a death this module queued is affected - an
         // ordinary ghost, or a Hardcore one, is left to the core.
-        if (TakePendingRevive(player->GetGUID().GetCounter()))
-            ReviveAtGraveyard(player);
+        uint32 guidLow = player->GetGUID().GetCounter();
+        if (TakePendingRevive(guidLow) && !ReviveAtGraveyard(player))
+            QueueRevive(guidLow);
 
         SendNewestSite(player);
     }

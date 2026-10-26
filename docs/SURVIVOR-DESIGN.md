@@ -36,9 +36,10 @@ and both refuse bot-controlled sessions.
    and no corpse marker to fall back on, so the addon pin is the only pointer at the
    container.
 5. Wakes the character **alive at the closest graveyard**, at full health, with no
-   resurrection sickness, and turns the corpse into bones (§5.9). There is no release and no
-   run back to a body: the walk back is to the container, which stays where the character
-   died.
+   resurrection sickness, and turns the corpse into bones (§5.9). This is not conditional on
+   the drop: a survivor who dies with nothing left to take still wakes at the graveyard.
+   There is no release and no run back to a body: the walk back is to the container, which
+   stays where the character died.
 6. Looting the container returns each item as the *same* instance it was, into a free bag
    slot; anything that does not fit is mailed, never dropped on the floor.
 
@@ -51,13 +52,18 @@ the flag.
 
 `PlayerScript::OnPlayerJustDied(Player*)` - declared `Scripting/ScriptDefines/PlayerScript.h:248`,
 fired from `Player::Kill` at `Entities/Player/Player.cpp:4671`, **before** the corpse is
-created (`Player.cpp:4671-4672`) [V]. It runs on the map thread (it is reached through the
-map update), so no session-thread assumptions are allowed in the handler [V].
+created (`Player.cpp:4671-4672`) [V]. It is **not** map-thread-only: `Player::KillPlayer` is
+also reached from the session thread by `WorldSession::HandleRepopRequestOpcode`
+(`Handlers/MiscHandler.cpp:80`, the release-before-the-update case), by the under-map death
+path (`Handlers/MovementHandler.cpp:520`) and by logout (`Server/WorldSession.cpp:715`), while
+the ordinary death comes through the map update (`PlayerUpdates.cpp:322`). Every shared cache
+is mutex-guarded for that reason (§5.5).
 
 That is the only hook that sees the items still equipped. `OnPlayerReleasedGhost`
 (`Player.cpp:4561`, at the end of `BuildPlayerRepop`) fires after the corpse exists and is
-reached from both threads [V]; a survivor never gets there, because it is revived inside the
-death hook (§5.9) and never becomes a ghost.
+reached from both threads [V]. A survivor normally never gets there, because the revive runs
+on the next update - but a release that beats that tick does reach it, and the handler
+revives there instead of letting the ghost run (§5.9).
 
 ### 5.2 The item snapshot is the item_instance row
 
@@ -271,11 +277,12 @@ nothing.
 
 ### 5.9 Waking at the graveyard
 
-A survivor death leaves no ghost and no corpse run. In the same hook that lifts the gear,
-the character is revived **alive at the closest graveyard**, at full health, with no
-resurrection sickness, and the corpse is turned into bones. The container stays at the death
-position, so the walk back is to the container, not to a body. Paths below are relative to
-`src/server/game/` in the pinned core:
+A survivor death leaves no ghost and no corpse run. Every survivor death outside a
+battleground or arena is queued for a revival - whether or not the drop found anything to
+take - and the character comes back **alive at the closest graveyard**, at full health, with
+no resurrection sickness, any corpse it left behind turned into bones. The container, when there is one,
+stays at the death position, so the walk back is to the container, not to a body. Paths below
+are relative to `src/server/game/` in the pinned core:
 
 - `Player::RepopAtGraveyard()` already does exactly this for the deaths the core treats as
   unreachable (a fly-only zone, a death under the map): it calls
@@ -401,6 +408,9 @@ payload is auditable with plain SQL.
 | death in a battleground or arena | **no drop and no revival** - the core's own death handling runs, and the character is restored at the end of the match | a container in a BG would be unreachable after the match, and a graveyard teleport would fight the match logic |
 | death while duelling | drop happens, same as any death; the character wakes at the closest graveyard like any other survivor death | duel deaths already run the full death path |
 | under-map / fatigue death | drop happens at the death position; the character is revived at the closest graveyard exactly as for any other survivor death | same path the core already takes for unreachable deaths (`Player.cpp:5024-5030`); the container is not the corpse |
+| death with nothing left to drop (a survivor who already lost everything) | no second container, no announcement and no map pin, but the revival is the same: the character wakes at the closest graveyard | the revival is queued for every survivor death outside a battleground; the drop is a separate half of the ruleset (§5.9) |
+| death, then logout before the revive tick | the logout itself releases the ghost, which is the same revive: the character leaves alive and comes back alive | `WorldSession::LogoutPlayer` calls `BuildPlayerRepop` for a character with a death timer (`Server/WorldSession.cpp:708`), which fires `OnPlayerReleasedGhost`, and the handler revives (§5.9) |
+| death, then a crash or restart before the revive tick | the character logs in alive at the death spot, at half health, standing on its own container - not a ghost, but not the graveyard wake either | the queued revive is in memory; on login the core sees a dead character with no saved corpse and resurrects it in place at `0.5f` (`Player::LoadCorpse`, `Entities/Player/PlayerStorage.cpp:5948-5962`) before `OnPlayerLogin` runs. A one-tick window, and the outcome keeps the container under the player |
 | logout after a death, before recovering | nothing special: the character is already alive and the container is a DB row, not a live object | §5.5 |
 | server restart | container re-summons on the owner's next login/map entry | §5.5 |
 | bags full on recovery | item is mailed with the core's recovery mail | §5.4 |

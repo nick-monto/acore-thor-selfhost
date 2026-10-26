@@ -85,8 +85,10 @@ namespace Survivor
     // Persists the opt-in flag and updates the cache. World thread (command).
     void Flag(Player* player);
 
-    // Death entry point: snapshot + strip + container + marker, or the bot
-    // strip-and-queue path for a headless session. Map thread.
+    // Death entry point: snapshot + strip + container + marker and a queued
+    // revival for a survivor, or the bot strip-and-queue path for a headless
+    // session. The revival is queued even when nothing was left to drop.
+    // Map thread.
     void HandleDeath(Player* player);
 
     // Runs the deferred playerbots re-roll for a bot queued by HandleDeath.
@@ -108,9 +110,13 @@ namespace Survivor
     void HandleContainerRemoved(GameObject* go);
 
     // Re-summons the unclaimed containers of this player whose map is the
-    // current one, and (re)sends the map marker. Map thread.
+    // current one, and (re)sends the map marker. Also revives a survivor that
+    // died and logged out before its revival tick, so it never appears as a
+    // ghost. Map thread.
     void HandleLogin(Player* player);
     void HandleUpdateZone(Player* player);
+    // A release that beats the revival tick: revives here instead, for a death
+    // this module queued. Map thread.
     void HandleReleasedGhost(Player* player);
 
     // Addon channel: answers SURV\thello with the newest site. Returns false
