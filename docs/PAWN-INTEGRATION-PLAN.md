@@ -15,7 +15,7 @@ Every claim about existing behaviour carries a `path:line` reference against
 | D2 | A party holds **the player plus two pawns**; a third requires strangers from the world | Keeps the pawns special and makes the ambient crowd useful. |
 | D3 | Each pawn is a **restricted archetype**: one premade PvE spec plus a hard spellbook blacklist | The player must swap pawns to get a toolkit, not just a body. |
 | D4 | Pawns **never compete for loot**: they pass on every roll and never loot a free-for-all corpse | Loot bags are this realm's progression system. |
-| D5 | The pawn doorway is the **obelisk only**: `Playerbots.AddClassCommand = 0` | Makes D2 strict by construction, with no patch to the command. |
+| D5 | The pawn doorway is the **innkeeper line only**: `Playerbots.AddClassCommand = 0` | Makes D2 strict by construction, with no patch to the command. The pool is read directly for the same reason. |
 | D6 | The pawn layer is a **new module**, `modules/mod-pawn`, not an extension of the playerbots patch | See "Route" below: the two facts the study called unverified are now verified. |
 
 ## Route: a module, not a patch
@@ -53,12 +53,11 @@ The player-centric patch is untouched by this work.
 
 | File | Responsibility |
 |---|---|
-| `modules/mod-pawn/conf/mod-pawn.conf.dist` | `Pawn.*` keys: master switch, cap, level window, page size, obelisk entry, per-archetype blacklists |
-| `modules/mod-pawn/data/sql/world/base/pawn_10_obelisk.sql` | `gameobject_template` 5000010 (type 10 GOOBER, displayId 7017 `Obelisk`), its addon row, and two spawns |
+| `modules/mod-pawn/conf/mod-pawn.conf.dist` | `Pawn.*` keys: master switch, cap, level window, page size, featured count and pool refresh, per-archetype blacklists |
 | `modules/mod-pawn/src/pawn_common.h` | Config struct, role enum, shared types |
 | `modules/mod-pawn/src/PawnArchetype.h/.cpp` | Spec choice, blacklist name→id resolution, apply and prune |
-| `modules/mod-pawn/src/PawnMgr.h/.cpp` | Config load, roster I/O, offer derivation, recruit/dismiss, login queue |
-| `modules/mod-pawn/src/PawnObelisk.cpp` | `GameObjectScript` with the paged gossip picker |
+| `modules/mod-pawn/src/PawnMgr.h/.cpp` | Config load, pool refresh, featured draw, roster I/O, offer derivation, recruit/dismiss, login queue |
+| `modules/mod-pawn/src/PawnInnkeeper.cpp` | `CreatureScript` with the paged gossip picker on every innkeeper |
 | `modules/mod-pawn/src/PawnScripts.cpp` | `PlayerScript` login queue, spell gate; `WorldScript` that drains the queue |
 | `modules/mod-pawn/src/pawn_loader.cpp` | `Addmod_pawnScripts()`, the symbol the loader generator looks up |
 | `modules/mod-pawn/README.md` | What it does, how to configure it |
@@ -96,7 +95,10 @@ Pawn.Enable = 1
 Pawn.MaxPawns = 2                  # D2
 Pawn.LevelWindow = 2               # D1, in levels either way
 Pawn.OfferedPerPage = 12           # gossip carries at most 16 rows per page
-Pawn.ObeliskEntry = 5000010
+Pawn.FeaturedMin = 10              # per picker instance, drawn from the pool
+Pawn.FeaturedMax = 15
+Pawn.PoolRefreshMinMinutes = 40    # pool re-read, random inside the range
+Pawn.PoolRefreshMaxMinutes = 60
 Pawn.Debug = 0
 
 # Archetype blacklists: the signature abilities of the *other* specs of the same class,
@@ -138,7 +140,7 @@ name is `Playerbots.PremadeSpecName.<class>.<spec_no>`.
 
 1. Refuse when `Pawn.Enable = 0`, when the player is in combat, or when the pawn is already online.
 2. Refuse when the party already holds `Pawn.MaxPawns` pawns (D2). The message names both exits:
-   dismiss a pawn at the obelisk, or recruit strangers in the world.
+   dismiss a pawn at the innkeeper, or recruit strangers in the world.
 3. Upsert the roster row with `spec_no`, `role`, `target_level` and `state = 1`.
 4. `GET_PLAYERBOT_MGR(player)->AddPlayerBot(botGuid, player->GetSession()->GetAccountId())` —
    playerbots queues the login, the group invite and the summon
@@ -174,13 +176,40 @@ quest rewards — so a restriction cannot be undone by any of them.
 
 ### Picker
 
-A `GameObjectScript` on entry 5000010, the ICC teleporter pattern
-(`icecrown_citadel_teleport.cpp:44-88`): `OnGossipHello` builds the page, `OnGossipSelect` routes
-the click, both return `true`. Pages hold `Pawn.OfferedPerPage` rows (12) plus navigation, under the
-16-row packet cap (`GossipDef.cpp:199-201`) and far under the 32-row fatal `ASSERT`
-(`GossipDef.cpp:43`). Action codes: `1..99` recruit an offer, `101..199` dismiss a party pawn,
-`200..` change page. The offer list is cached per player and rebuilt on every hello, so a click on a
-stale menu reopens the current one instead of acting on a guid that is no longer offered.
+A `CreatureScript`, not a gameobject: `OnGossipHello` returns `false` for every creature except an
+innkeeper, so the core sends whatever that NPC already has, and for an innkeeper it builds the
+creature's own menu with `Player::PrepareGossipMenu` — the bind option and any quest rows survive —
+appends one line and sends it with `Player::SendPreparedGossip`. That is why the module ships no SQL
+at all: no template row, no spawn, no `ScriptName`, and the line exists wherever an innkeeper does.
+`OnGossipSelect` returns `false` outside the module's action range, which is how the innkeeper's own
+options keep working (`MiscHandler.cpp:201-203`).
+
+Action codes start at `1000`: a database gossip row's action *is* its `OptionType`, and
+`GOSSIP_OPTION_MAX` is 21 (`GossipDef.h:33-57`), so the `1..99` range this plan first sketched would
+have swallowed the bind option. `1000` opens the picker, `1010..1099` recruit an offer,
+`1110..1199` dismiss a party pawn, `1200`/`1201` change page. Pages hold `Pawn.OfferedPerPage` rows
+(12) plus navigation, under the 16-row packet cap (`GossipDef.cpp:199-201`) and far under the
+32-row fatal `ASSERT` (`GossipDef.cpp:43`). The draw is cached per player for the life of one menu
+instance, so a click on a stale menu reopens the picker instead of acting on a guid that is no longer
+offered.
+
+### Pool and featured draw
+
+The pool is the type-2 "AddClass" accounts in the **playerbots** database
+(`playerbots_account_type`, `account_type = 2`), joined to `characters` for guid, name, class, race
+and level, offline only. It is read at startup, on a random 40-60 minute timer, and on demand when
+it is still empty — a boot can finish before playerbots has created the pool characters. The module
+does **not** read `sRandomPlayerbotMgr.addclassCache`: that cache is only filled when
+`Playerbots.AddClassCommand` is on, and the installer turns it off (D5).
+
+Each picker instance draws a random count in `[Pawn.FeaturedMin, Pawn.FeaturedMax]` of candidates
+with a seeded Fisher-Yates shuffle (SplitMix64 seeded from the player and a per-draw counter, so the
+global RNG is untouched). Same team only, the same death-knight level gate the addclass command
+applies, and no candidate that is already in this player's party or online. The draw is kept for the
+menu instance so paging and dismissing do not move rows; recruiting removes that row; reopening draws
+again. A pawn's level and spec stay a pure function of the two guids, so the same face keeps the same
+level and spec however often it is drawn. The installer widens the pool to 15 accounts (about 150
+characters) precisely because a 10-15 draw from 50 would repeat too often.
 
 ### Loot (D4)
 
@@ -199,16 +228,16 @@ With all three, a pawn passes on every roll under any loot method and leaves the
 The cap is enforced in the recruit path by counting `state = 1` rows. The command-level bypass is
 closed by configuration rather than by code: the installer writes `Playerbots.AddClassCommand = 0`,
 which restricts `.playerbots bot addclass` to GMs (`PlayerbotMgr.cpp:1133-1137`), leaving the
-obelisk as the only doorway to a pool pawn. Strangers — random bots met in the world — are not
+innkeeper picker as the only doorway to a pool pawn. Strangers — random bots met in the world — are not
 pool pawns and are not counted, which is exactly the intended second route to a full group.
 
 ## Wiring
 
 | File | Change |
 |---|---|
-| `.github/workflows/server-aarch64.yml` | copy `modules/mod-pawn` into `core/modules/`; assert `$PREFIX/etc/modules/mod-pawn.conf.dist` after install; copy and count `data/sql` in the SQL step; name the feature in the release notes |
+| `.github/workflows/server-aarch64.yml` | copy `modules/mod-pawn` into `core/modules/`; run `scripts/pawn/check_pawn.py` before the build; assert `$PREFIX/etc/modules/mod-pawn.conf.dist`, its blacklist and its pool keys after install; name the feature in the release notes |
 | `pins.toml` | `[module.pawn]` entry, in-repo module like `mod-survivor` |
-| `scripts/thor-install.sh` | fetch pattern for `--from-source`, `conf_pair modules/mod-pawn`, `Pawn.*` and the loot/`AddClassCommand`/pool keys, and a log line |
+| `scripts/thor-install.sh` | fetch pattern for `--from-source`, `conf_pair modules/mod-pawn`, `Pawn.*` and the loot/`AddClassCommand`/pool-size keys, a stale `Pawn.ObeliskEntry` drop on repair, and a log line |
 | `README.md`, `docs/RUNBOOK.md`, `docs/SERVER-STACK.md` | feature, operation and module-table rows |
 | `docs/PAWN-SYSTEM-DESIGN.md` | point its decisions at this plan; the patch route is superseded |
 
@@ -218,10 +247,10 @@ pool pawns and are not counted, which is exactly the intended second route to a 
 |---|---|---|
 | P1 | Module skeleton: conf, loader, config struct, `PawnMgr` roster I/O and schema creation | module directory complete; loader symbol `Addmod_pawnScripts` present; the roster table is created on first boot |
 | P2 | Archetypes: spec choice, name resolution, apply and prune | blacklist names resolve; an unresolved name logs an error at startup |
-| P3 | Obelisk: world SQL, gossip pages, recruit and dismiss | the menu opens, pages, recruits and dismisses |
+| P3 | Picker: the innkeeper line, gossip pages, recruit and dismiss | the line appears on an innkeeper beside the bind option, pages, recruits and dismisses |
 | P4 | Login queue, level window, spell gate, party restore | a recruited pawn returns after relog and after a restart |
 | P5 | Installer and CI wiring, pins, docs | workflow copies and asserts the module; installer writes the keys |
-| P6 | Offline checks | `scripts/pawn/check_pawn.py` passes: config keys used in code exist in the `.dist`, the obelisk entry and script name agree across conf/SQL/code, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
+| P6 | Offline checks | `scripts/pawn/check_pawn.py` passes: config keys used in code exist in the `.dist`, the installer's defaults and the conf agree both ways, the picker is a `CreatureScript` gated on the innkeeper flag with actions clear of the core's range, the pool reads the playerbots account table, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
 
 ## Verification
 
@@ -229,12 +258,12 @@ The compile gate is the arm64 workflow, as it is for every other module in this 
 host has no Boost headers, so no AzerothCore translation unit can be compiled locally
 (`boost/version.hpp` is absent; the build tree at `azerothcore-wotlk/build` cannot compile). What is
 verifiable offline is checked by `scripts/pawn/check_pawn.py`, which the workflow runs before it
-builds - a module SQL file that fails to apply aborts the worldserver, so the obelisk rows, the
-roster schema and the conf are cross-checked before the 40-minute build rather than after it. The
-in-game steps are:
+builds - the roster schema, the conf, the installer's defaults and the picker's own invariants are
+cross-checked before the 40-minute build rather than after it. The in-game steps are:
 
-1. Open the obelisk: the page lists pawns within ±2 levels of the player, each with class, spec and
-   level; the list is stable between visits.
+1. Talk to an innkeeper: the line sits beside "make this inn your home" and the bind option still
+   works. The page lists 10-15 pawns within ±2 levels of the player, each with class, spec and
+   level; closing and reopening shows a different subset, and the same face keeps its level and spec.
 2. Recruit one: it appears in the party, at the level the menu showed, with the spec the menu named.
 3. Recruit a second; a third recruit is refused and the message names the two exits.
 4. `.playerbots bot addclass warrior` as a non-GM is refused.

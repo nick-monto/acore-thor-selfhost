@@ -324,39 +324,47 @@ Same shape as 5a and 5b, for `mod-pawn`:
 ```bash
 # 1. the module conf the worldserver actually reads
 ls -l /opt/acore/etc/modules/mod-pawn.conf
-grep -E '^Pawn\.(Enable|MaxPawns|LevelWindow|ObeliskEntry)' /opt/acore/etc/modules/mod-pawn.conf
+grep -E '^Pawn\.(Enable|MaxPawns|LevelWindow|Featured|PoolRefresh)' /opt/acore/etc/modules/mod-pawn.conf
 
-# 2. the obelisk template and its two spawns reached the world database
-mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
-  -e "SELECT entry, type, displayId, name, ScriptName FROM gameobject_template WHERE entry = 5000010;
-      SELECT guid, map, zoneId, position_x, position_y, position_z FROM gameobject WHERE id = 5000010;"
+# 2. the pool the picker draws from: 15 AddClass accounts, about 150 characters
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_playerbots \
+  -e "SELECT COUNT(*) AS addclass_accounts FROM playerbots_account_type WHERE account_type = 2;"
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_characters \
+  -e "SELECT COUNT(*) AS pool_chars, SUM(online) AS online_now FROM characters
+      WHERE account IN (SELECT account_id FROM acore_playerbots.playerbots_account_type
+                        WHERE account_type = 2);"
 
 # 3. the roster table was created at startup (programmatically, not by module SQL)
 mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_characters \
   -e "SHOW COLUMNS FROM pawn_roster;
       SELECT COUNT(*) AS rows_total, SUM(state = 1) AS in_party FROM pawn_roster;"
 
-# 4. the module registered itself and resolved every archetype blacklist name
+# 4. the module registered itself, read the pool and resolved every archetype blacklist name
 grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
 ```
 
-- (1) prints the file and the four switches. `Pawn.MaxPawns = 2` and `Pawn.LevelWindow = 2` are the
-  installer's values; `Pawn.Enable = 0` turns the obelisk off and leaves existing rows alone.
-- (2) prints one template row (`5000010`, type `10`, `displayId` 7017, `ScriptName go_pawn_obelisk`)
-  and two spawn rows (map 0 Stormwind, map 1 Orgrimmar). No template row means the module SQL never
-  applied; no spawn row means the obelisk is not in the world but the code is live.
-- (3) prints the seven columns and `0` rows on a fresh realm. A non-zero `in_party` is a pawn
+- (1) prints the file and the switches. `Pawn.MaxPawns = 2`, `Pawn.LevelWindow = 2` and
+  `Pawn.FeaturedMin`/`FeaturedMax = 10`/`15` are the installer's values; `Pawn.Enable = 0` turns the
+  innkeeper line off and leaves existing rows alone.
+- (2) is the pool. `addclass_accounts` should be `15` and `pool_chars` around `150`; fewer means the
+  accounts exist but playerbots has not created their characters yet, which happens on the first
+  boot after the pool was widened (the log line `Creating random bot characters for account` marks
+  it, and it is a one-time cost). `Pawn: pool: N offline characters, next roll in M min` in (4)
+  repeats the same number from the module's own view.
+- (3) prints the eight columns and `0` rows on a fresh realm. A non-zero `in_party` is a pawn
   currently in someone's party.
 - (4) is the important one: `module.pawn: archetypes: N specs named, ... R blacklisted spells
   resolved, U names unresolved`. Any `Pawn.Blacklist.<class>.<spec>: no spell is named '...'` line
   is an ERROR and means that particular restriction does nothing - fix the name in
   `/opt/acore/etc/modules/mod-pawn.conf` and restart. The config is read at load, not per use.
 
-Then walk to the obelisk in Stormwind's Trade District or at the Orgrimmar Valley of Strength and
-use it. What needs a client session, and has not been run on the Thor: the paged menu itself, the
-level and spec each row advertises, that the recruited pawn arrives at that level with that spec, that
-a third recruit is refused, that a blacklisted spell is refused when the pawn tries to learn it, that
-both pawns pass on a drop, and that the party comes back after a relog and a world-server restart.
+Then talk to any innkeeper - the capital inns and the town inns all carry the line - and pick
+"Recruit companions". What needs a client session, and has not been run on the Thor: the line
+appearing next to "make this inn your home" with the bind option still working, the paged menu, that
+two openings show different 10-15 subsets, the level and spec each row advertises, that the recruited
+pawn arrives at that level with that spec, that a third recruit is refused, that a blacklisted spell
+is refused when the pawn tries to learn it, that both pawns pass on a drop, and that the party comes
+back after a relog and a world-server restart.
 
 ## Part 6 — Prove it with a client before touching the launcher
 

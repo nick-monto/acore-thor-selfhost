@@ -116,7 +116,10 @@ PAWN_CONF_DEFAULTS=(
     "Pawn.MaxPawns=2"
     "Pawn.LevelWindow=2"
     "Pawn.OfferedPerPage=12"
-    "Pawn.ObeliskEntry=5000010"
+    "Pawn.FeaturedMin=10"
+    "Pawn.FeaturedMax=15"
+    "Pawn.PoolRefreshMinMinutes=40"
+    "Pawn.PoolRefreshMaxMinutes=60"
     "Pawn.Debug=0"
 )
 DB_USER="acore"
@@ -269,8 +272,8 @@ conf_get_unquoted() { conf_get "$1" "$2" | tr -d '"'; }
 
 pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn accepts
     # Pawn.Enable and Pawn.Debug are 0|1, MaxPawns 0-4 (the gossip page has room for four party
-    # rows), LevelWindow 0-10, OfferedPerPage 1-14, and the obelisk is a custom entry in the
-    # 5000000 range the custom SQL owns.
+    # rows), LevelWindow 0-10, OfferedPerPage 1-14, the featured count 1-50 each, and the pool
+    # refresh 1-1440 minutes each.
     local key="$1" val="$2"
     case "$val" in ''|*[!0-9]*) return 1 ;; esac
     case "$key" in
@@ -282,8 +285,10 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
             [ "$val" -ge 0 ] && [ "$val" -le 10 ] ;;
         Pawn.OfferedPerPage)
             [ "$val" -ge 1 ] && [ "$val" -le 14 ] ;;
-        Pawn.ObeliskEntry)
-            [ "$val" -ge 5000000 ] && [ "$val" -le 5099999 ] ;;
+        Pawn.FeaturedMin|Pawn.FeaturedMax)
+            [ "$val" -ge 1 ] && [ "$val" -le 50 ] ;;
+        Pawn.PoolRefreshMinMinutes|Pawn.PoolRefreshMaxMinutes)
+            [ "$val" -ge 1 ] && [ "$val" -le 1440 ] ;;
         *)
             return 1 ;;
     esac
@@ -1319,12 +1324,13 @@ write_configs() {
         # rings around the player. Left in an older config they would look like they still do
         # something, so they are dropped here.
         sed -i -E '/^[[:space:]]*Playerbots\.RandomBotNearPlayers(Radius|InnerCount|OuterRadius|ZoneCount)[[:space:]]*=/d' "$pb"
-        # Pawn system (mod-pawn). The obelisk is the only doorway to a pool pawn, so addclass
-        # stays a GM command; the pool is cut to five accounts (50 characters, both teams) so the
-        # roster reads like a rift rather than a database dump; and pawns pass on every roll and
-        # leave free-for-all corpses alone, so the loot-bag economy stays the player's.
+        # Pawn system (mod-pawn). The innkeeper picker is the only doorway to a pool pawn, so
+        # addclass stays a GM command; the pool is widened to fifteen accounts (about 150
+        # characters across both teams and every class) because the picker shows a random 10-15
+        # of them per visit, so a small pool would repeat; and pawns pass on every roll and leave
+        # free-for-all corpses alone, so the loot-bag economy stays the player's.
         set_conf "$pb" Playerbots.AddClassCommand         0
-        set_conf "$pb" Playerbots.AddClassAccountPoolSize 5
+        set_conf "$pb" Playerbots.AddClassAccountPoolSize 15
         set_conf "$pb" Playerbots.LootNeedRollLevel       0
         set_conf "$pb" Playerbots.LootGreedRollLevel      0
         set_conf "$pb" Playerbots.FreeMethodLoot          0
@@ -1412,7 +1418,10 @@ write_configs() {
         pw="$(conf_pair modules/mod-pawn)"
         # The shipped .dist already holds these values; each is read back because a key the module
         # cannot use is silently replaced by its own default. Only a value outside its range is
-        # rewritten, so a deliberate Pawn.Enable=0 (obelisk off) survives a repair.
+        # rewritten, so a deliberate Pawn.Enable=0 (picker off) survives a repair. A key that no
+        # longer exists is dropped: the obelisk gameobject is gone, and a leftover entry would
+        # look like it still selected something.
+        sed -i -E '/^[[:space:]]*Pawn\.ObeliskEntry[[:space:]]*=/d' "$pw"
         local pw_default pw_key pw_val
         for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
             pw_key="${pw_default%%=*}"
@@ -1422,9 +1431,9 @@ write_configs() {
                 set_conf "$pw" "$pw_key" "${pw_default#*=}"
             fi
         done
-        log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) ObeliskEntry=$(conf_get "$pw" Pawn.ObeliskEntry)"
+        log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min"
     else
-        warn "no $CONF_DIR/modules/mod-pawn.conf.dist - the artifact was built without the module, the obelisk is unavailable"
+        warn "no $CONF_DIR/modules/mod-pawn.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
     fi
     log "worldserver.conf: DataDir=$(conf_get "$ws" DataDir) BindIP=$(conf_get "$ws" BindIP)"
 }
@@ -1789,7 +1798,7 @@ run_checks() {   # run_checks FIX(0|1)
             if ! pawn_value_ok "$pw_key" "$pw_val"; then pw_bad="$pw_bad $pw_key=$pw_val"; fi
         done
         if [ -z "$pw_bad" ]; then
-            ok "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) ObeliskEntry=$(conf_get "$pw" Pawn.ObeliskEntry)"
+            ok "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min"
         else
             bad "mod-pawn.conf: unusable value(s):$pw_bad"
             if [ "$fix" = 1 ]; then
@@ -1908,7 +1917,7 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); ensure_client_data || true; fi
         fi
     done
-    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql" "$SRC_DIR/modules/mod-pawn/data/sql"; do
+    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql"; do
         if [ -d "$d" ]; then ok "sql sources: $d"; else
             bad "sql sources missing: $d (the DB updater cannot run)"
             if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi

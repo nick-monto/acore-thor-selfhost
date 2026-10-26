@@ -4,8 +4,8 @@
 # mod-pawn configuration
 ########################################
 #
-# Pawns: named bots you recruit at an obelisk in town, keep in your party, and
-# level alongside. The model, the route and the acceptance criteria are in
+# Pawns: named bots you recruit at any innkeeper, keep in your party, and level
+# alongside. The model, the route and the acceptance criteria are in
 # docs/PAWN-SYSTEM-DESIGN.md and docs/PAWN-INTEGRATION-PLAN.md.
 #
 # A pawn is a type-2 "AddClass" character from the playerbots pool: a real
@@ -13,7 +13,8 @@
 # itself. This module adds the four things the pool does not have on its own:
 #
 #   1. a roster, so a recruited pawn comes back after a relog or a restart;
-#   2. a doorway, the obelisk gameobject, with a paged picker;
+#   2. a doorway on every innkeeper, with a paged picker that shows a rotating
+#      subsample of the pool rather than all of it;
 #   3. a level window, so the pawns offered are within Pawn.LevelWindow levels
 #      of the player instead of snapping to the player's exact level;
 #   4. an archetype per pawn: one premade PvE spec plus a hard spellbook
@@ -25,19 +26,19 @@
 # them - that is deliberate.
 #
 # Playerbots settings this module expects, written by scripts/thor-install.sh:
-#   Playerbots.AddClassCommand = 0        the obelisk is the only pawn doorway
+#   Playerbots.AddClassCommand = 0        the innkeeper picker is the only doorway
 #   Playerbots.LootNeedRollLevel = 0      a pawn passes instead of needing
 #   Playerbots.LootGreedRollLevel = 0     a pawn passes instead of greeding
 #   Playerbots.FreeMethodLoot = 0         a pawn leaves free-for-all corpses
 #   Playerbots.KeepAltsInGroup = 1        a pawn stays when the player relogs
 
-# Master switch. 0 disables the obelisk and the login hooks; existing roster
-# rows stay in the database and nothing is logged out.
+# Master switch. 0 disables the innkeeper line and the login hooks; existing
+# roster rows stay in the database and nothing is logged out.
 # Default: 1 (enabled)
 Pawn.Enable = 1
 
 # How many pawns one player may keep in the party at once. The third recruit is
-# refused at the obelisk.
+# refused at the innkeeper.
 # Default: 2
 Pawn.MaxPawns = 2
 
@@ -54,10 +55,24 @@ Pawn.LevelWindow = 2
 # Default: 12
 Pawn.OfferedPerPage = 12
 
-# The obelisk gameobject entry. Must match the template in
-# data/sql/world/base/pawn_10_obelisk.sql.
-# Default: 5000010
-Pawn.ObeliskEntry = 5000010
+# How many pawns one picker shows: a random count in [FeaturedMin, FeaturedMax]
+# is drawn from the whole pool every time a player opens the picker, and the
+# draw is kept while they browse it. Two players opening at once see different
+# subsets, and so does the same player opening it twice - the pool is far larger
+# than this on purpose, so the roster reads like a rift rather than a database
+# dump. Recruiting or dismissing does not redraw; only reopening does.
+# Defaults: 10 and 15
+Pawn.FeaturedMin = 10
+Pawn.FeaturedMax = 15
+
+# How often the pool itself is re-read: which type-2 characters exist, their
+# level and whether they are offline. A random number of minutes in
+# [PoolRefreshMinMinutes, PoolRefreshMaxMinutes] is drawn each cycle, and the
+# pool is also read at startup and on demand if it is still empty (a boot can
+# finish before playerbots has created the pool characters).
+# Defaults: 40 and 60
+Pawn.PoolRefreshMinMinutes = 40
+Pawn.PoolRefreshMaxMinutes = 60
 
 # Log every recruit, dismiss, level and prune at INFO level. Leave 0 in normal
 # play: the login path is noisy otherwise.

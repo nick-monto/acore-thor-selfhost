@@ -6,7 +6,6 @@
 
 #include "PawnMgr.h"
 
-#include "CharacterCache.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
@@ -18,13 +17,15 @@
 #include "PlayerbotFactory.h"
 #include "PlayerbotMgr.h"
 #include "Playerbots.h"
-#include "RandomPlayerbotMgr.h"
+#include "PlayerbotsDatabase.h"
 #include "SharedDefines.h"
+#include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
 #include <cstdlib>
+#include <string>
 
 namespace
 {
@@ -43,6 +44,19 @@ namespace
             default:               return "unknown";
         }
     }
+
+    // SplitMix64: a seeded shuffle that leaves the global RNG alone, so the draw
+    // is reproducible from (player, instance) and cannot be perturbed by anything
+    // else on the world thread.
+    uint64 Mix(uint64& state)
+    {
+        state ^= state >> 30;
+        state *= 0xBF58476D1CE4E5B9ull;
+        state ^= state >> 27;
+        state *= 0x94D049BB133111EBull;
+        state ^= state >> 31;
+        return state;
+    }
 }
 
 PawnMgr& PawnMgr::instance()
@@ -57,12 +71,73 @@ void PawnMgr::LoadConfig()
     _config.MaxPawns = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.MaxPawns", 2), 0, 4));
     _config.LevelWindow = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.LevelWindow", 2), 0, 10));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
-    _config.ObeliskEntry = sConfigMgr->GetOption<uint32>("Pawn.ObeliskEntry", 5000010);
+    _config.FeaturedMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMin", 10), 1, 50));
+    _config.FeaturedMax = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMax", 15), 1, 50));
+    _config.PoolRefreshMinMinutes = uint16(std::clamp(sConfigMgr->GetOption<int32>("Pawn.PoolRefreshMinMinutes", 40), 1, 1440));
+    _config.PoolRefreshMaxMinutes = uint16(std::clamp(sConfigMgr->GetOption<int32>("Pawn.PoolRefreshMaxMinutes", 60), 1, 1440));
     _config.Debug = sConfigMgr->GetOption<bool>("Pawn.Debug", false);
 
-    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} obelisk={}",
+    if (_config.FeaturedMax < _config.FeaturedMin)
+        std::swap(_config.FeaturedMax, _config.FeaturedMin);
+    if (_config.PoolRefreshMaxMinutes < _config.PoolRefreshMinMinutes)
+        std::swap(_config.PoolRefreshMaxMinutes, _config.PoolRefreshMinMinutes);
+
+    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min",
              _config.Enabled, uint32(_config.MaxPawns), uint32(_config.LevelWindow),
-             uint32(_config.OfferedPerPage), _config.ObeliskEntry);
+             uint32(_config.OfferedPerPage), uint32(_config.FeaturedMin), uint32(_config.FeaturedMax),
+             uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes));
+}
+
+void PawnMgr::RefreshPool()
+{
+    // The pool is the playerbots "AddClass" account set (account_type 2 in the
+    // playerbots database). Reading it here rather than from playerbots' own
+    // addclass cache keeps the module working with
+    // Playerbots.AddClassCommand = 0 - the chat command is a way around the
+    // party cap, so the installer turns it off - and gives the picker a fresh
+    // level and online flag on every roll instead of once per boot.
+    uint32 const now = GetMSTime();
+    uint32 const minutes = urand(_config.PoolRefreshMinMinutes, _config.PoolRefreshMaxMinutes);
+    _poolRefreshDue = now + minutes * 60 * 1000;
+    _pool.clear();
+
+    QueryResult accounts = PlayerbotsDatabase.Query("SELECT account_id FROM playerbots_account_type WHERE account_type = 2");
+    if (!accounts)
+    {
+        LOG_WARN("module", "Pawn: pool: no type-2 AddClass accounts; the picker is empty");
+        return;
+    }
+
+    std::string accountList;
+    do
+    {
+        if (!accountList.empty())
+            accountList += ',';
+        accountList += std::to_string(accounts->Fetch()[0].Get<uint32>());
+    } while (accounts->NextRow());
+
+    QueryResult characters = CharacterDatabase.Query(
+        "SELECT guid, name, class, race, level FROM characters WHERE online = 0 AND account IN ({})", accountList);
+    if (!characters)
+    {
+        LOG_WARN("module", "Pawn: pool: no offline characters on the {} AddClass accounts", accountList);
+        return;
+    }
+
+    do
+    {
+        Field* fields = characters->Fetch();
+
+        PawnPoolChar poolChar;
+        poolChar.Bot = ObjectGuid(HighGuid::Player, fields[0].Get<uint32>());
+        poolChar.Name = fields[1].Get<std::string>();
+        poolChar.Class = fields[2].Get<uint8>();
+        poolChar.Race = fields[3].Get<uint8>();
+        poolChar.Level = fields[4].Get<uint8>();
+        _pool.push_back(poolChar);
+    } while (characters->NextRow());
+
+    LOG_INFO("module", "Pawn: pool: {} offline characters, next roll in {} min", uint32(_pool.size()), minutes);
 }
 
 void PawnMgr::EnsureSchema()
@@ -175,69 +250,76 @@ uint8 PawnMgr::DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLevel, u
     return uint8(level);
 }
 
-PawnOffer PawnMgr::MakeOffer(uint8 cls, ObjectGuid owner, uint8 ownerLevel, ObjectGuid bot) const
+PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uint8 ownerLevel) const
 {
     PawnOffer offer;
-    offer.Bot = bot;
-    offer.Class = cls;
-    offer.Level = DeriveLevel(owner, bot, ownerLevel, cls);
+    offer.Bot = poolChar.Bot;
+    offer.Name = poolChar.Name;
+    offer.Class = poolChar.Class;
+    offer.Level = DeriveLevel(owner, poolChar.Bot, ownerLevel, poolChar.Class);
 
-    uint32 const seed = owner.GetCounter() ^ (bot.GetCounter() * 2654435761u);
-    auto const& specs = sPawnArchetype.PveSpecs(cls);
+    uint32 const seed = owner.GetCounter() ^ (poolChar.Bot.GetCounter() * 2654435761u);
+    auto const& specs = sPawnArchetype.PveSpecs(poolChar.Class);
     if (!specs.empty())
     {
         offer.SpecNo = specs[(seed >> 8) % specs.size()];
-        offer.SpecName = sPawnArchetype.SpecName(cls, offer.SpecNo);
-        offer.Role = sPawnArchetype.RoleFor(cls, offer.SpecNo);
+        offer.SpecName = sPawnArchetype.SpecName(poolChar.Class, offer.SpecNo);
+        offer.Role = sPawnArchetype.RoleFor(poolChar.Class, offer.SpecNo);
     }
 
-    sCharacterCache->GetCharacterNameByGuid(bot, offer.Name);
     return offer;
 }
 
-std::vector<PawnOffer> PawnMgr::BuildOffers(Player* player) const
+std::vector<PawnOffer> PawnMgr::DrawOffers(Player* player)
 {
     std::vector<PawnOffer> offers;
     if (!player)
         return offers;
 
+    // A boot can finish before playerbots has created the pool characters, and
+    // the timer is 40-60 minutes away; draw from an empty pool by reading it now.
+    if (_pool.empty())
+        RefreshPool();
+
     ObjectGuid const owner = player->GetGUID();
     uint8 const ownerLevel = player->GetLevel();
-    bool const alliance = player->GetTeamId() == TEAM_ALLIANCE;
     uint32 const heroicStart = sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL);
 
-    for (uint8 cls : kClasses)
+    std::vector<PawnPoolChar const*> candidates;
+    candidates.reserve(_pool.size());
+    for (PawnPoolChar const& poolChar : _pool)
     {
-        // The same rule the addclass command applies: no death knight before
-        // the heroic start level.
-        if (cls == CLASS_DEATH_KNIGHT && ownerLevel < heroicStart)
+        // The same rules the addclass command applies: no death knight before
+        // the heroic start level, and no class without a premade PvE spec.
+        if (poolChar.Class == CLASS_DEATH_KNIGHT && ownerLevel < heroicStart)
+            continue;
+        if (sPawnArchetype.PveSpecs(poolChar.Class).empty())
+            continue;
+        if (IsRecruitedBy(owner, poolChar.Bot))
+            continue;
+        if (ObjectAccessor::FindConnectedPlayer(poolChar.Bot))
             continue;
 
-        if (sPawnArchetype.PveSpecs(cls).empty())
-            continue;
-
-        auto it = sRandomPlayerbotMgr.addclassCache.find(RandomPlayerbotMgr::GetTeamClassIdx(alliance, cls));
-        if (it == sRandomPlayerbotMgr.addclassCache.end())
-            continue;
-
-        for (ObjectGuid const& bot : it->second)
-        {
-            if (ObjectAccessor::FindConnectedPlayer(bot))
-                continue;
-            if (IsRecruitedBy(owner, bot))
-                continue;
-
-            offers.push_back(MakeOffer(cls, owner, ownerLevel, bot));
-        }
+        candidates.push_back(&poolChar);
     }
 
-    // The pool is an unordered_set per class: sort so the order does not change
-    // between visits, and so a page is a stable slice of the pool.
-    std::sort(offers.begin(), offers.end(), [](PawnOffer const& a, PawnOffer const& b)
-    {
-        return a.Bot.GetRawValue() < b.Bot.GetRawValue();
-    });
+    if (candidates.empty())
+        return offers;
 
+    uint64 state = _drawCounter++ * 0x9E3779B97F4A7C15ull ^ (uint64(owner.GetCounter()) * 0xC2B2AE3D27D4EB4Full);
+    for (size_t i = candidates.size(); i > 1; --i)
+        std::swap(candidates[i - 1], candidates[Mix(state) % i]);
+
+    uint32 const minCount = _config.FeaturedMin;
+    uint32 const maxCount = std::max<uint32>(minCount, _config.FeaturedMax);
+    uint32 const wanted = minCount + uint32(Mix(state) % (maxCount - minCount + 1));
+    uint32 const take = std::min<uint32>(wanted, uint32(candidates.size()));
+
+    offers.reserve(take);
+    for (uint32 i = 0; i < take; ++i)
+        offers.push_back(MakeOffer(*candidates[i], owner, ownerLevel));
+
+    LOG_DEBUG("module", "Pawn: {} offers drawn from {} candidates for {}", take, uint32(candidates.size()), player->GetName());
     return offers;
 }
 
@@ -257,6 +339,9 @@ void PawnMgr::OnPlayerLogin(Player* player)
 
 void PawnMgr::Update(uint32 /*diff*/)
 {
+    if (_config.Enabled && GetMSTime() >= _poolRefreshDue)
+        RefreshPool();
+
     if (_pendingOwners.empty() && _pendingPawns.empty())
         return;
 
@@ -373,7 +458,7 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
 {
     if (!_config.Enabled)
     {
-        message = "The obelisk is dormant.";
+        message = "No innkeeper will vouch for a companion today.";
         return false;
     }
 

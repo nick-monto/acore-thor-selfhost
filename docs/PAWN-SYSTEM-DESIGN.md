@@ -68,6 +68,13 @@ Three things, and only three:
 2. **A picker.** No surface exists to browse the pool or see a pawn's class, level and role.
 3. **The obelisk.** Nothing in town triggers any of it.
 
+> **Superseded in the built module.** The picker is one extra gossip line on every innkeeper, a
+> `CreatureScript` hook gated on `UNIT_NPC_FLAG_INNKEEPER`, not a gameobject: it needs no template
+> row, no spawn and no `ScriptName`, so the module ships no SQL at all. The analysis below is kept
+> because it is what made the gameobject route look workable, and because the same
+> `OnGossipHello`/`OnGossipSelect` contract carries the innkeeper version. See
+> [`PAWN-INTEGRATION-PLAN.md`](PAWN-INTEGRATION-PLAN.md) "Picker".
+
 ## The obelisk
 
 The obelisk is a gameobject with a `ScriptName`, and the menu is built in code. This is a supported
@@ -294,7 +301,7 @@ What was built, against the plan's phases:
 |---|---|---|
 | 1 | Prove the model in game with `.playerbots bot addclass` (no code) | **done in game**: `.playerbots bot addclass warrior` recruits, levels and gears a pool pawn |
 | 2 | Roster: schema, load, recruit/dismiss, relog persistence | **built** in `modules/mod-pawn/src/PawnMgr.cpp` |
-| 3 | Obelisk: `gameobject_template` row, two spawns, paged `GameObjectScript` | **built** in `data/sql/world/base/pawn_10_obelisk.sql` and `src/PawnObelisk.cpp` |
+| 3 | Picker: a paged gossip menu on every innkeeper | **built** as a `CreatureScript` in `src/PawnInnkeeper.cpp`; the gameobject route described above was dropped because the line needs no template, spawn or `ScriptName` |
 | 4 | Level window and archetypes: spec pinning, spellbook blacklist, learn gate | **built** in `src/PawnArchetype.cpp` and `src/PawnScripts.cpp` |
 | 5 | Config keys, installer and workflow wiring, runbook | **built** |
 | 6 | `PAWN` addon channel and a `Pawn` addon for the launcher | **not built**: the gossip picker is the complete doorway, and the addon was never requested |

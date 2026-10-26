@@ -1,18 +1,25 @@
 /*
- * mod-pawn: the obelisk.
+ * mod-pawn: the picker, on the innkeepers.
  *
- * A gameobject with a ScriptName is the supported way to build a gossip menu in
- * code: GameObject::Use calls sScriptMgr->OnGossipHello for every gameobject
- * type before its own type switch, and a GameObjectScript bound to the entry's
- * ScriptName owns the interaction by returning true
- * (src/server/game/Entities/GameObject/GameObject.cpp:1499-1513). The Icecrown
- * Citadel teleporter is the in-tree precedent
- * (icecrown_citadel_teleport.cpp:44-88).
+ * Every innkeeper in the world carries one extra gossip line. A CreatureScript
+ * hook runs for every creature, so no template row, no ScriptName and no spawn
+ * is involved: the line exists wherever an innkeeper does, and nowhere else.
  *
- * Returning true matters twice: it stops the core's fallback path, which
- * rejects any option above GOSSIP_OPTION_QUESTGIVER for a gameobject
- * (PlayerGossip.cpp:279-291), and it keeps a code-built menu - one with no
- * GossipMenuItemData - from silently swallowing the click.
+ * Two details decide the shape of this file.
+ *
+ * Returning false from OnGossipHello leaves the innkeeper's own menu alone, so
+ * that is what every creature except an innkeeper gets
+ * (src/server/game/Handlers/NPCHandler.cpp:188-193). For an innkeeper the menu
+ * is built here instead - Player::PrepareGossipMenu with the creature's own menu
+ * id, so "make this inn your home" and any quest rows survive, plus our line -
+ * and Player::SendPreparedGossip sends it.
+ *
+ * Returning false from OnGossipSelect hands the click back to the core, which is
+ * how the innkeeper's own options keep working
+ * (src/server/game/Handlers/MiscHandler.cpp:201-203). The action codes below
+ * therefore start at 1000: a database gossip row's action is its OptionType,
+ * and GOSSIP_OPTION_MAX is 21 (src/server/game/Entities/Creature/GossipDef.h:33-57),
+ * so a range based at 1 would swallow the bind option.
  *
  * Pages carry at most Pawn.OfferedPerPage offers plus the party rows and two
  * navigation rows, because the gossip packet carries at most 16 options
@@ -22,12 +29,11 @@
  * Released under GNU GPL v2 or (at your option) any later version.
  */
 
-#include "PawnArchetype.h"
 #include "PawnMgr.h"
 
 #include "Chat.h"
 #include "CharacterCache.h"
-#include "GameObject.h"
+#include "Creature.h"
 #include "Player.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
@@ -44,24 +50,25 @@ namespace
     // and comes back in OnGossipSelect, so it is the only state the click needs
     // beyond the per-player cache below. Both indexes are page-local: a page
     // holds at most 16 rows, so a page-local index always fits its range however
-    // large the pool is.
-    constexpr uint32 PAWN_ACTION_RECRUIT = 1;    // 1..99   offer on this page
-    constexpr uint32 PAWN_ACTION_DISMISS = 101;  // 101..199 pawn in the party
-    constexpr uint32 PAWN_ACTION_NEXT    = 201;
-    constexpr uint32 PAWN_ACTION_PREV    = 202;
-    constexpr uint32 PAWN_ACTION_SPAN    = 100;
+    // many candidates a draw has.
+    constexpr uint32 PAWN_ACTION_OPEN    = 1000;
+    constexpr uint32 PAWN_ACTION_RECRUIT = 1010;  // 1010..1099 offer on this page
+    constexpr uint32 PAWN_ACTION_DISMISS = 1110;  // 1110..1199 pawn in the party
+    constexpr uint32 PAWN_ACTION_NEXT    = 1200;
+    constexpr uint32 PAWN_ACTION_PREV    = 1201;
+    constexpr uint32 PAWN_ACTION_SPAN    = 90;
 
     struct PawnMenuState
     {
-        std::vector<PawnOffer>     Offers;
+        std::vector<PawnOffer>     Offers;   // the draw for this menu instance
         std::vector<PawnRosterRow> Party;
         uint8                      Page = 0;
         uint32                     First = 0;   // index of the first offer on the page
     };
 
-    // Per-player, rebuilt on every hello. A click on a menu from before a
-    // restart finds no entry and is answered by reopening the menu rather than
-    // acting on a guid that may no longer be offered.
+    // Per-player, rebuilt whenever the picker is opened. A click on a menu from
+    // before a restart finds no entry and is answered by reopening the picker
+    // rather than acting on a guid that may no longer be offered.
     std::unordered_map<uint32, PawnMenuState> g_menus;
 
     char const* ClassName(uint8 cls)
@@ -100,87 +107,109 @@ namespace
     }
 }
 
-class go_pawn_obelisk : public GameObjectScript
+class PawnInnkeeperScript : public CreatureScript
 {
 public:
-    go_pawn_obelisk() : GameObjectScript("go_pawn_obelisk") { }
+    PawnInnkeeperScript() : CreatureScript("npc_pawn_innkeeper") { }
 
-    [[nodiscard]] bool OnGossipHello(Player* player, GameObject* go) override
+    [[nodiscard]] bool OnGossipHello(Player* player, Creature* creature) override
     {
-        if (!sPawnMgr.Config().Enabled)
-        {
-            Notify(player, "The obelisk is dormant.");
-            CloseGossipMenuFor(player);
-            return true;
-        }
+        if (!sPawnMgr.Config().Enabled || !creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER))
+            return false;   // not ours: let the core send whatever this creature has
 
-        ShowMenu(player, go, 0);
+        player->PrepareGossipMenu(creature, creature->GetGossipMenuId(), true);
+
+        // One line, on a menu the creature already has. A menu that fills the client's 16 visible
+        // rows gets no line: a 17th is not shown anyway, and adding past GOSSIP_MAX_MENU_ITEMS
+        // aborts the server with an ASSERT rather than clamping (GossipDef.cpp:43).
+        if (player->PlayerTalkClass->GetGossipMenu().GetMenuItemCount() < 15)
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Recruit companions", GOSSIP_SENDER_MAIN, PAWN_ACTION_OPEN);
+
+        player->SendPreparedGossip(creature);
         return true;
     }
 
-    [[nodiscard]] bool OnGossipSelect(Player* player, GameObject* go, uint32 /*sender*/, uint32 action) override
+    [[nodiscard]] bool OnGossipSelect(Player* player, Creature* creature, uint32 /*sender*/, uint32 action) override
     {
+        if (action < PAWN_ACTION_OPEN || action > PAWN_ACTION_PREV)
+            return false;   // the innkeeper's own options: bind, quests, vendor
+
         auto it = g_menus.find(player->GetGUID().GetCounter());
         if (it == g_menus.end())
         {
-            ShowMenu(player, go, 0);
+            Open(player, creature);
             return true;
         }
 
         PawnMenuState& state = it->second;
 
+        if (action == PAWN_ACTION_OPEN)
+        {
+            Open(player, creature);
+            return true;
+        }
+
         if (action == PAWN_ACTION_NEXT)
         {
-            ShowMenu(player, go, uint8(state.Page + 1));
+            ShowMenu(player, creature, uint8(state.Page + 1));
             return true;
         }
 
         if (action == PAWN_ACTION_PREV)
         {
-            ShowMenu(player, go, uint8(state.Page ? state.Page - 1 : 0));
+            ShowMenu(player, creature, uint8(state.Page ? state.Page - 1 : 0));
             return true;
         }
 
         if (action >= PAWN_ACTION_RECRUIT && action < PAWN_ACTION_RECRUIT + PAWN_ACTION_SPAN)
         {
-            // The action carries the index within the page, not within the pool:
-            // a pool of several hundred pawns would otherwise run past the
-            // dismissal range and collide with the page actions.
+            // The action carries the index within the page, not within the draw:
+            // a draw of several hundred would otherwise run past the dismissal
+            // range and collide with the page actions.
             uint32 const index = state.First + (action - PAWN_ACTION_RECRUIT);
             if (index < state.Offers.size())
             {
+                PawnOffer const offer = state.Offers[index];
+
                 std::string message;
-                sPawnMgr.Recruit(player, state.Offers[index], message);
+                if (sPawnMgr.Recruit(player, offer, message))
+                    state.Offers.erase(state.Offers.begin() + index);
+
                 Notify(player, message);
             }
-            ShowMenu(player, go, state.Page);
+            ShowMenu(player, creature, state.Page);
             return true;
         }
 
-        if (action >= PAWN_ACTION_DISMISS && action < PAWN_ACTION_DISMISS + PAWN_ACTION_SPAN)
+        uint32 const index = action - PAWN_ACTION_DISMISS;
+        if (index < state.Party.size())
         {
-            uint32 const index = action - PAWN_ACTION_DISMISS;
-            if (index < state.Party.size())
-            {
-                std::string message;
-                sPawnMgr.Dismiss(player, state.Party[index].Bot, message);
-                Notify(player, message);
-            }
-            ShowMenu(player, go, state.Page);
-            return true;
+            std::string message;
+            sPawnMgr.Dismiss(player, state.Party[index].Bot, message);
+            Notify(player, message);
         }
-
-        ShowMenu(player, go, 0);
+        ShowMenu(player, creature, state.Page);
         return true;
     }
 
 private:
-    static void ShowMenu(Player* player, GameObject* go, uint8 page)
+    // A new picker instance: draw a fresh random subsample of the pool. The draw
+    // is kept until the player opens the picker again, so browsing pages or
+    // dismissing a pawn does not move the rows under the pointer.
+    static void Open(Player* player, Creature* creature)
+    {
+        PawnMenuState& state = g_menus[player->GetGUID().GetCounter()];
+        state.Offers = sPawnMgr.DrawOffers(player);
+        state.Page = 0;
+        state.First = 0;
+        ShowMenu(player, creature, 0);
+    }
+
+    static void ShowMenu(Player* player, Creature* creature, uint8 page)
     {
         ClearGossipMenuFor(player);
 
         PawnMenuState& state = g_menus[player->GetGUID().GetCounter()];
-        state.Offers = sPawnMgr.BuildOffers(player);
         state.Party = sPawnMgr.ListParty(player->GetGUID());
 
         // The party rows and the two navigation rows share the 16-option page
@@ -225,6 +254,10 @@ private:
                              PAWN_ACTION_RECRUIT + (i - first));
         }
 
+        if (state.Offers.empty() && partyRows == 0)
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "No companion is free to travel right now",
+                             GOSSIP_SENDER_MAIN, PAWN_ACTION_OPEN);
+
         if (pages > 1)
         {
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Next page (" + std::to_string(uint32(state.Page) + 1) +
@@ -234,16 +267,16 @@ private:
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Previous page", GOSSIP_SENDER_MAIN, PAWN_ACTION_PREV);
         }
 
-        SendGossipMenuFor(player, player->GetGossipTextId(go), go->GetGUID());
+        SendGossipMenuFor(player, player->GetGossipTextId(creature), creature->GetGUID());
     }
 };
 
-void AddPawnObeliskScript()
+void AddPawnInnkeeperScript()
 {
-    new go_pawn_obelisk();
+    new PawnInnkeeperScript();
 }
 
-void PawnObeliskForgetPlayer(ObjectGuid player)
+void PawnMenuForgetPlayer(ObjectGuid player)
 {
     g_menus.erase(player.GetCounter());
 }

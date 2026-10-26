@@ -13,6 +13,9 @@
  *     it: factory initialisation, trainer, level-up maintenance or a quest.
  *   * PlayerScript::OnPlayerLogout drops the picker's per-player cache entry.
  *
+ * The picker itself lives in PawnInnkeeper.cpp: a CreatureScript, so the line is
+ * on every innkeeper without a template row, a spawn or a ScriptName.
+ *
  * Released under GNU GPL v2 or (at your option) any later version.
  */
 
@@ -22,8 +25,8 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 
-void AddPawnObeliskScript();
-void PawnObeliskForgetPlayer(ObjectGuid player);
+void AddPawnInnkeeperScript();
+void PawnMenuForgetPlayer(ObjectGuid player);
 
 class PawnPlayerScript : public PlayerScript
 {
@@ -38,8 +41,8 @@ public:
     void OnPlayerLogout(Player* player) override
     {
         // The picker caches one small entry per player; drop it rather than keep
-        // it for every character that ever opened an obelisk.
-        PawnObeliskForgetPlayer(player->GetGUID());
+        // it for every character that ever talked to an innkeeper.
+        PawnMenuForgetPlayer(player->GetGUID());
     }
 
     [[nodiscard]] bool OnPlayerCanLearnSpell(Player* player, uint32 spellId) override
@@ -74,5 +77,5 @@ void AddPawnScripts()
 {
     new PawnPlayerScript();
     new PawnWorldScript();
-    AddPawnObeliskScript();
+    AddPawnInnkeeperScript();
 }

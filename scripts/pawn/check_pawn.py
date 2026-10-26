@@ -2,14 +2,17 @@
 """Offline checks for modules/mod-pawn.
 
 This host has no Boost headers, so no AzerothCore translation unit can be compiled here; the
-compile gate is the arm64 workflow. What can be checked offline is the agreement between the
-files, which is where a module of this shape actually breaks:
+compile gate is the arm64 workflow, which runs this script first. What can be checked offline is
+the agreement between the files, which is where a module of this shape actually breaks:
 
   * every Pawn.* key the C++ reads is defined, uncommented, in conf/mod-pawn.conf.dist;
-  * the conf's obelisk entry and script name match the SQL and the C++ registration;
-  * every column the roster SQL writes exists in the roster table;
+  * the installer's PAWN_CONF_DEFAULTS and the shipped conf agree, both ways: the repair path
+    restores exactly what the conf ships, and no key can be added to one without the other;
+  * every column the roster code writes exists in the table it creates;
   * the loader symbol is the one the build derives from the directory name;
-  * the conf, the module's SQL trees, pins.toml and the workflow all mention the module.
+  * the picker is the creature hook it is meant to be, and nothing still refers to the obelisk
+    gameobject it replaced;
+  * pins.toml, the workflow and the installer all mention the module.
 
 Exit code 0 means every check passed. Run it from anywhere:
 
@@ -26,7 +29,6 @@ ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "modules" / "mod-pawn"
 CONF = MODULE / "conf" / "mod-pawn.conf.dist"
 SRC = MODULE / "src"
-WORLD_SQL = MODULE / "data" / "sql" / "world" / "base" / "pawn_10_obelisk.sql"
 PINS = ROOT / "pins.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "server-aarch64.yml"
 INSTALLER = ROOT / "scripts" / "thor-install.sh"
@@ -49,21 +51,6 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def split_top_level(row: str) -> list[str]:
-    """Split a VALUES row on commas that are not inside a quoted string."""
-    out, cur, quoted = [], "", False
-    for ch in row:
-        if ch == "'":
-            quoted = not quoted
-        if ch == "," and not quoted:
-            out.append(cur.strip())
-            cur = ""
-        else:
-            cur += ch
-    out.append(cur.strip())
-    return out
-
-
 def conf_keys(text: str) -> dict[str, str]:
     """Uncommented KEY = VALUE pairs, in file order."""
     keys: dict[str, str] = {}
@@ -82,7 +69,7 @@ def conf_keys(text: str) -> dict[str, str]:
 
 
 def check_files() -> None:
-    for path in (CONF, WORLD_SQL, PINS, WORKFLOW, INSTALLER):
+    for path in (CONF, PINS, WORKFLOW, INSTALLER, SRC / "PawnInnkeeper.cpp"):
         if not path.is_file():
             fail(f"missing file: {path.relative_to(ROOT)}")
     for path in sorted(SRC.glob("*.cpp")) + sorted(SRC.glob("*.h")):
@@ -123,64 +110,85 @@ def check_config_keys() -> dict[str, str]:
     return keys
 
 
-def check_obelisk(keys: dict[str, str]) -> None:
-    world = read(WORLD_SQL)
-    if not world:
+def check_installer_defaults(keys: dict[str, str]) -> None:
+    installer = read(INSTALLER)
+    if not installer:
         return
 
-    entry = keys.get("Pawn.ObeliskEntry")
-    if not entry:
-        fail("conf: Pawn.ObeliskEntry is missing")
+    block = re.search(r"^PAWN_CONF_DEFAULTS=\((.*?)^\)", installer, re.S | re.M)
+    if not block:
+        fail("installer: no PAWN_CONF_DEFAULTS block")
         return
 
-    template = re.search(r"\((\d+),\s*10,\s*\d+,\s*'([^']*)'", world)
-    if not template:
-        fail("sql: no type-10 gameobject_template row found")
+    defaults: dict[str, str] = {}
+    for match in re.finditer(r'"([^"=]+)=([^"]*)"', block.group(1)):
+        defaults[match.group(1)] = match.group(2)
+
+    for key, value in sorted(defaults.items()):
+        if key not in keys:
+            fail(f"installer: PAWN_CONF_DEFAULTS has {key}, which the conf does not define")
+        elif keys[key] != value:
+            fail(f"installer: {key}={value} but the conf ships {keys[key]}; a repair would "
+                 f"rewrite a value the conf does not carry")
+
+    # The other direction: every non-blacklist key is one the repair path can restore.
+    for key in sorted(keys):
+        if key.startswith("Pawn.Blacklist."):
+            continue
+        if key not in defaults:
+            fail(f"installer: {key} is in the conf but not in PAWN_CONF_DEFAULTS; a repair "
+                 f"would leave a bad value in place")
+
+    notes.append(f"installer: {len(defaults)} conf defaults agree with the shipped conf")
+
+
+def check_picker(keys: dict[str, str]) -> None:
+    picker = read(SRC / "PawnInnkeeper.cpp")
+    if not picker:
         return
 
-    if template.group(1) != entry:
-        fail(f"sql: template entry {template.group(1)} does not match Pawn.ObeliskEntry {entry}")
+    # The picker is one line on every innkeeper, not a gameobject: a CreatureScript hook runs for
+    # every creature and the flag check decides which ones show it. A GameObjectScript here would
+    # need a template row and a spawn, and the module ships no SQL at all.
+    if 'CreatureScript("npc_pawn_innkeeper")' not in picker:
+        fail("picker: PawnInnkeeper.cpp does not register a CreatureScript")
+    if "UNIT_NPC_FLAG_INNKEEPER" not in picker:
+        fail("picker: the hello hook does not gate on UNIT_NPC_FLAG_INNKEEPER")
+    if "GameObjectScript" in picker:
+        fail("picker: still a GameObjectScript")
 
-    script = re.search(r"'go_[a-z_]+'", world)
-    if not script:
-        fail("sql: the template row has no ScriptName")
-    else:
-        name = script.group(0).strip("'")
-        if f'GameObjectScript("{name}")' not in read(SRC / "PawnObelisk.cpp"):
-            fail(f"sql: ScriptName {name} is not the one PawnObelisk.cpp registers")
+    # Action codes below GOSSIP_OPTION_MAX (21) would swallow the innkeeper's own bind option,
+    # because a database gossip row's action is its OptionType.
+    open_action = re.search(r"PAWN_ACTION_OPEN\s*=\s*(\d+)", picker)
+    if not open_action:
+        fail("picker: no PAWN_ACTION_OPEN")
+    elif int(open_action.group(1)) <= 21:
+        fail(f"picker: PAWN_ACTION_OPEN is {open_action.group(1)}, inside the range the core "
+             f"uses for its own gossip options")
 
-    # Every spawn must point at the template and live in the custom guid band, and the DELETE must
-    # name exactly the guids the INSERT writes: the base dump's guids run to 5714437, so a
-    # 5000000-range spawn would sit where a core update may still put a row, and a collision on
-    # `gameobject`.`guid` fails the updater, which aborts the boot.
-    spawn_block = re.search(r"INSERT INTO `gameobject`.*?VALUES(.*?);", world, re.S)
-    spawn_ids = re.findall(r"\((\d+),\s*(\d+),\s*[01],\s*\d+,", spawn_block.group(1) if spawn_block else "")
-    for guid, template_id in spawn_ids:
-        if template_id != entry:
-            fail(f"sql: spawn {guid} uses template {template_id}, not {entry}")
-        if not 9800000 <= int(guid) <= 9899999:
-            fail(f"sql: spawn guid {guid} is outside the 9800000 custom band")
+    # The picker draws from the module's own pool query. Falling back to
+    # sRandomPlayerbotMgr.addclassCache would silently show nothing, because that cache is only
+    # filled when Playerbots.AddClassCommand is on and the installer turns it off.
+    mgr = read(SRC / "PawnMgr.cpp")
+    if "addclassCache" in mgr:
+        fail("pool: PawnMgr.cpp reads addclassCache, which is empty with AddClassCommand = 0")
+    for needle in ("playerbots_account_type", "RefreshPool", "DrawOffers"):
+        if needle not in mgr:
+            fail(f"pool: PawnMgr.cpp has no {needle}")
 
-    delete = re.search(r"DELETE FROM `gameobject` WHERE `guid` IN \(([^)]*)\)", world)
-    if not delete:
-        fail("sql: no DELETE for the obelisk spawns; a re-run would duplicate them")
-    else:
-        deleted = {g.strip() for g in delete.group(1).split(",")}
-        written = {g for g, _ in spawn_ids}
-        if deleted != written:
-            fail(f"sql: DELETE covers {sorted(deleted)} but the INSERT writes {sorted(written)}")
+    for key in ("Pawn.FeaturedMin", "Pawn.FeaturedMax",
+                "Pawn.PoolRefreshMinMinutes", "Pawn.PoolRefreshMaxMinutes"):
+        if key not in keys:
+            fail(f"pool: {key} is missing from the conf")
 
-    # A VALUES row with a different field count than the column list fails the updater, and a
-    # failing module SQL file aborts the boot.
-    for statement in re.finditer(r"INSERT INTO `(\w+)`\s*\((.*?)\)\s*VALUES(.*?);", world, re.S):
-        name = statement.group(1)
-        columns = [c for c in statement.group(2).split(",") if c.strip()]
-        for row in re.findall(r"\(([^()]*)\)", statement.group(3)):
-            fields = split_top_level(row)
-            if len(fields) != len(columns):
-                fail(f"sql: {name} row has {len(fields)} values for {len(columns)} columns")
+    # The obelisk is gone; a leftover key or script would look like it still selects something.
+    for path in (CONF, INSTALLER, *sorted(SRC.glob("*.cpp"))):
+        if "ObeliskEntry" in path.read_text(encoding="utf-8") and path != INSTALLER:
+            fail(f"{path.relative_to(ROOT)}: still refers to Pawn.ObeliskEntry")
+    if "Pawn\\.ObeliskEntry" not in read(INSTALLER):
+        fail("installer: does not drop a stale Pawn.ObeliskEntry from an existing conf")
 
-    notes.append(f"sql: obelisk entry {entry}, {len(spawn_ids)} spawns")
+    notes.append("picker: creature hook on innkeepers, actions clear of the core's option range")
 
 
 def check_roster() -> None:
@@ -230,14 +238,18 @@ def check_wiring() -> None:
         fail('pins.toml: [module.pawn] does not point at modules/mod-pawn')
 
     workflow = read(WORKFLOW)
-    for needle in ("modules/mod-pawn", "mod-pawn.conf.dist", "modules/mod-pawn/data/sql"):
+    for needle in ("modules/mod-pawn", "mod-pawn.conf.dist", "Pawn.FeaturedMin"):
         if needle not in workflow:
             fail(f"workflow: {needle} is not mentioned; the build would not ship the module")
+    if "modules/mod-pawn/data/sql" in workflow:
+        fail("workflow: still lists modules/mod-pawn/data/sql, which no longer exists")
 
     installer = read(INSTALLER)
     for needle in ("mod-pawn", "PAWN_CONF_DEFAULTS", "pawn_value_ok"):
         if needle not in installer:
             fail(f"installer: {needle} is not mentioned; an install would not configure the module")
+    if "modules/mod-pawn/data/sql" in installer:
+        fail("installer: still lists modules/mod-pawn/data/sql, which no longer exists")
 
     notes.append("wiring: pins, workflow and installer mention the module")
 
@@ -245,7 +257,8 @@ def check_wiring() -> None:
 def main() -> int:
     check_files()
     keys = check_config_keys()
-    check_obelisk(keys)
+    check_installer_defaults(keys)
+    check_picker(keys)
     check_roster()
     check_loader()
     check_wiring()
