@@ -83,7 +83,12 @@ void PawnMgr::LoadConfig()
     _config.HireFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeePercent", 100), 0, 10000));
     _config.HireFeeHeldPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.HireFeeHeldPercent", 100), 0, 1000));
     _config.GainXP = sConfigMgr->GetOption<bool>("Pawn.GainXP", false);
+    _config.VariantWithholdMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.VariantWithholdMin", 1), 0, 5));
     _config.VariantWithholdMax = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.VariantWithholdMax", 2), 0, 5));
+    // A minimum above the maximum would make the draw empty; the maximum wins,
+    // because it is the one that can switch the variation off.
+    if (_config.VariantWithholdMin > _config.VariantWithholdMax)
+        _config.VariantWithholdMin = _config.VariantWithholdMax;
     _config.GearFloorPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearFloorPercent", 85), 25, 100));
     _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearCapPercent", 150), 100, 300));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
@@ -311,8 +316,14 @@ std::vector<PawnVariantSpell> PawnMgr::WithheldVariants(ObjectGuid owner, Object
 
     // How many of the pool this pawn is missing: bounded by the configuration and
     // by the pool, drawn from the same seed as everything else about the pawn.
+    // The floor is what stops two pawns of one spec arriving with identical kits,
+    // so it is clamped to the pool rather than to the ceiling: a pool of two with
+    // a floor of three still withholds both.
     uint64 state = seed;
-    uint32 const count = std::min<uint32>(Mix(state) % (uint32(_config.VariantWithholdMax) + 1), uint32(pool.size()));
+    uint32 const floor = std::min<uint32>(_config.VariantWithholdMin, uint32(pool.size()));
+    uint32 const ceiling = std::min<uint32>(_config.VariantWithholdMax, uint32(pool.size()));
+    uint32 const span = ceiling > floor ? ceiling - floor + 1 : 1;
+    uint32 const count = floor + (span > 1 ? uint32(Mix(state) % span) : 0);
 
     // Which ones: the entries with the lowest hash of their own first id, so the
     // choice is independent per ability rather than "the first N of the list" -

@@ -116,6 +116,7 @@ PAWN_CONF_DEFAULTS=(
     "Pawn.MaxPawns=2"
     "Pawn.LevelWindow=2"
     "Pawn.GainXP=0"
+    "Pawn.VariantWithholdMin=1"
     "Pawn.VariantWithholdMax=2"
     "Pawn.HireFeePercent=100"
     "Pawn.HireFeeHeldPercent=100"
@@ -292,7 +293,7 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
             [ "$val" -ge 0 ] && [ "$val" -le 10 ] ;;
         Pawn.GainXP)
             [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Pawn.VariantWithholdMax)
+        Pawn.VariantWithholdMin|Pawn.VariantWithholdMax)
             [ "$val" -ge 0 ] && [ "$val" -le 5 ] ;;
         Pawn.OfferedPerPage)
             [ "$val" -ge 1 ] && [ "$val" -le 14 ] ;;

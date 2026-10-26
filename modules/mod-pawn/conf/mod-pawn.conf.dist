@@ -284,10 +284,15 @@ Pawn.Blacklist.11.3 = Starfire, Wrath, Starfall, Maul, Swipe, Growl, Healing Tou
 # unresolved name is an ERROR in the log - check the `archetypes:` line in
 # Server.log after a config change.
 
-# How many abilities from a spec's pool a pawn may be missing. 0 turns the
-# variation off and every pawn of a spec arrives with its whole pool; the draw is
-# uniform over 0..this, capped by the pool size, so 2 over a pool of three means
-# a pawn is missing none, one or two of them in equal measure.
+# How many abilities from a spec's pool a pawn is missing: the count is drawn
+# uniformly from [Min, Max], capped by the pool size. Min is what guarantees two
+# pawns of one spec never arrive with identical kits - with the shipped pools of
+# three and Min 1, Max 2, a pawn is missing one or two of them in equal measure.
+# Min 0 lets a pawn arrive with its whole pool; Max 0 turns the variation off.
+# A Min above Max is read as Max, and a Min above the pool size as the pool size.
+# Default: 1
+Pawn.VariantWithholdMin = 1
+
 # Default: 2
 Pawn.VariantWithholdMax = 2
 

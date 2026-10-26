@@ -41,14 +41,16 @@ at (see "A pawn is what you hired" below). This module adds the four things the 
 The blacklist makes a pawn a specialist; the variant pool makes two specialists of the same spec
 different. `Pawn.Variant.<class>.<spec_no>` is a short list of the spec's *situational* abilities —
 interrupts, taunts, cooldowns, dispels, crowd control — and each pawn is dealt a subset of it:
-`PawnMgr::WithheldVariants` draws a count uniformly from `0..Pawn.VariantWithholdMax` (default 2),
-capped by the pool size, and picks that many entries by the lowest hash of their spell id, all from
-the same seed as the pawn's level, spec and gear ratio.
+`PawnMgr::WithheldVariants` draws a count uniformly from `Pawn.VariantWithholdMin` to
+`Pawn.VariantWithholdMax` (default 1 to 2), capped by the pool size, and picks that many entries by
+the lowest hash of their spell id, all from the same seed as the pawn's level, spec and gear ratio.
 
 So the same face always arrives with the same toolkit for the same player, and two fury warriors do
-not: with the shipped pool (`Pummel, Recklessness, Death Wish`) and a cap of 2, a pawn is missing
-none, one or two of them about a third of the time each — seven distinct kits over five thousand
-pawn pairs, and every one of them a fury warrior that fights a little differently.
+not: with the shipped pool (`Pummel, Recklessness, Death Wish`) and a range of 1 to 2, a pawn is
+missing one or two of them in equal measure — six distinct kits over five thousand pawn pairs, and
+every one of them a fury warrior that fights a little differently. The floor is the point: with a
+floor of 0 a third of all pawns would be missing nothing at all, which is the identical-twin case
+the pools exist to avoid.
 
 The withheld set is enforced in the same place as the blacklist — `PlayerScript::OnPlayerCanLearnSpell`
 through `PawnMgr::IsSpellForbidden` — so no learn path, factory or trainer, can undo it, and

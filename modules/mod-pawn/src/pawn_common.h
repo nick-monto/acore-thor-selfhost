@@ -43,9 +43,13 @@ struct PawnConfig
     // pawn that levels with its owner never needs exchanging, and the roster is
     // meant to be a set of contracts that expire as the player outgrows them.
     bool   GainXP               = false;
-    // How many of a spec's variant abilities a pawn may be missing, 0 to
-    // Pawn.Variant.<class>.<spec>. This is the per-pawn half of the archetype:
-    // two fury warriors differ by which of theirs are withheld.
+    // How many of a spec's variant abilities a pawn may be missing, drawn from
+    // [VariantWithholdMin, VariantWithholdMax] out of Pawn.Variant.<class>.<spec>.
+    // This is the per-pawn half of the archetype: two fury warriors differ by
+    // which of theirs are withheld. A minimum of 0 lets two pawns of one spec
+    // arrive identical, which is the case the pools exist to avoid; a maximum of
+    // 0 switches the variation off.
+    uint8  VariantWithholdMin   = 1;
     uint8  VariantWithholdMax   = 2;
     uint8  OfferedPerPage       = 12;
     // A picker instance shows a random subsample of the pool, not the pool: the
