@@ -105,7 +105,7 @@ SURVIVOR_CONF_DEFAULTS=(
     "Survivor.ContainerEntry=5000000"
     "Survivor.ApplyToBots=1"
     "Survivor.BotRegenOnDeath=1"
-    "Survivor.BotDropContainer=0"
+    "Survivor.BotDropContainer=1"
 )
 DB_USER="acore"
 DB_PASS=""

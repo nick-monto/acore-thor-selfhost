@@ -112,9 +112,14 @@ Survivor.BotRegenOnDeath = 1
 
 #
 #    Survivor.BotDropContainer
-#        0 = a bot's gear is destroyed outright (DEFAULT). 1 = a bot death also
-#        creates a container, owned by the bot. Off by default: a container of
-#        randombot gear would be a free-gear faucet for the one real player.
-#        Default: 0
+#        1 = a bot death also leaves a lootable container where it fell, holding
+#        the gear and bags it was carrying. Any real player may loot it: the bot
+#        is re-geared by Survivor.BotRegenOnDeath, so the container is not a
+#        recovery for the bot but a source of level-appropriate gear for the one
+#        real player - the same reason the loot bags exist. A container nobody
+#        loots rots at Survivor.ContainerLifetimeDays; its items are not mailed
+#        anywhere.
+#        0 = a bot's gear is destroyed outright, leaving nothing behind.
+#        Default: 1
 #
-Survivor.BotDropContainer = 0
+Survivor.BotDropContainer = 1

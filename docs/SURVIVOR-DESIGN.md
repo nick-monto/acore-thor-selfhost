@@ -231,12 +231,20 @@ at. The addon message is the only source of the position.
 
 A solo realm is mostly bots, and a bot that never loses its gear makes the ruleset look
 arbitrary. With `Survivor.ApplyToBots = 1` (default) a bot-controlled session follows the
-same rules with one difference: its gear is **destroyed, not dropped**, and replaced
-immediately with a fresh random set for its class, level and current specialization.
+same rules: it drops what it carries and is replaced with a fresh random set for its class,
+level and current specialization.
 
-Why destroyed rather than dropped: a container full of randombot gear would be a free-gear
-faucet for the one real player (`Survivor.BotDropContainer = 0` keeps that shut; it exists
-only if a realm ever wants bot corpses as loot).
+`Survivor.BotDropContainer = 1` (default) is what makes the drop reachable: a bot death
+leaves a lootable container at the death spot like a player death does, and **any real
+player may loot it**. That is deliberate on a solo realm - the bot does not need its gear
+back (the factory re-rolls it), so the container is a source of level-appropriate gear and
+bags for the one real player, for the same reason the loot bags exist. A bot container that
+nobody loots rots at `Survivor.ContainerLifetimeDays` and its items are **not** mailed
+anywhere: a mailbox no bot reads would only hide the gear instead of letting it go.
+
+The alternative, `Survivor.BotDropContainer = 0`, destroys a bot's gear outright and leaves
+nothing behind. Worth knowing when tuning a realm's economy: with `1` every bot death is a
+renewable gear faucet, and the faucet's rate is the bot death rate.
 
 The regeneration uses playerbots' own factory, not a hand-rolled item roll:
 
@@ -386,7 +394,7 @@ payload is auditable with plain SQL.
 | `Survivor.ContainerEntry` | `5000000` | the gameobject template entry (the SQL above) |
 | `Survivor.ApplyToBots` | `1` | the ruleset also applies to bot-controlled characters (§5.8) |
 | `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory on death; `0` leaves it naked |
-| `Survivor.BotDropContainer` | `0` | give a bot death a lootable container too; off by default because it is a free-gear faucet |
+| `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container that any real player may take; `0` destroys the gear outright (§5.8) |
 
 ## Activation and exclusivity
 
@@ -416,7 +424,9 @@ payload is auditable with plain SQL.
 | bags full on recovery | item is mailed with the core's recovery mail | §5.4 |
 | bank / mail / gold / quest items | untouched | the ruleset is gear and bags only |
 | second death before recovering the first | a second container is created; both are independent and both marked (the addon keeps the newest) | rows are keyed by id, not by guid |
-| bot death | gear and bags destroyed, a fresh set rolled for class/level/spec, no container, no map message | §5.8 |
+| bot death | gear and bags destroyed, a lootable container left where it fell, a fresh set rolled for class/level/spec, no map message | §5.8 |
+| bot container nobody loots | rots at expiry; its items are dropped, not mailed (a bot mailbox is never read) | §5.8 |
+| looting a bot's container | allowed for any real player, unlike a player's container which only its owner may open | §5.8 |
 | bot death in a battleground/arena | skipped | the core restores the bot at match end |
 | bot with no gear (level 1, freshly spawned) | skip the re-roll, nothing to take | avoids a pointless DB churn |
 | container map unloaded | row survives; re-summons on next entry | §5.5 |

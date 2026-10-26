@@ -52,7 +52,7 @@ mod-hardcore nor depends on it being installed.
 | `Survivor.ContainerEntry` | `5000000` | the gameobject template the module summons |
 | `Survivor.ApplyToBots` | `1` | the ruleset also applies to bot-controlled characters |
 | `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory; `0` leaves it naked |
-| `Survivor.BotDropContainer` | `0` | give a bot death a container too; off because it is a free-gear faucet |
+| `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container any real player may take; `0` destroys the gear |
 
 With `Survivor.DropBags = 0` the equipped bags are kept even when
 `Survivor.DropEquipped = 1`, because destroying a bag destroys what it holds.
@@ -132,9 +132,13 @@ exactly `Addmod_survivorScripts`, defined in
 ## Bots
 
 With `Survivor.ApplyToBots = 1` a bot-controlled character follows the same
-rules with one difference: its equipment and bags are **destroyed, not dropped**
-(`Survivor.BotDropContainer = 0`), so a randombot death never feeds the one real
-player. The strip happens in `OnPlayerJustDied`; the re-roll is deferred to the
+rules: its equipment and bags are taken, and with `Survivor.BotDropContainer = 1`
+(default) they are left in a lootable container where it fell. Any real player may
+open a bot's container - the bot does not need the gear back, because the factory
+re-rolls it, so on a solo realm the container is a source of level-appropriate
+gear. A bot container nobody loots rots at expiry and its items are dropped, never
+mailed. With `Survivor.BotDropContainer = 0` the gear is destroyed outright.
+The strip happens in `OnPlayerJustDied`; the re-roll is deferred to the
 next `OnPlayerUpdate`, once the bot is alive and out of any battleground, because
 calling the playerbots factory from inside `Player::Kill` would mutate a bot whose
 AI is mid-action:

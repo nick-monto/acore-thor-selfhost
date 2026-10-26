@@ -114,6 +114,7 @@ namespace
         uint32 mapId = 0;
         uint32 instanceId = 0;
         uint32 ownerGuid = 0;
+        bool botOwned = false;  // a bot death with Survivor.BotDropContainer
     };
 
     //
@@ -277,17 +278,17 @@ namespace
 
     // Inserts the survivor_corpses row and returns its id, or 0 when the row
     // could not be read back.
-    uint32 CreateCorpseRow(Player* player, Survivor::Config const& cfg)
+    uint32 CreateCorpseRow(Player* player, Survivor::Config const& cfg, bool botOwned)
     {
         uint32 guidLow = player->GetGUID().GetCounter();
         uint32 now = NowSeconds();
 
         CharacterDatabase.DirectExecute(
-            "INSERT INTO `survivor_corpses` (`guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`) "
-            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            "INSERT INTO `survivor_corpses` (`guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `bot_owned`) "
+            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             guidLow, Quote(player->GetName()), player->GetMapId(),
             player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
-            player->GetZoneId(), uint32(player->GetLevel()), now, now + ContainerLifetimeSeconds());
+            player->GetZoneId(), uint32(player->GetLevel()), now, now + ContainerLifetimeSeconds(), botOwned);
 
         // The insert above is a DirectExecute (one pooled connection) and this
         // is a separate query, so the id is read back by guid instead of
@@ -400,7 +401,7 @@ namespace
     // Summons the container, hands it to the owner and fills its loot. Returns
     // nullptr when the template is missing or the map refused the summon.
     GameObject* SpawnContainer(Map* map, ObjectGuid owner, uint32 corpseId, float x, float y, float z, float o,
-                               std::vector<LootSnapshot> const& snapshot)
+                               std::vector<LootSnapshot> const& snapshot, bool botOwned)
     {
         Survivor::Config const& cfg = Survivor::GetConfig();
         if (!map || !cfg.ContainerEntry || snapshot.empty())
@@ -427,6 +428,7 @@ namespace
         live.mapId = map->GetId();
         live.instanceId = map->GetInstanceId();
         live.ownerGuid = owner.GetCounter();
+        live.botOwned = botOwned;
 
         {
             std::lock_guard<std::recursive_mutex> guard(CacheMutex());
@@ -575,13 +577,13 @@ namespace
 
         if (cfg.BotDropContainer)
         {
-            uint32 corpseId = CreateCorpseRow(bot, cfg);
+            uint32 corpseId = CreateCorpseRow(bot, cfg, true);
             if (corpseId)
             {
                 std::vector<LootSnapshot> snapshot = SnapshotAndDestroy(bot, slots, corpseId);
                 if (!snapshot.empty())
                     SpawnContainer(bot->GetMap(), bot->GetGUID(), corpseId, bot->GetPositionX(), bot->GetPositionY(),
-                                   bot->GetPositionZ(), bot->GetOrientation(), snapshot);
+                                   bot->GetPositionZ(), bot->GetOrientation(), snapshot, true);
             }
             else
                 DestroyDroppedItems(bot, slots);
@@ -662,21 +664,21 @@ namespace
             return;
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `id`, `x`, `y`, `z`, `o` FROM `survivor_corpses` WHERE `guid` = {} AND `map` = {} ORDER BY `id` ASC",
+            "SELECT `id`, `x`, `y`, `z`, `o`, `bot_owned` FROM `survivor_corpses` WHERE `guid` = {} AND `map` = {} ORDER BY `id` ASC",
             player->GetGUID().GetCounter(), map->GetId());
 
         if (!result)
             return;
 
-        std::vector<std::tuple<uint32, float, float, float, float>> rows;
+        std::vector<std::tuple<uint32, float, float, float, float, bool>> rows;
         do
         {
             Field* fields = result->Fetch();
             rows.emplace_back(fields[0].Get<uint32>(), fields[1].Get<float>(), fields[2].Get<float>(),
-                              fields[3].Get<float>(), fields[4].Get<float>());
+                              fields[3].Get<float>(), fields[4].Get<float>(), fields[5].Get<uint8>() != 0);
         } while (result->NextRow());
 
-        for (auto const& [corpseId, x, y, z, o] : rows)
+        for (auto const& [corpseId, x, y, z, o, botOwned] : rows)
         {
             bool alreadyLive;
             {
@@ -691,7 +693,7 @@ namespace
             if (snapshot.empty())
                 continue;               // emptied elsewhere; the sweep will drop the row
 
-            SpawnContainer(map, player->GetGUID(), corpseId, x, y, z, o, snapshot);
+            SpawnContainer(map, player->GetGUID(), corpseId, x, y, z, o, snapshot, botOwned);
         }
     }
 
@@ -728,12 +730,17 @@ namespace
     }
 
     // Expiry: mail what is left to the owner, drop the rows and the object.
-    void ExpireCorpse(uint32 corpseId, uint32 ownerGuid)
+    void ExpireCorpse(uint32 corpseId, uint32 ownerGuid, bool botOwned)
     {
         QueryResult items = CharacterDatabase.Query(
             "SELECT `slot_index` FROM `survivor_corpse_items` WHERE `corpse_id` = {} ORDER BY `slot_index` ASC", corpseId);
 
-        if (items)
+        // A bot container is never mailed back: the bot is re-geared by
+        // Survivor.BotRegenOnDeath, and a mailbox nobody reads is a silent way
+        // to lose the gear instead of letting the container rot. Its saved
+        // instances go with it, or the item_instance rows outlive every
+        // reference to them.
+        if (items && !botOwned)
         {
             std::vector<uint32> slotIndexes;
             do
@@ -750,6 +757,12 @@ namespace
 
                 MailRestoredItem(ownerGuid, item);
             }
+        }
+        else if (items)
+        {
+            CharacterDatabase.DirectExecute(
+                "DELETE FROM `item_instance` WHERE `guid` IN "
+                "(SELECT `item_guid` FROM `survivor_corpse_items` WHERE `corpse_id` = {})", corpseId);
         }
 
         CharacterDatabase.DirectExecute("DELETE FROM `survivor_corpse_items` WHERE `corpse_id` = {}", corpseId);
@@ -810,9 +823,21 @@ namespace Survivor
             "`level` TINYINT UNSIGNED NOT NULL, "
             "`created_ts` INT UNSIGNED NOT NULL, "
             "`expires_ts` INT UNSIGNED NOT NULL, "
+            "`bot_owned` TINYINT UNSIGNED NOT NULL DEFAULT 0, "
             "PRIMARY KEY (`id`), "
             "KEY `idx_survivor_corpses_guid` (`guid`)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+        // CREATE TABLE IF NOT EXISTS leaves an install that predates the column
+        // alone, so add it when it is missing. Asked, not assumed: a duplicate
+        // ALTER would log an error on every boot.
+        if (!CharacterDatabase.Query(
+                "SELECT 1 FROM `information_schema`.`COLUMNS` WHERE `TABLE_SCHEMA` = DATABASE() "
+                "AND `TABLE_NAME` = 'survivor_corpses' AND `COLUMN_NAME` = 'bot_owned' LIMIT 1"))
+        {
+            CharacterDatabase.DirectExecute(
+                "ALTER TABLE `survivor_corpses` ADD COLUMN `bot_owned` TINYINT UNSIGNED NOT NULL DEFAULT 0");
+        }
 
         // Column for column the same names and types as item_instance (minus
         // owner_guid, plus the loot ordering), so recovery is a straight
@@ -910,7 +935,7 @@ namespace Survivor
         if (slots.empty())
             return;
 
-        uint32 corpseId = CreateCorpseRow(player, cfg);
+        uint32 corpseId = CreateCorpseRow(player, cfg, false);
         if (!corpseId)
             return;
 
@@ -925,7 +950,7 @@ namespace Survivor
         }
 
         if (!SpawnContainer(player->GetMap(), player->GetGUID(), corpseId, player->GetPositionX(), player->GetPositionY(),
-                            player->GetPositionZ(), player->GetOrientation(), snapshot))
+                            player->GetPositionZ(), player->GetOrientation(), snapshot, false))
         {
             // The template is missing (SQL not applied) or the summon failed.
             // Nothing to walk back to, so neither the announcement nor the map
@@ -1275,6 +1300,12 @@ namespace Survivor
         if (live == CorpseToLive().end())
             return false;               // our row, but no live state to check
 
+        // A bot's container exists to be found: the bot is re-geared by
+        // Survivor.BotRegenOnDeath, and on a solo realm the only possible
+        // looter is the real player.
+        if (live->second.botOwned)
+            return false;
+
         // Inverted hook: the core denies the loot when this returns false, and
         // the wrapper does not negate, so "true" here means "deny".
         return live->second.ownerGuid != player->GetGUID().GetCounter();
@@ -1286,20 +1317,20 @@ namespace Survivor
             return;
 
         QueryResult expired = CharacterDatabase.Query(
-            "SELECT `id`, `guid` FROM `survivor_corpses` WHERE `expires_ts` <= {} ORDER BY `id` ASC", NowSeconds());
+            "SELECT `id`, `guid`, `bot_owned` FROM `survivor_corpses` WHERE `expires_ts` <= {} ORDER BY `id` ASC", NowSeconds());
 
         if (!expired)
             return;
 
-        std::vector<std::pair<uint32, uint32>> rows;
+        std::vector<std::tuple<uint32, uint32, bool>> rows;
         do
         {
             Field* fields = expired->Fetch();
-            rows.emplace_back(fields[0].Get<uint32>(), fields[1].Get<uint32>());
+            rows.emplace_back(fields[0].Get<uint32>(), fields[1].Get<uint32>(), fields[2].Get<uint8>() != 0);
         } while (expired->NextRow());
 
-        for (auto const& [corpseId, ownerGuid] : rows)
-            ExpireCorpse(corpseId, ownerGuid);
+        for (auto const& [corpseId, ownerGuid, botOwned] : rows)
+            ExpireCorpse(corpseId, ownerGuid, botOwned);
     }
 }
 
