@@ -284,9 +284,9 @@ namespace
         uint32 now = NowSeconds();
 
         CharacterDatabase.DirectExecute(
-            "INSERT INTO `survivor_corpses` (`guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `no_mail`) "
-            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            guidLow, Quote(player->GetName()), player->GetMapId(),
+            "INSERT INTO `survivor_corpses` (`guid`, `name`, `map`, `instance`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `no_mail`) "
+            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            guidLow, Quote(player->GetName()), player->GetMapId(), player->GetMap()->GetInstanceId(),
             player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
             player->GetZoneId(), uint32(player->GetLevel()), now, now + ContainerLifetimeSeconds(), noMail);
 
@@ -559,10 +559,19 @@ namespace
         if (remaining->Fetch()[0].Get<uint64>() > 0)
             return;
 
+        // Who owned it, before the row goes: the pin belongs to the owner, and
+        // any Survivor may loot any container, so clearing the looter's pin
+        // would wipe a marker for a container of their own.
+        uint32 ownerGuid = 0;
+        if (QueryResult owner = CharacterDatabase.Query(
+                "SELECT `guid` FROM `survivor_corpses` WHERE `id` = {}", corpseId))
+            ownerGuid = owner->Fetch()[0].Get<uint32>();
+
         CharacterDatabase.DirectExecute("DELETE FROM `survivor_corpse_items` WHERE `corpse_id` = {}", corpseId);
         CharacterDatabase.DirectExecute("DELETE FROM `survivor_corpses` WHERE `id` = {}", corpseId);
 
-        SendAddon(player, "none");
+        if (ownerGuid && ownerGuid == player->GetGUID().GetCounter())
+            SendAddon(player, "none");
     }
 
     // The bot path: same strip, no drop (unless the realm asked for one), and a
@@ -661,10 +670,10 @@ namespace
         if (!player || !cfg.Enable || !cfg.ContainerEntry || !player->IsInWorld())
             return;
 
-        // Rows are only ever created for a flagged character (the flag is
-        // one-way), so this hook does no work for anybody else - which matters
-        // because it runs on every zone change, for every player including the
-        // bots.
+        // Only a Survivor-flagged character triggers a restore: the containers
+        // belong to whoever plays the ruleset, so the hook does no work for
+        // anybody else - which matters because it runs on every zone change, for
+        // every player including the bots.
         if (!Survivor::IsFlagged(player))
             return;
 
@@ -673,8 +682,9 @@ namespace
             return;
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `id`, `guid`, `x`, `y`, `z`, `o`, `no_mail` FROM `survivor_corpses` WHERE `map` = {} ORDER BY `id` ASC",
-            map->GetId());
+            "SELECT `id`, `guid`, `x`, `y`, `z`, `o`, `no_mail` FROM `survivor_corpses` "
+            "WHERE `map` = {} AND `instance` = {} ORDER BY `id` ASC",
+            map->GetId(), map->GetInstanceId());
 
         if (!result)
             return;
@@ -690,21 +700,32 @@ namespace
 
         for (auto const& [corpseId, ownerGuid, x, y, z, o, noMail] : rows)
         {
-            bool alreadyLive;
+            // Claim the row before releasing the lock. This runs from the login
+            // handler (world thread) and from OnPlayerUpdateZone (map thread),
+            // and LoadSnapshot is a database round trip, so a plain "is it
+            // live?" test lets two callers summon the same row - two chests
+            // holding one saved slot, and the second loot of that slot would
+            // find no row left and keep the core's template copy.
             {
                 std::lock_guard<std::recursive_mutex> guard(CacheMutex());
-                alreadyLive = CorpseToLive().find(corpseId) != CorpseToLive().end();
+                if (CorpseToLive().find(corpseId) != CorpseToLive().end())
+                    continue;           // already standing, or being restored
+
+                CorpseToLive()[corpseId] = LiveContainer{};     // claim
             }
 
-            if (alreadyLive)
-                continue;               // already standing on this map
-
             std::vector<LootSnapshot> snapshot = LoadSnapshot(corpseId);
-            if (snapshot.empty())
-                continue;               // emptied elsewhere; the sweep will drop the row
+            bool spawned = !snapshot.empty() &&
+                           SpawnContainer(map, ObjectGuid::Create<HighGuid::Player>(ownerGuid), corpseId, x, y, z, o,
+                                          snapshot, noMail) != nullptr;
 
-            SpawnContainer(map, ObjectGuid::Create<HighGuid::Player>(ownerGuid), corpseId, x, y, z, o, snapshot,
-                           noMail);
+            if (!spawned)
+            {
+                // Release the claim: an empty snapshot means the sweep will drop
+                // the row, a failed summon means the next entry may try again.
+                std::lock_guard<std::recursive_mutex> guard(CacheMutex());
+                CorpseToLive().erase(corpseId);
+            }
         }
     }
 
@@ -826,6 +847,7 @@ namespace Survivor
             "`guid` INT UNSIGNED NOT NULL, "
             "`name` VARCHAR(12) NOT NULL, "
             "`map` INT UNSIGNED NOT NULL, "
+            "`instance` INT UNSIGNED NOT NULL DEFAULT 0, "
             "`x` FLOAT NOT NULL, "
             "`y` FLOAT NOT NULL, "
             "`z` FLOAT NOT NULL, "
@@ -848,6 +870,18 @@ namespace Survivor
         {
             CharacterDatabase.DirectExecute(
                 "ALTER TABLE `survivor_corpses` ADD COLUMN `no_mail` TINYINT UNSIGNED NOT NULL DEFAULT 0");
+        }
+
+        // Same for the instance id: without it a row written in one instance of
+        // a dungeon is restored into whichever instance the next Survivor walks
+        // into. World maps are always instance 0, so the filter below is exact
+        // there and safe in an instance.
+        if (!CharacterDatabase.Query(
+                "SELECT 1 FROM `information_schema`.`COLUMNS` WHERE `TABLE_SCHEMA` = DATABASE() "
+                "AND `TABLE_NAME` = 'survivor_corpses' AND `COLUMN_NAME` = 'instance' LIMIT 1"))
+        {
+            CharacterDatabase.DirectExecute(
+                "ALTER TABLE `survivor_corpses` ADD COLUMN `instance` INT UNSIGNED NOT NULL DEFAULT 0");
         }
 
         // Column for column the same names and types as item_instance (minus
@@ -910,6 +944,17 @@ namespace Survivor
     // module.
     bool IsHardcoreFlagged(uint32 guidLow)
     {
+        // Asked once per process: a realm without mod-hardcore would otherwise
+        // log a missing-table error on every death, every revival and every
+        // '.survivor status'. Both modules create their schema at startup, so a
+        // table that appears later cannot be missed in practice.
+        static bool const tablePresent = bool(CharacterDatabase.Query(
+            "SELECT 1 FROM `information_schema`.`TABLES` WHERE `TABLE_SCHEMA` = DATABASE() "
+            "AND `TABLE_NAME` = 'hardcore_flags' LIMIT 1"));
+
+        if (!tablePresent)
+            return false;
+
         QueryResult result = CharacterDatabase.Query(
             "SELECT `enabled` FROM `hardcore_flags` WHERE `guid` = {} AND `enabled` = 1", guidLow);
 
@@ -983,7 +1028,9 @@ namespace Survivor
             // Nothing to walk back to, so neither the announcement nor the map
             // pin may claim otherwise; the rows stay, so the expiry sweep still
             // mails the instances back.
-            player->SendSystemMessage("|cffff8000[Survivor]|r Your belongings could not be placed where you fell; they will be mailed back to you.");
+            player->SendSystemMessage(noMail
+                ? "|cffff8000[Survivor]|r Your belongings could not be placed where you fell; they are lost."
+                : "|cffff8000[Survivor]|r Your belongings could not be placed where you fell; they will be mailed back to you.");
             return;
         }
 
@@ -1326,12 +1373,17 @@ namespace Survivor
         if (!player || !source.IsGameObject())
             return false;
 
-        // Pure memory reads: the lock is held for the whole lookup, and this
-        // function never touches the database or the map.
-        std::lock_guard<std::recursive_mutex> guard(CacheMutex());
+        // The lock covers the lookup only: the hardcore check below is a query
+        // and must not run with the mutex held.
+        bool flagged;
+        {
+            std::lock_guard<std::recursive_mutex> guard(CacheMutex());
 
-        if (GoToCorpse().find(source.GetCounter()) == GoToCorpse().end())
-            return false;               // not ours: leave the core's verdict alone
+            if (GoToCorpse().find(source.GetCounter()) == GoToCorpse().end())
+                return false;           // not ours: leave the core's verdict alone
+
+            flagged = IsFlaggedGuid(player->GetGUID().GetCounter());
+        }
 
         // A death container belongs to whoever plays the ruleset, not to the
         // character that died: any Survivor-flagged character may open any of
@@ -1339,9 +1391,17 @@ namespace Survivor
         // none - which is also what stops a normal alt from farming the
         // containers a Survivor left behind.
         //
+        // A character promoted to Hardcore still carries this process's cached
+        // Survivor flag until the next boot, and '.hardcore on' dropped the row,
+        // so the hardcore table decides. Queried outside the lock, and only for
+        // a character the cache calls flagged: this is once per container open.
+        //
         // Inverted hook: the core denies the loot when this returns false, and
         // the wrapper does not negate, so "true" here means "deny".
-        return !IsFlaggedGuid(player->GetGUID().GetCounter());
+        if (!flagged)
+            return true;
+
+        return Survivor::IsHardcoreFlagged(player->GetGUID().GetCounter());
     }
 
     void SweepExpired()

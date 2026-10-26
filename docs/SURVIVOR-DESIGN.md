@@ -171,15 +171,25 @@ battleground insignia (`Player.cpp:8187`) [V], and the survivor death path calls
 (`Player.cpp:4782-4798`) [V]. The chest is independent, so the revival at the graveyard, a
 logout, or a server restart all leave the loot where it was.
 
-Persistence: `survivor_corpses` holds `map, x, y, z, o, zone, created_ts, expires_ts`, the
-owner guid (the character that died) and `no_mail`. A summoned gameobject is never saved
+Persistence: `survivor_corpses` holds `map, instance, x, y, z, o, zone, created_ts, expires_ts`,
+the owner guid (the character that died) and `no_mail`. A summoned gameobject is never saved
 (`SummonGameObject` sets neither `m_spawnId` nor a DB row, `Object.cpp:2401-2425`;
 `SaveRespawnTime` is guarded on `m_goData && m_spawnedByDefault`, `GameObject.cpp:1236-1241`)
 [V], so the module re-summons from the row when **any** Survivor-flagged character enters the
-map, and on that character's login. The select is map-wide (`WHERE map = ?`), not keyed on
-the owner: a container belongs to whoever plays the ruleset, and its owner may never come
-back at all - a bot that moved on, or a Hardcore character that fell (§5.9). The hook itself
-still does nothing for a character that is not flagged, so it costs non-Survivors no query.
+map, and on that character's login. The select is not keyed on the owner - a container belongs
+to whoever plays the ruleset, and its owner may never come back at all, a bot that moved on or
+a Hardcore character that fell (§5.9) - but it is keyed on the instance: `WHERE map = ? AND
+instance = ?`. Without the instance id a row written in one instance of a dungeon would be
+re-summoned into whichever instance the next Survivor walked into, at coordinates from another
+run. World maps are always instance 0, so the filter is exact there. The hook still does
+nothing for a character that is not flagged, so it costs non-Survivors no query.
+
+The claim on a row is taken under the module's mutex before the snapshot is loaded, because
+this runs from the login handler (world thread) and from the zone-change hook (map thread):
+two characters entering the same map at the same time must not both summon the same row, which
+would leave two chests holding one saved slot - and the second loot of that slot would find no
+row left, so the looter would keep the core's template-level copy instead of the real
+instance.
 
 `Survivor.ContainerLifetimeDays` (default 7) becomes the `respawnTime` handed to
 `SummonGameObject`; expiry destroys the object. Expired rows are swept at startup and every
@@ -415,6 +425,7 @@ CREATE TABLE IF NOT EXISTS `survivor_corpses` (
   `guid` INT UNSIGNED NOT NULL,
   `name` VARCHAR(12) NOT NULL,
   `map` INT UNSIGNED NOT NULL,
+  `instance` INT UNSIGNED NOT NULL DEFAULT 0,
   `x` FLOAT NOT NULL, `y` FLOAT NOT NULL, `z` FLOAT NOT NULL, `o` FLOAT NOT NULL,
   `zone` INT UNSIGNED NOT NULL,
   `level` TINYINT UNSIGNED NOT NULL,

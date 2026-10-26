@@ -91,7 +91,7 @@ SQL file: on this fork a failing module SQL aborts the worldserver boot.
 | table | contents |
 |---|---|
 | `survivor_flags` | `guid`, `enabled` - who opted in |
-| `survivor_corpses` | one row per death: `id`, `guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `no_mail` (`1` = rots at expiry instead of being mailed) |
+| `survivor_corpses` | one row per death: `id`, `guid`, `name`, `map`, `instance`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `no_mail` (`1` = rots at expiry instead of being mailed) |
 | `survivor_corpse_items` | one row per saved instance: `corpse_id`, `slot_index`, `item_guid`, then `itemEntry`, `creatorGuid`, `giftCreatorGuid`, `count`, `duration`, `charges`, `flags`, `enchantments`, `randomPropertyId`, `durability`, `playedTime`, `text` - column for column the same names and types as `item_instance`, so recovery is a straight re-insert and the payload is auditable with plain SQL |
 
 ## SQL
