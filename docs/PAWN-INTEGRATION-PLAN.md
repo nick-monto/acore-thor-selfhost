@@ -99,7 +99,8 @@ Pawn.Enable = 1
 Pawn.MaxPawns = 2                  # D2
 Pawn.HireFeePercent = 100          # level^3 copper
 Pawn.HireFeeHeldPercent = 100      # each pawn held adds the base fee again
-Pawn.GearCapPercent = 120          # ceiling of the per-pawn gear ratio
+Pawn.GearFloorPercent = 85         # the per-pawn gear ratio's band, and the price band
+Pawn.GearCapPercent = 150
 Pawn.LevelWindow = 2               # D1, in levels either way
 Pawn.OfferedPerPage = 12           # gossip carries at most 16 rows per page
 Pawn.FeaturedMin = 10              # per picker instance, drawn from the pool
@@ -148,10 +149,12 @@ name is `Playerbots.PremadeSpecName.<class>.<spec_no>`.
 1. Refuse when `Pawn.Enable = 0`, when the player is in combat, or when the pawn is already online.
 2. Refuse when the party already holds `Pawn.MaxPawns` pawns (D2). The message names both exits:
    dismiss a pawn at the innkeeper, or recruit strangers in the world.
-3. Refuse when the hire fee is unaffordable. The fee is `level^3 * Pawn.HireFeePercent / 100 *
-   gear_ratio / 100 * (100 + Pawn.HireFeeHeldPercent * pawns_held) / 100` copper, where `gear_ratio`
-   is the pawn's strength in percent of the owner's gear score, and it is 0 for a pawn this owner has
-   already paid for. Level cubed is calibrated against the loot-bag money table: 10-20 minutes of
+3. Refuse when the hire fee is unaffordable. The fee is
+   `player_level^3 * Pawn.HireFeePercent / 100 * gear_ratio / 100 *
+   (100 + Pawn.HireFeeHeldPercent * pawns_held) / 100` copper, where `gear_ratio` is the pawn's
+   strength in percent of the owner's gear score, and it is 0 for a pawn this owner has already paid
+   for. The player's level, not the pawn's, is the baseline: a pawn geared like the player costs
+   `player_level^3`, and the gear ratio moves it in a band that does not widen as the player levels. Level cubed is calibrated against the loot-bag money table: 10-20 minutes of
    ordinary farming at every level that matters. It is charged *here*, after every check, and not
    through the gossip box: the core deducts box money after the script hook and unconditionally, so
    a recruit refused at step 2 would still be paid for and an empty purse would still hire.
@@ -209,9 +212,10 @@ factory rolled for a spec it no longer has. The order in `PawnMgr::ApplyPawn` is
 Step 6 is `PlayerbotFactory::AutoGear`'s own sequence with one difference: the gear-score cap comes
 from the **owner** — `GetMixedGearScore(owner, withBags = true, topN = 12)`, the average score of the
 owner's twelve best items — times the pawn's own **gear ratio**, instead of an item level. The ratio
-is drawn per pawn from the same seed as the level and the spec, uniform over `[100, Pawn.GearCapPercent]`,
-so one pawn offered at a level arrives in better gear than another and the hire fee says so. With the
-default cap of 120 a pawn can out-gear its owner by a fifth. Item choice is spec-aware
+is drawn per pawn from the same seed as the level and the spec, triangular with its peak at 100 over
+`[Pawn.GearFloorPercent, Pawn.GearCapPercent]`, so one pawn offered at a level arrives in better gear
+than another and the hire fee says so. With the defaults (85, 150) a pawn can be a seventh weaker than
+its owner or half again as strong. Item choice is spec-aware
 because `InitEquipment` scores every candidate with `StatsWeightCalculator`, whose collector type
 comes from the AI's strategies (`TankWarriorStrategy` declares `STRATEGY_TYPE_TANK`, and
 `AddDefaultCombatStrategies` picks it from the talent tab) and whose tab comes from

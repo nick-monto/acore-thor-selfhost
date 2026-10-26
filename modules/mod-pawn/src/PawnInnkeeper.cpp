@@ -265,9 +265,11 @@ private:
 
             // The gear score itself is invisible in the vanilla client, so the ratio
             // is what explains why two pawns of the same level cost different money:
-            // the dearer one arrives in better gear.
-            if (offer.GearRatio > 100)
-                text += ", +" + std::to_string(uint32(offer.GearRatio) - 100) + "% gear";
+            // the dearer one arrives in better gear, the cheaper one in worse.
+            if (offer.GearRatio != 100)
+                text += ", " + std::string(offer.GearRatio > 100 ? "+" : "-") +
+                        std::to_string(offer.GearRatio > 100 ? uint32(offer.GearRatio) - 100
+                                                             : 100 - uint32(offer.GearRatio)) + "% gear";
 
             text += " - " + (fee ? FormatMoney(fee) : std::string("free"));
 

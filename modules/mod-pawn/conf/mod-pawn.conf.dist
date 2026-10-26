@@ -49,16 +49,24 @@ Pawn.MaxPawns = 2
 # Default: 2
 Pawn.LevelWindow = 2
 
-# What a hire costs, in copper, as a percentage of the pawn's level cubed:
+# What a hire costs, in copper, as a percentage of the player's level cubed:
 #
-#   fee = level^3 * HireFeePercent / 100 * gear_ratio / 100
+#   fee = player_level^3 * HireFeePercent / 100 * gear_ratio / 100
 #               * (100 + HireFeeHeldPercent * pawns_held) / 100
 #
-# gear_ratio is the pawn's own strength, in percent of the player's gear score: it
-# is drawn per pawn, from the same seed as the level and the spec, uniform over
-# [100, Pawn.GearCapPercent]. A pawn geared like the player costs the baseline; one
-# geared 20% better costs 20% more, and the picker row says so ("+20% gear"), which
-# is the only place the player needs to see it.
+# player_level^3 copper is the **baseline**: the price of a pawn geared exactly like
+# the player. gear_ratio is that pawn's own strength in percent of the player's
+# gear score - a pawn a fifth weaker costs a fifth less, one half again as strong
+# costs half again as much - and it is drawn per pawn, from the same seed as the
+# level and the spec, triangular around 100 and clamped to
+# [Pawn.GearFloorPercent, Pawn.GearCapPercent]. Most pawns therefore sit near the
+# player's strength and near the baseline price; the picker row says which way each
+# one went ("+20% gear", "-15% gear"), which is the only place the player needs to
+# see it.
+#
+# The pawn's own level is deliberately not in the price. Inside the level window it
+# moves the power less than the gear does, and pricing it made a level-20 draw twice
+# as wide as a level-80 one.
 #
 # Level cubed copper is the point of the default. Measured against this server's
 # own loot-bag money table (scripts/loot-bags/gen_loot_bags.py: normal creatures
@@ -79,21 +87,25 @@ Pawn.HireFeePercent = 100
 # Default: 100
 Pawn.HireFeeHeldPercent = 100
 
-# How far above the player's gear score a pawn may be geared, in percent. This is
-# the ceiling of the per-pawn gear ratio, and the ratio is what the hire fee is
-# scaled by. 120 means the strongest pawn offered to a player is geared 20% above
-# that player's own average item score - so a pawn can out-gear its owner, and the
-# price says which ones do. The gear pass is held to
-# GetMixedGearScore(owner) * ratio / 100 as its per-item score ceiling. 100 makes
-# every pawn a match for the player and every price in a band the same.
+# The band a pawn's gear ratio is drawn from, in percent of the player's gear
+# score. The ratio is both the gear the pawn is built to and the multiplier on the
+# hire fee, so this is also the band the price moves in: 85 and 150 mean a pawn can
+# be a seventh weaker than the player for six sevenths of the baseline, or half
+# again as strong for half again the baseline. The draw is triangular with its peak
+# at 100, so most pawns are near the baseline price and the ends of the band are
+# rare. The gear pass is held to
+# GetMixedGearScore(owner) * ratio / 100 as its per-item score ceiling. Floor 100
+# with cap 100 makes every pawn a match for the player and every price in a draw
+# identical.
 #
-# One caveat, and it is why 100 is a sane setting too: the ceiling only bites while
-# the best items available at the pawn's level are above it. A raider at 80 already
-# wears the best gear the level offers, so a ratio of 120 buys the same gear as 100
-# there and only the price differs. Nothing at offer time can tell the two cases
-# apart - the gear does not exist until the pawn is built.
-# Default: 120
-Pawn.GearCapPercent = 120
+# One caveat: the ceiling only bites while the best items available at the pawn's
+# level are above it. A raider at 80 already wears the best gear the level offers,
+# so a high ratio buys the same gear as a low one there and only the price differs.
+# Nothing at offer time can tell the two cases apart - the gear does not exist until
+# the pawn is built.
+# Defaults: 85 and 150
+Pawn.GearFloorPercent = 85
+Pawn.GearCapPercent = 150
 
 # Offers per gossip page. The gossip packet carries at most 16 rows and the
 # server aborts on a 33rd, so this is clamped to 16 minus the party rows and

@@ -32,9 +32,13 @@ struct PawnConfig
     // every pawn already in the party.
     uint32 HireFeePercent       = 100;
     uint32 HireFeeHeldPercent   = 100;
-    // The ceiling of the per-pawn gear ratio: a pawn is geared to between 100% and
-    // this percentage of the owner's gear score, and pays for what it is given.
-    uint32 GearCapPercent       = 120;
+    // The band of the per-pawn gear ratio, and of the hire fee with it: a pawn is
+    // geared to between GearFloorPercent and GearCapPercent of the owner's gear
+    // score, and pays in proportion. 100 is the baseline - a pawn geared like the
+    // player - and the draw is triangular around it, so most pawns sit near the
+    // player's strength and the extremes are rare.
+    uint32 GearFloorPercent     = 85;
+    uint32 GearCapPercent       = 150;
     uint8  OfferedPerPage       = 12;
     // A picker instance shows a random subsample of the pool, not the pool: the
     // count is drawn from [FeaturedMin, FeaturedMax] every time the menu opens.
@@ -73,9 +77,9 @@ struct PawnOffer
     uint8       SpecNo   = 0;
     PawnRole    Role     = PAWN_ROLE_NONE;
     // Percent of the owner's gear score this pawn is geared to: 100 is a match,
-    // GearCapPercent is the ceiling. Drawn from the same seed as the level, so a
-    // pawn is always offered at the same strength for the same player, and the
-    // hire fee is this ratio applied to the level-cubed baseline.
+    // the band is [GearFloorPercent, GearCapPercent]. Drawn from the same seed as
+    // the level, so a pawn is always offered at the same strength for the same
+    // player, and the hire fee is this ratio applied to the level-cubed baseline.
     uint16      GearRatio = 100;
 };
 

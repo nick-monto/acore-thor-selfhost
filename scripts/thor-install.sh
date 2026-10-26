@@ -117,7 +117,8 @@ PAWN_CONF_DEFAULTS=(
     "Pawn.LevelWindow=2"
     "Pawn.HireFeePercent=100"
     "Pawn.HireFeeHeldPercent=100"
-    "Pawn.GearCapPercent=120"
+    "Pawn.GearFloorPercent=85"
+    "Pawn.GearCapPercent=150"
     "Pawn.OfferedPerPage=12"
     "Pawn.FeaturedMin=10"
     "Pawn.FeaturedMax=15"
@@ -277,7 +278,7 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
     # Pawn.Enable and Pawn.Debug are 0|1, MaxPawns 0-4 (the gossip page has room for four party
     # rows), LevelWindow 0-10, OfferedPerPage 1-14, the featured count 1-50 each, the pool
     # refresh 1-1440 minutes each, the two fee percentages 0-10000 and 0-1000, and the gear
-    # cap 100-300.
+    # band 25-100 for the floor and 100-300 for the cap.
     local key="$1" val="$2"
     case "$val" in ''|*[!0-9]*) return 1 ;; esac
     case "$key" in
@@ -293,6 +294,8 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
             [ "$val" -ge 0 ] && [ "$val" -le 10000 ] ;;
         Pawn.HireFeeHeldPercent)
             [ "$val" -ge 0 ] && [ "$val" -le 1000 ] ;;
+        Pawn.GearFloorPercent)
+            [ "$val" -ge 25 ] && [ "$val" -le 100 ] ;;
         Pawn.GearCapPercent)
             [ "$val" -ge 100 ] && [ "$val" -le 300 ] ;;
         Pawn.FeaturedMin|Pawn.FeaturedMax)
@@ -1441,7 +1444,7 @@ write_configs() {
                 set_conf "$pw" "$pw_key" "${pw_default#*=}"
             fi
         done
-        log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min Fee=$(conf_get "$pw" Pawn.HireFeePercent)%+$(conf_get "$pw" Pawn.HireFeeHeldPercent)% GearCap=$(conf_get "$pw" Pawn.GearCapPercent)%"
+        log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min Fee=$(conf_get "$pw" Pawn.HireFeePercent)%+$(conf_get "$pw" Pawn.HireFeeHeldPercent)% Gear=$(conf_get "$pw" Pawn.GearFloorPercent)-$(conf_get "$pw" Pawn.GearCapPercent)%"
     else
         warn "no $CONF_DIR/modules/mod-pawn.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
     fi

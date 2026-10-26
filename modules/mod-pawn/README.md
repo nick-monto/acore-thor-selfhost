@@ -36,21 +36,33 @@ things the pool does not have:
 
 ## The hire fee
 
-A hire costs `level^3` copper (`Pawn.HireFeePercent`, default 100), times the pawn's **gear ratio**,
-and each pawn already in the party adds that much again (`Pawn.HireFeeHeldPercent`, default 100 — so
-the second pawn is twice the price).
-
-The gear ratio is the pawn's strength: it is drawn per pawn from the same seed as its level and spec,
-uniform over `[100, Pawn.GearCapPercent]` (default 120), and it is also the multiplier on the owner's
-gear score that the equipment pass is capped at. So a pawn geared like you costs the baseline, one
-geared 20% better costs 20% more, and it really does arrive in better gear: the cap is a per-item
-score ceiling, and playerbots picks from the ten levels below the pawn at the best quality it can
-find, so the cap is what decides which candidates pass. The picker row says `+20% gear` for anything
-above the baseline — gear score itself stays invisible, as it is in the vanilla client, and the price
-is the only number the player needs. Level cubed is calibrated against this server's own money supply, the loot-bag table in
+The **baseline** is the player's own level cubed, in copper (`Pawn.HireFeePercent`, default 100):
+that is what a pawn geared exactly like the player costs, and each pawn already in the party adds
+that much again (`Pawn.HireFeeHeldPercent`, default 100 — so the second pawn is twice the price).
+Level cubed is calibrated against this server's own money supply, the loot-bag table in
 `scripts/loot-bags/gen_loot_bags.py`: 80s at level 20, 2g 70s at 30, 6g 40s at 40, 21g 60s at 60,
 51g 20s at 80 — ten to twenty minutes of ordinary farming at every level that matters, so the work
 asked for stays constant instead of evaporating at 80 or being impossible at 10.
+
+The **gear ratio** is what moves a pawn off the baseline. It is the pawn's strength in percent of the
+player's gear score, and it is both the price multiplier and the ceiling the equipment pass is held
+to (`GetMixedGearScore(owner) * ratio / 100`, per item). It is drawn per pawn from the same seed as
+its level and spec: triangular, with its peak exactly at 100, over
+`[Pawn.GearFloorPercent, Pawn.GearCapPercent]` (defaults 85 and 150). So a pawn geared like the player
+costs the baseline, one a seventh weaker costs six sevenths of it, one half again as strong costs half
+again as much, and it really does arrive in that gear — the cap is a per-item score ceiling, and
+playerbots picks from the ten levels below the pawn at the best quality it can find, so the cap is
+what decides which candidates pass.
+
+The result is a band that does not move with level: a draw costs between 0.85x and 1.5x the baseline,
+whatever the player's level, with a median exactly at the baseline and about two thirds of the pawns
+within ±10% of it. The pawn's own level is deliberately not in the price — inside the level window it
+moves power less than the gear does, and pricing it made a level-20 draw twice as wide as a level-80
+one.
+
+The picker row says which way each pawn went — `+20% gear`, `-11% gear` — beside the price. Gear score
+itself stays invisible, as it is in the vanilla client, and the price is the number the player acts
+on.
 
 The price is on the picker row and in a confirmation box. The charge itself happens inside
 `PawnMgr::Recruit`, after every check has passed, and not through the gossip box's money: the core
