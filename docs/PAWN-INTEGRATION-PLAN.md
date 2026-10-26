@@ -182,15 +182,20 @@ factory rolled for a spec it no longer has. The order in `PawnMgr::ApplyPawn` is
 1. if the pawn is outside the level window, `PlayerbotFactory::Randomize` (level, spells, talents,
    and gear for whatever spec it happened to roll);
 2. `PawnArchetype::Apply` — the pinned spec's talents, and the blacklist;
-3. `DestroyEquippedGear`, because step 1's items were chosen for the other spec;
-4. `InitEquipment` at the pawn's level, then ammo, enchants/gems and a durability repair.
+3. `PlayerbotAI::ResetStrategies(false)` — the weight calculator's role test (`IsTank`/`IsHeal`/
+   `IsCaster` with `bySpec=false`) reads `STRATEGY_TYPE_*` on the AI's engines, not the talent tab,
+   and those strategies still describe the spec step 1 rolled. This is the same call `Randomize`
+   makes after it changes talents;
+4. `DestroyEquippedGear`, because step 1's items were chosen for the other spec;
+5. `InitEquipment` at the pawn's level, then ammo, enchants/gems and a durability repair.
 
 Step 4 is `PlayerbotFactory::AutoGear`'s own sequence with one difference: the gear-score cap comes
 from the **owner** (`GetMixedGearScore(owner) * AutoInitEquipLevelLimitRatio`) instead of an item
 level, so a pawn is never better equipped than the player it follows. Item choice is spec-aware
 because `InitEquipment` scores every candidate with `StatsWeightCalculator`, whose collector type
-comes from `IsTank`/`IsHeal`/`IsCaster` and whose tab comes from `GetPlayerSpecTab` — both read the
-bot's talents, which step 2 has already replaced.
+comes from the AI's strategies (`TankWarriorStrategy` declares `STRATEGY_TYPE_TANK`, and
+`AddDefaultCombatStrategies` picks it from the talent tab) and whose tab comes from
+`GetPlayerSpecTab`. Step 3 is what makes those agree with the pinned spec.
 
 That pass runs **once**: the roster's `built` column records it, so afterwards the pawn keeps
 whatever it wears, including gear the player gives it, and playerbots' own level-up maintenance

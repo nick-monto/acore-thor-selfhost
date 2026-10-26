@@ -474,11 +474,19 @@ void PawnMgr::ApplyPawn(Player* bot)
         factory.Randomize(false);
 
         // Pin the spec before the gear pass. InitEquipment scores every candidate
-        // item with StatsWeightCalculator, which reads the bot's own talents
-        // (IsTank/IsHeal/IsCaster and GetPlayerSpecTab), so anything equipped
-        // before the pin is gear for whatever spec Randomize rolled - a prot pawn
-        // in a fury warrior's two-hander and no shield.
+        // item with StatsWeightCalculator, whose collector type comes from the
+        // bot's spec, so anything equipped before the pin is gear for whatever
+        // spec Randomize rolled - a prot pawn in a fury warrior's two-hander and
+        // no shield.
         sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo);
+
+        // The weight calculator does not read the talent tab: IsTank/IsHeal/
+        // IsCaster with bySpec=false test STRATEGY_TYPE_* on the AI's engines,
+        // and those still describe the spec Randomize rolled. Rebuild them from
+        // the pinned spec first - the same call Randomize makes after it changes
+        // talents - or a prot pawn is scored as a damage dealer.
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            botAI->ResetStrategies(false);
 
         // Then gear the pawn for the spec it now has, at its level, with the
         // owner's gear score as the ceiling so a pawn is never better equipped
