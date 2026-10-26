@@ -1,7 +1,7 @@
 # mod-survivor
 
-A second opt-in ruleset next to [mod-hardcore](../mod-hardcore): dying costs you
-everything you carry, but it does not end the character.
+A second opt-in ruleset next to [mod-hardcore](../mod-hardcore), one rung below it on a
+one-way ladder: dying costs you everything you carry, but it does not end the character.
 
 `.survivor on` flags the character. From then on, each death:
 
@@ -22,19 +22,37 @@ everything you carry, but it does not end the character.
 The container is independent of the corpse, so nothing about the revival can
 lose it: an unclaimed one stays where it fell until it is looted or expires.
 Battleground and arena deaths keep the core's own handling - no drop and no
-revival there.
+revival there. A character promoted to Hardcore is the other exception: its
+death still drops a container, but it is never revived (see *The mode ladder*).
 
 The bank, the mail, the gold and the quest log are never touched. Opt-in is
 one-way, like Hardcore: there is no `.survivor off`. `.survivor status` reports
 the flag.
 
-## Exclusivity
+## The mode ladder
 
-`.survivor on` refuses a character that `hardcore_flags` reports as enabled, and
-`.hardcore on` refuses a Survivor-flagged character. Both commands refuse
-bot-controlled (headless) sessions. mod-survivor reads `hardcore_flags` with a
-plain query and tolerates the table being absent, so it neither links against
-mod-hardcore nor depends on it being installed.
+The two rulesets are one-way steps on a single ladder: normal -> Survivor -> Hardcore, and
+normal -> Hardcore.
+
+- `.hardcore on` **accepts** a Survivor-flagged character: it deletes the `survivor_flags` row
+  (so exactly one ruleset is stored) and reports "Survivor mode is dropped". That is the only
+  way either flag is ever removed.
+- `.survivor on` refuses a character that `hardcore_flags` reports as enabled - "Hardcore is
+  terminal: it cannot be combined with Survivor". Nothing walks back down the ladder, and
+  there is no `.hardcore off` either.
+- `.survivor status` on a Hardcore character answers "Survivor: superseded", because this
+  process's flag cache can still hold the opt-in the promotion removed.
+- Both commands refuse bot-controlled (headless) sessions. mod-survivor reads
+  `hardcore_flags` with a plain query and tolerates the table being absent, so it neither
+  links against mod-hardcore nor depends on it being installed.
+
+A Hardcore death still leaves a container. `OnPlayerJustDied` checks `hardcore_flags` before
+the Survivor flag: the equipped items and bags are lifted into a container at the death spot
+(announced when `Survivor.AnnounceDeaths = 1`) and nothing is revived - the character stays
+dead under `Hardcore.DeathPolicy`. The row is written with `no_mail = 1`, so the container
+rots at expiry instead of mailing gear to a character that can no longer be played. The
+fallen character is no longer Survivor-flagged and cannot open it; any Survivor-flagged
+character can.
 
 ## Configuration
 
@@ -52,16 +70,18 @@ mod-hardcore nor depends on it being installed.
 | `Survivor.ContainerEntry` | `5000000` | the gameobject template the module summons |
 | `Survivor.ApplyToBots` | `1` | the ruleset also applies to bot-controlled characters |
 | `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory; `0` leaves it naked |
-| `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container any real player may take; `0` destroys the gear |
+| `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container any Survivor-flagged character may take; `0` destroys the gear |
 
 With `Survivor.DropBags = 0` the equipped bags are kept even when
 `Survivor.DropEquipped = 1`, because destroying a bag destroys what it holds.
 
 Unclaimed containers are swept every 30 s and at startup: once
 `ContainerLifetimeDays` has passed, the remaining instances are mailed to the
-owner, then the rows and the object are deleted. A container also survives a
-logout and a server restart - it is re-summoned from its row when the owner
-re-enters that map.
+owner - or deleted outright when the row has `no_mail = 1` (a bot's container, a Hardcore
+death container) - then the rows and the object are deleted. A container also survives a
+logout and a server restart: it is re-summoned from its row when any Survivor-flagged
+character enters that map or logs in on it, because the character that died may never come
+back.
 
 ## Tables
 
@@ -71,7 +91,7 @@ SQL file: on this fork a failing module SQL aborts the worldserver boot.
 | table | contents |
 |---|---|
 | `survivor_flags` | `guid`, `enabled` - who opted in |
-| `survivor_corpses` | one row per death: `id`, `guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts` |
+| `survivor_corpses` | one row per death: `id`, `guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `no_mail` (`1` = rots at expiry instead of being mailed) |
 | `survivor_corpse_items` | one row per saved instance: `corpse_id`, `slot_index`, `item_guid`, then `itemEntry`, `creatorGuid`, `giftCreatorGuid`, `count`, `duration`, `charges`, `flags`, `enchantments`, `randomPropertyId`, `durability`, `playedTime`, `text` - column for column the same names and types as `item_instance`, so recovery is a straight re-insert and the payload is auditable with plain SQL |
 
 ## SQL
@@ -108,13 +128,16 @@ exactly `Addmod_survivorScripts`, defined in
   that beats the tick is covered by `HandleLogin` (flagged and dead is enough - no
   container row needed), a Release by
   `OnPlayerReleasedGhost`, and a battleground or arena death is left alone.
-* The container is a summoned chest with `SetOwnerGUID` and a hand-filled
+* The container is a summoned chest with the dying character's GUID set as its owner (core
+  bookkeeping only - access is decided by the loot hook, not by that GUID) and a hand-filled
   `GameObject::loot`: one `LootItem` per saved instance, `itemIndex` equal to the
   vector index and `unlootedCount` incremented by hand (the core only does that
   inside `Loot::AddItem`).
-* `GlobalScript::OnAllowedToLootContainerCheck` is the owner gate. Its boolean is
-  inverted in this core - returning `true` means *deny* - so the module returns
-  true only for another player trying to open one of its containers.
+* `GlobalScript::OnAllowedToLootContainerCheck` is the access gate, and its boolean is
+  inverted in this core - returning `true` means *deny*. The module denies every character
+  that is not Survivor-flagged and allows everything else, so any Survivor may open any death
+  container (their own, another player's, a bot's, a fallen Hardcore character's) and a
+  character that never opted in can open none.
 * `PlayerScript::OnPlayerLootItem` puts the saved instance back: the
   template-level copy the core created is destroyed, the row is re-inserted under
   its old guid, loaded with `Item::LoadFromDB` (the only lossless path -
@@ -133,11 +156,11 @@ exactly `Addmod_survivorScripts`, defined in
 
 With `Survivor.ApplyToBots = 1` a bot-controlled character follows the same
 rules: its equipment and bags are taken, and with `Survivor.BotDropContainer = 1`
-(default) they are left in a lootable container where it fell. Any real player may
-open a bot's container - the bot does not need the gear back, because the factory
-re-rolls it, so on a solo realm the container is a source of level-appropriate
-gear. A bot container nobody loots rots at expiry and its items are dropped, never
-mailed. With `Survivor.BotDropContainer = 0` the gear is destroyed outright.
+(default) they are left in a lootable container where it fell. Any Survivor-flagged
+character may open a bot's container - access is not tied to the bot - because the bot does
+not need the gear back: the factory re-rolls it, so on a solo realm the container is a source
+of level-appropriate gear. A bot container nobody loots rots at expiry and its items are
+dropped, never mailed (`no_mail = 1`). With `Survivor.BotDropContainer = 0` the gear is destroyed outright.
 The strip happens in `OnPlayerJustDied`; the re-roll is deferred to the
 next `OnPlayerUpdate`, once the bot is alive and out of any battleground, because
 calling the playerbots factory from inside `Player::Kill` would mutate a bot whose

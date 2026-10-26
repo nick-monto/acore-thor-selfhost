@@ -147,21 +147,35 @@ namespace
     }
 
     // Soft cross-module check against mod-survivor, which owns `survivor_flags`.
-    // Survivor and Hardcore are mutually exclusive: a Survivor death drops the
-    // character's gear into a recoverable container, so that death must stay
-    // recoverable - permadeath would invalidate it. The table only exists when
-    // mod-survivor is installed, so a failed query (nullptr) simply means "not
-    // flagged"; this module therefore builds and runs without mod-survivor.
-    // Deliberately no error logging of our own and no cache: the only caller is
-    // the '.hardcore on' command (world thread, once per invocation), never a
-    // per-update hook, so an absent table costs at most one failed query per
-    // command attempt instead of log spam every tick.
+    // The two rulesets form a one-way ladder: normal -> Survivor -> Hardcore,
+    // and normal -> Hardcore. Hardcore is terminal, so it can be opted into from
+    // either rung, while '.survivor on' refuses a Hardcore character - a death
+    // that is already final must not become recoverable.
+    //
+    // The table only exists when mod-survivor is installed, so a failed query
+    // (nullptr) simply means "not flagged"; this module therefore builds and
+    // runs without mod-survivor. Deliberately no error logging of our own and no
+    // cache: the only callers are the '.hardcore on' command (world thread, once
+    // per invocation) and nothing else, never a per-update hook, so an absent
+    // table costs at most one failed query per command attempt instead of log
+    // spam every tick.
     bool SurvivorFlagged(uint32 guidLow)
     {
         QueryResult result = CharacterDatabase.Query(
             "SELECT `enabled` FROM `survivor_flags` WHERE `guid` = {} AND `enabled` = 1", guidLow);
 
         return result != nullptr;
+    }
+
+    // Drops the mod-survivor opt-in when the character is promoted to Hardcore,
+    // so exactly one ruleset is stored for it. Only called when SurvivorFlagged
+    // just found the row, which also means the table exists. mod-survivor keeps
+    // its own in-process copy of the flag until the next boot and consults this
+    // module's table on the cold paths (death, revival), so the promotion takes
+    // effect immediately either way.
+    void ClearSurvivorFlag(uint32 guidLow)
+    {
+        CharacterDatabase.Execute("DELETE FROM `survivor_flags` WHERE `guid` = {}", guidLow);
     }
 
     void SendFallenMessage(Player* player)
@@ -435,16 +449,6 @@ public:
             return false;
         }
 
-        // Survivor deaths must stay recoverable (gear is dropped into a
-        // lootable container), so a Survivor-flagged character cannot also be
-        // made permanently dead by Hardcore.
-        if (SurvivorFlagged(player->GetGUID().GetCounter()))
-        {
-            handler->SendSysMessage("This character is flagged Survivor. Survivor and Hardcore are mutually exclusive; a Survivor death must be recoverable.");
-            handler->SetSentErrorMessage(true);
-            return false;
-        }
-
         if (Hardcore::IsFallen(player))
         {
             handler->SendSysMessage("This character has already fallen and cannot be flagged again.");
@@ -465,10 +469,30 @@ public:
             return false;
         }
 
+        // Survivor -> Hardcore is allowed and one-way: permadeath supersedes a
+        // ruleset whose whole purpose is to make a death recoverable. The
+        // Survivor opt-in is dropped with it, so the character carries one
+        // ruleset, and the Survivor death container it would have left behind is
+        // now a hardcore one.
+        bool promotedFromSurvivor = SurvivorFlagged(player->GetGUID().GetCounter());
+        if (promotedFromSurvivor)
+            ClearSurvivorFlag(player->GetGUID().GetCounter());
+
         Hardcore::SetHardcore(player, true);
-        handler->PSendSysMessage(
-            "Hardcore ENABLED for {}. This character permanently falls on death - there is no undo.",
-            player->GetName());
+
+        if (promotedFromSurvivor)
+        {
+            handler->PSendSysMessage(
+                "Hardcore ENABLED for {}. Survivor mode is dropped: from here on this character permanently falls on death.",
+                player->GetName());
+        }
+        else
+        {
+            handler->PSendSysMessage(
+                "Hardcore ENABLED for {}. This character permanently falls on death - there is no undo.",
+                player->GetName());
+        }
+
         return true;
     }
 

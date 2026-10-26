@@ -1,7 +1,8 @@
 /*
  * mod-survivor - shared declarations.
  *
- * Opt-in "death is expensive" ruleset, mutually exclusive with Hardcore. A
+ * Opt-in "death is expensive" ruleset, one rung below Hardcore on a one-way
+ * ladder (normal -> Survivor -> Hardcore, and normal -> Hardcore). A
  * character flags itself Survivor ('.survivor on') and from then on every death
  * lifts the equipped items and the bag contents off the body and puts them in a
  * lootable container at the death position, which is also announced to the
@@ -12,16 +13,23 @@
  *     instance keeps its enchants, gems, durability, charges and text),
  *   - the live items are destroyed, one lootable gameobject is summoned at the
  *     death spot and filled with one LootItem per saved instance,
- *   - the owner - and only the owner - may open that container
+ *   - any Survivor-flagged character may open any death container, whoever it
+ *     came from; a character that never opted in may open none
  *     (GlobalScript::OnAllowedToLootContainerCheck); looting an entry rebuilds
  *     the *same* item_instance row, so recovery is lossless,
- *   - an unclaimed container re-summons when the owner re-enters its map, and
- *     its remaining items are mailed to the owner when the row expires.
+ *   - an unclaimed container re-summons when any flagged character enters its
+ *     map, and its remaining items are mailed to the owner when the row expires
+ *     - unless the row's no_mail is set (a bot's container, a Hardcore death's
+ *     container), in which case they are deleted instead.
  *
- * Bot-controlled (headless) characters follow the same strip with one twist:
- * their gear is destroyed rather than dropped and replaced from playerbots'
- * own factory once they are alive again (PlayerbotFactory::AutoGear), because
- * a container full of randombot gear would be a free-gear faucet.
+ * Bot-controlled (headless) characters follow the same strip: their gear is
+ * left in a container unless Survivor.BotDropContainer = 0 destroys it, and it
+ * is replaced from playerbots' own factory once they are alive again
+ * (PlayerbotFactory::AutoGear) - the bot is re-geared, so the container is loot
+ * for the realm rather than something the bot needs back.
+ *
+ * A Hardcore-flagged death is handled here too: its gear and bags are dropped
+ * into a no_mail container and nothing is revived, so Hardcore stays terminal.
  *
  * The bank, the mail, the gold and the quest log are never touched.
  *
@@ -81,6 +89,11 @@ namespace Survivor
 
     // True if the session is a bot-controlled (headless) one. Map thread.
     bool IsBotControlled(Player* player);
+
+    // True when mod-hardcore has this character flagged (read from its table,
+    // no link against the module). Cold paths only: a death, a revival, a
+    // command.
+    bool IsHardcoreFlagged(uint32_t guidLow);
 
     // Persists the opt-in flag and updates the cache. World thread (command).
     void Flag(Player* player);

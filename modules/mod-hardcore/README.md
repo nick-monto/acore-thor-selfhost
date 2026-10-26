@@ -32,6 +32,10 @@ is final. What "final" means is configurable (`Hardcore.DeathPolicy`):
 Every death is logged permanently (character, level, map, zone, timestamp), regardless of
 policy, and can optionally be broadcast server-wide (`Hardcore.AnnounceDeaths`).
 
+When `mod-survivor` is installed, a Hardcore death also leaves the character's equipped items
+and bags in a lootable container at the death spot, and `.hardcore on` accepts a
+Survivor-flagged character instead of refusing it (see *Pairing with Survivor*).
+
 ## Configuration
 
 `conf/mod_hardcore.conf.dist`:
@@ -54,6 +58,28 @@ import, no client patch needed.
   to *at the moment it dies*. Changing the setting later does not retroactively change how an
   already-fallen character is handled.
 
+## Pairing with Survivor
+
+With `mod-survivor` installed the two rulesets form a one-way ladder: normal -> Survivor ->
+Hardcore, and normal -> Hardcore. A character can only move up.
+
+- `.hardcore on` on a Survivor-flagged character is accepted. It deletes the `survivor_flags`
+  row (so exactly one ruleset is stored) and answers "Hardcore ENABLED for X. Survivor mode
+  is dropped: from here on this character permanently falls on death." There is still no
+  `.hardcore off`, so the promotion cannot be undone.
+- `.survivor on` refuses a Hardcore character instead: Hardcore is terminal, so a death that
+  is already final must not become recoverable.
+- A Hardcore death's earlier Survivor behaviour is replaced, not combined: the equipped items
+  and bags go into a container at the death spot (announced when `Survivor.AnnounceDeaths =
+  1`), no revival happens, and `Hardcore.DeathPolicy` decides the character as before. The
+  container's row is written with `no_mail = 1`, so it rots at expiry rather than mailing
+  gear to a character that can no longer be played; the fallen character is no longer
+  Survivor-flagged, so any *other* Survivor-flagged character may loot it.
+
+The cross-check is a plain read of `survivor_flags` / `hardcore_flags` in each module - no
+shared headers, no new build dependency, and a missing table means "not flagged", so either
+module runs alone.
+
 ## Pairing with Self-Found
 
 Hardcore is conceptually self-found - a permadeath character should usually also not be able
@@ -72,6 +98,11 @@ Rebuild the worldserver after changing the module source.
 - Graveyard release is allowed for fallen ghosts (the upstream version blocks it, which can
   strand under-map/fatigue deaths).
 - Bot-controlled sessions cannot opt in, and are ignored by every enforcement hook.
+- `.hardcore on` accepts a Survivor-flagged character (a `mod-survivor` install), deletes that
+  flag, and reports that Survivor mode is dropped. Upstream has no Survivor, so upstream's
+  command has no such branch.
+- When `mod-survivor` is installed, its death hook recognises the Hardcore flag and leaves
+  the character's gear and bags in a container at the death spot.
 
 ## License
 

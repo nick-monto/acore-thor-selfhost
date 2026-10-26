@@ -16,7 +16,8 @@
  *     lootId = 0, which is what stops Player::SendLoot from clearing and
  *     regenerating it; consumable = 1 plus the summon respawn time is what
  *     makes the core delete the chest once it has been emptied.
- *   - Only the owner may open it (OnAllowedToLootContainerCheck, whose boolean
+ *   - Any Survivor-flagged character may open it, and nobody else may
+ *     (OnAllowedToLootContainerCheck, whose boolean
  *     is inverted in this core), and looting an entry puts the *same* item
  *     instance back - the row is re-inserted under its old guid and loaded
  *     with Item::LoadFromDB, which is the only lossless path (StoreNewItem
@@ -113,8 +114,7 @@ namespace
         uint32 goLowGuid = 0;   // same value as the GoToCorpse() key
         uint32 mapId = 0;
         uint32 instanceId = 0;
-        uint32 ownerGuid = 0;
-        bool botOwned = false;  // a bot death with Survivor.BotDropContainer
+        bool noMail = false;    // rots at expiry: a bot's or a hardcore death's
     };
 
     //
@@ -278,17 +278,17 @@ namespace
 
     // Inserts the survivor_corpses row and returns its id, or 0 when the row
     // could not be read back.
-    uint32 CreateCorpseRow(Player* player, Survivor::Config const& cfg, bool botOwned)
+    uint32 CreateCorpseRow(Player* player, Survivor::Config const& cfg, bool noMail)
     {
         uint32 guidLow = player->GetGUID().GetCounter();
         uint32 now = NowSeconds();
 
         CharacterDatabase.DirectExecute(
-            "INSERT INTO `survivor_corpses` (`guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `bot_owned`) "
+            "INSERT INTO `survivor_corpses` (`guid`, `name`, `map`, `x`, `y`, `z`, `o`, `zone`, `level`, `created_ts`, `expires_ts`, `no_mail`) "
             "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             guidLow, Quote(player->GetName()), player->GetMapId(),
             player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
-            player->GetZoneId(), uint32(player->GetLevel()), now, now + ContainerLifetimeSeconds(), botOwned);
+            player->GetZoneId(), uint32(player->GetLevel()), now, now + ContainerLifetimeSeconds(), noMail);
 
         // The insert above is a DirectExecute (one pooled connection) and this
         // is a separate query, so the id is read back by guid instead of
@@ -401,7 +401,7 @@ namespace
     // Summons the container, hands it to the owner and fills its loot. Returns
     // nullptr when the template is missing or the map refused the summon.
     GameObject* SpawnContainer(Map* map, ObjectGuid owner, uint32 corpseId, float x, float y, float z, float o,
-                               std::vector<LootSnapshot> const& snapshot, bool botOwned)
+                               std::vector<LootSnapshot> const& snapshot, bool noMail)
     {
         Survivor::Config const& cfg = Survivor::GetConfig();
         if (!map || !cfg.ContainerEntry || snapshot.empty())
@@ -427,8 +427,7 @@ namespace
         live.goLowGuid = go->GetGUID().GetCounter();
         live.mapId = map->GetId();
         live.instanceId = map->GetInstanceId();
-        live.ownerGuid = owner.GetCounter();
-        live.botOwned = botOwned;
+        live.noMail = noMail;
 
         {
             std::lock_guard<std::recursive_mutex> guard(CacheMutex());
@@ -636,6 +635,12 @@ namespace
         if (player->InBattleground() || player->InArena())
             return false;
 
+        // Permadeath supersedes the survivor ruleset: a character promoted to
+        // Hardcore must never be revived, whatever this process still has in
+        // its flag cache.
+        if (Survivor::IsHardcoreFlagged(player->GetGUID().GetCounter()))
+            return false;
+
         player->ResurrectPlayer(1.0f);
         player->SpawnCorpseBones();
         player->RepopAtGraveyard();
@@ -644,8 +649,12 @@ namespace
         return true;
     }
 
-    // Re-summons every unclaimed container of this player that belongs to the
-    // map the player is on right now.
+    // Re-summons the unclaimed containers standing on the map this player is on,
+    // whoever they belong to. A container is a world object now that the loot
+    // gate asks about the looter rather than the owner, and the owner may never
+    // come back at all - a bot that has moved on, or a hardcore character that
+    // fell - so keying the restore on the owner's guid would lose those
+    // containers on every restart.
     void RestoreContainers(Player* player)
     {
         Survivor::Config const& cfg = Survivor::GetConfig();
@@ -664,21 +673,22 @@ namespace
             return;
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `id`, `x`, `y`, `z`, `o`, `bot_owned` FROM `survivor_corpses` WHERE `guid` = {} AND `map` = {} ORDER BY `id` ASC",
-            player->GetGUID().GetCounter(), map->GetId());
+            "SELECT `id`, `guid`, `x`, `y`, `z`, `o`, `no_mail` FROM `survivor_corpses` WHERE `map` = {} ORDER BY `id` ASC",
+            map->GetId());
 
         if (!result)
             return;
 
-        std::vector<std::tuple<uint32, float, float, float, float, bool>> rows;
+        std::vector<std::tuple<uint32, uint32, float, float, float, float, bool>> rows;
         do
         {
             Field* fields = result->Fetch();
-            rows.emplace_back(fields[0].Get<uint32>(), fields[1].Get<float>(), fields[2].Get<float>(),
-                              fields[3].Get<float>(), fields[4].Get<float>(), fields[5].Get<uint8>() != 0);
+            rows.emplace_back(fields[0].Get<uint32>(), fields[1].Get<uint32>(), fields[2].Get<float>(),
+                              fields[3].Get<float>(), fields[4].Get<float>(), fields[5].Get<float>(),
+                              fields[6].Get<uint8>() != 0);
         } while (result->NextRow());
 
-        for (auto const& [corpseId, x, y, z, o, botOwned] : rows)
+        for (auto const& [corpseId, ownerGuid, x, y, z, o, noMail] : rows)
         {
             bool alreadyLive;
             {
@@ -693,7 +703,8 @@ namespace
             if (snapshot.empty())
                 continue;               // emptied elsewhere; the sweep will drop the row
 
-            SpawnContainer(map, player->GetGUID(), corpseId, x, y, z, o, snapshot, botOwned);
+            SpawnContainer(map, ObjectGuid::Create<HighGuid::Player>(ownerGuid), corpseId, x, y, z, o, snapshot,
+                           noMail);
         }
     }
 
@@ -730,17 +741,17 @@ namespace
     }
 
     // Expiry: mail what is left to the owner, drop the rows and the object.
-    void ExpireCorpse(uint32 corpseId, uint32 ownerGuid, bool botOwned)
+    void ExpireCorpse(uint32 corpseId, uint32 ownerGuid, bool noMail)
     {
         QueryResult items = CharacterDatabase.Query(
             "SELECT `slot_index` FROM `survivor_corpse_items` WHERE `corpse_id` = {} ORDER BY `slot_index` ASC", corpseId);
 
-        // A bot container is never mailed back: the bot is re-geared by
-        // Survivor.BotRegenOnDeath, and a mailbox nobody reads is a silent way
-        // to lose the gear instead of letting the container rot. Its saved
-        // instances go with it, or the item_instance rows outlive every
-        // reference to them.
-        if (items && !botOwned)
+        // A container that nobody can be mailed to rots: a bot is re-geared by
+        // Survivor.BotRegenOnDeath, and a hardcore character is a ghost for
+        // good, so a mailbox would only hide the gear instead of letting it go.
+        // Its saved instances go with it, or the item_instance rows outlive
+        // every reference to them.
+        if (items && !noMail)
         {
             std::vector<uint32> slotIndexes;
             do
@@ -823,7 +834,7 @@ namespace Survivor
             "`level` TINYINT UNSIGNED NOT NULL, "
             "`created_ts` INT UNSIGNED NOT NULL, "
             "`expires_ts` INT UNSIGNED NOT NULL, "
-            "`bot_owned` TINYINT UNSIGNED NOT NULL DEFAULT 0, "
+            "`no_mail` TINYINT UNSIGNED NOT NULL DEFAULT 0, "
             "PRIMARY KEY (`id`), "
             "KEY `idx_survivor_corpses_guid` (`guid`)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
@@ -833,10 +844,10 @@ namespace Survivor
         // ALTER would log an error on every boot.
         if (!CharacterDatabase.Query(
                 "SELECT 1 FROM `information_schema`.`COLUMNS` WHERE `TABLE_SCHEMA` = DATABASE() "
-                "AND `TABLE_NAME` = 'survivor_corpses' AND `COLUMN_NAME` = 'bot_owned' LIMIT 1"))
+                "AND `TABLE_NAME` = 'survivor_corpses' AND `COLUMN_NAME` = 'no_mail' LIMIT 1"))
         {
             CharacterDatabase.DirectExecute(
-                "ALTER TABLE `survivor_corpses` ADD COLUMN `bot_owned` TINYINT UNSIGNED NOT NULL DEFAULT 0");
+                "ALTER TABLE `survivor_corpses` ADD COLUMN `no_mail` TINYINT UNSIGNED NOT NULL DEFAULT 0");
         }
 
         // Column for column the same names and types as item_instance (minus
@@ -889,6 +900,22 @@ namespace Survivor
         return guids.find(guidLow) != guids.end();
     }
 
+    // True when mod-hardcore has this character flagged. Reads hardcore_flags
+    // directly - no link against the other module - and a missing table simply
+    // means "not flagged", so this module builds and runs without mod-hardcore.
+    //
+    // Deliberately not cached: every caller is cold (a death, a revival, a
+    // command), never a per-update hook, so one query there costs nothing and a
+    // cache would have to be invalidated when '.hardcore on' runs in the other
+    // module.
+    bool IsHardcoreFlagged(uint32 guidLow)
+    {
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT `enabled` FROM `hardcore_flags` WHERE `guid` = {} AND `enabled` = 1", guidLow);
+
+        return bool(result);
+    }
+
     bool IsFlagged(Player* player)
     {
         if (!player)
@@ -929,13 +956,13 @@ namespace Survivor
     // container at the death spot, announce it and pin it on the map. Returns
     // early when there is nothing to take - a character who already lost
     // everything still dies, it just leaves no second container.
-    void DropGearAtDeath(Player* player, Survivor::Config const& cfg)
+    void DropGearAtDeath(Player* player, Survivor::Config const& cfg, bool noMail)
     {
         std::vector<SlotRef> slots = CollectDroppableItems(player, cfg);
         if (slots.empty())
             return;
 
-        uint32 corpseId = CreateCorpseRow(player, cfg, false);
+        uint32 corpseId = CreateCorpseRow(player, cfg, noMail);
         if (!corpseId)
             return;
 
@@ -950,7 +977,7 @@ namespace Survivor
         }
 
         if (!SpawnContainer(player->GetMap(), player->GetGUID(), corpseId, player->GetPositionX(), player->GetPositionY(),
-                            player->GetPositionZ(), player->GetOrientation(), snapshot, false))
+                            player->GetPositionZ(), player->GetOrientation(), snapshot, noMail))
         {
             // The template is missing (SQL not applied) or the summon failed.
             // Nothing to walk back to, so neither the announcement nor the map
@@ -991,10 +1018,21 @@ namespace Survivor
             return;
         }
 
+        // A Hardcore character that was promoted out of Survivor still carries
+        // the flag in this process's cache until the next boot, so the hardcore
+        // table is the authority here. A hardcore death leaves its gear in a
+        // container for whoever plays the ruleset, and never comes back: the
+        // character is a ghost for good.
+        if (IsHardcoreFlagged(player->GetGUID().GetCounter()))
+        {
+            DropGearAtDeath(player, cfg, true);
+            return;
+        }
+
         if (!IsFlagged(player))
             return;
 
-        DropGearAtDeath(player, cfg);
+        DropGearAtDeath(player, cfg, false);
 
         // Queued for every survivor death, not only the ones that dropped
         // something: a character who already lost everything still comes back
@@ -1288,27 +1326,22 @@ namespace Survivor
         if (!player || !source.IsGameObject())
             return false;
 
-        // Pure memory read: the lock is held for the whole lookup, and this
+        // Pure memory reads: the lock is held for the whole lookup, and this
         // function never touches the database or the map.
         std::lock_guard<std::recursive_mutex> guard(CacheMutex());
 
-        auto link = GoToCorpse().find(source.GetCounter());
-        if (link == GoToCorpse().end())
+        if (GoToCorpse().find(source.GetCounter()) == GoToCorpse().end())
             return false;               // not ours: leave the core's verdict alone
 
-        auto live = CorpseToLive().find(link->second);
-        if (live == CorpseToLive().end())
-            return false;               // our row, but no live state to check
-
-        // A bot's container exists to be found: the bot is re-geared by
-        // Survivor.BotRegenOnDeath, and on a solo realm the only possible
-        // looter is the real player.
-        if (live->second.botOwned)
-            return false;
-
+        // A death container belongs to whoever plays the ruleset, not to the
+        // character that died: any Survivor-flagged character may open any of
+        // them, whoever the death was. A character that never opted in may open
+        // none - which is also what stops a normal alt from farming the
+        // containers a Survivor left behind.
+        //
         // Inverted hook: the core denies the loot when this returns false, and
         // the wrapper does not negate, so "true" here means "deny".
-        return live->second.ownerGuid != player->GetGUID().GetCounter();
+        return !IsFlaggedGuid(player->GetGUID().GetCounter());
     }
 
     void SweepExpired()
@@ -1317,7 +1350,7 @@ namespace Survivor
             return;
 
         QueryResult expired = CharacterDatabase.Query(
-            "SELECT `id`, `guid`, `bot_owned` FROM `survivor_corpses` WHERE `expires_ts` <= {} ORDER BY `id` ASC", NowSeconds());
+            "SELECT `id`, `guid`, `no_mail` FROM `survivor_corpses` WHERE `expires_ts` <= {} ORDER BY `id` ASC", NowSeconds());
 
         if (!expired)
             return;
@@ -1329,8 +1362,8 @@ namespace Survivor
             rows.emplace_back(fields[0].Get<uint32>(), fields[1].Get<uint32>(), fields[2].Get<uint8>() != 0);
         } while (expired->NextRow());
 
-        for (auto const& [corpseId, ownerGuid, botOwned] : rows)
-            ExpireCorpse(corpseId, ownerGuid, botOwned);
+        for (auto const& [corpseId, ownerGuid, noMail] : rows)
+            ExpireCorpse(corpseId, ownerGuid, noMail);
     }
 }
 
@@ -1358,17 +1391,6 @@ public:
         return commandTable;
     }
 
-    // True when mod-hardcore has this character flagged. Reads hardcore_flags
-    // directly (no link against the other module), and a missing table simply
-    // means "not flagged".
-    static bool IsHardcoreFlagged(uint32 guidLow)
-    {
-        QueryResult result = CharacterDatabase.Query(
-            "SELECT `enabled` FROM `hardcore_flags` WHERE `guid` = {} AND `enabled` = 1", guidLow);
-
-        return bool(result);
-    }
-
     // Opt-in is deliberately one-way: there is no '.survivor off', because a
     // ruleset you can switch off after dying is not a ruleset.
     static bool HandleSurvivorOnCommand(ChatHandler* handler)
@@ -1392,6 +1414,16 @@ public:
             return false;
         }
 
+        // Hardcore first: it supersedes Survivor, and a character promoted out
+        // of Survivor still carries this process's cached flag.
+        if (Survivor::IsHardcoreFlagged(player->GetGUID().GetCounter()))
+        {
+            handler->SendSysMessage(
+                "This character is flagged Hardcore. Hardcore is terminal: it cannot be combined with Survivor.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
         if (Survivor::IsFlagged(player))
         {
             handler->SendSysMessage("This character is already flagged Survivor.");
@@ -1401,13 +1433,6 @@ public:
         if (player->GetLevel() < cfg.MinLevelToFlag)
         {
             handler->PSendSysMessage("You must be at least level {} to opt into Survivor mode.", cfg.MinLevelToFlag);
-            handler->SetSentErrorMessage(true);
-            return false;
-        }
-
-        if (IsHardcoreFlagged(player->GetGUID().GetCounter()))
-        {
-            handler->SendSysMessage("This character is flagged Hardcore. The two rulesets cannot be combined.");
             handler->SetSentErrorMessage(true);
             return false;
         }
@@ -1425,10 +1450,21 @@ public:
         if (!player)
             return false;
 
+        // Hardcore first: it supersedes Survivor, and the in-process flag cache
+        // can still carry a Survivor opt-in that '.hardcore on' already dropped
+        // from the database.
+        if (Survivor::IsHardcoreFlagged(player->GetGUID().GetCounter()))
+        {
+            handler->SendSysMessage(
+                "Survivor: superseded - this character is flagged Hardcore, and Hardcore is terminal.");
+            return true;
+        }
+
         if (!Survivor::GetConfig().Enable)
             handler->SendSysMessage("Survivor: disabled on this server.");
         else if (Survivor::IsFlagged(player))
-            handler->SendSysMessage("Survivor: ENABLED (a death drops your equipment and bags where you fall).");
+            handler->SendSysMessage(
+                "Survivor: ENABLED (a death drops your equipment and bags where you fall, and any Survivor may loot any container).");
         else
             handler->SendSysMessage("Survivor: disabled.");
         return true;
@@ -1485,7 +1521,7 @@ public:
 };
 
 // =====================================================================
-//  GlobalScript: owner-only access to the container.
+//  GlobalScript: who may open a container.
 // =====================================================================
 class SurvivorGlobalScript : public GlobalScript
 {

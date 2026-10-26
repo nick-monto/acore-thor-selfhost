@@ -1,9 +1,9 @@
 # Survivor mode
 
-A second opt-in ruleset, mutually exclusive with Hardcore: dying costs you everything you
-carry, but it does not end the character. On death the equipped items and the contents of
-the bags are lifted off the body and placed in a lootable container at the death position,
-and that position is marked on the player's map until the container is emptied.
+A second opt-in ruleset, one rung below Hardcore on a one-way ladder: dying costs you
+everything you carry, but it does not end the character. On death the equipped items and the
+contents of the bags are lifted off the body and placed in a lootable container at the death
+position, and that position is marked on the player's map until the container is emptied.
 
 Confidence: **[V]** verified here from source, artifact or API, **[R]** reported,
 **[I]** inference.
@@ -16,10 +16,12 @@ the character and makes the death itself the punishment, which is what a solo re
 losing the gear you spent the evening gathering hurts, and the run back to the container is
 the content.
 
-The two rulesets cannot coexist. A Hardcore character's death is final, so there is nothing
-to loot and no run back; a Survivor character's death must not be final, or the container
-would be a memorial rather than a recovery. Each command therefore refuses the other flag,
-and both refuse bot-controlled sessions.
+The two rulesets stack in one direction only. The ladder is normal -> Survivor -> Hardcore,
+and normal -> Hardcore. A Survivor character may be promoted to Hardcore, and the promotion
+drops the Survivor flag: a death that is already final must not become recoverable, so the
+two rulesets are never both set for one character (§5.9). The other direction is refused -
+`.survivor on` rejects a Hardcore character, because Hardcore is terminal. Both commands
+refuse bot-controlled sessions.
 
 ## Ruleset
 
@@ -36,7 +38,7 @@ and both refuse bot-controlled sessions.
    and no corpse marker to fall back on, so the addon pin is the only pointer at the
    container.
 5. Wakes the character **alive at the closest graveyard**, at full health, with no
-   resurrection sickness, and turns the corpse into bones (§5.9). This is not conditional on
+   resurrection sickness, and turns the corpse into bones (§5.10). This is not conditional on
    the drop: a survivor who dies with nothing left to take still wakes at the graveyard.
    There is no release and no run back to a body: the walk back is to the container, which
    stays where the character died.
@@ -63,7 +65,7 @@ That is the only hook that sees the items still equipped. `OnPlayerReleasedGhost
 (`Player.cpp:4561`, at the end of `BuildPlayerRepop`) fires after the corpse exists and is
 reached from both threads [V]. A survivor normally never gets there, because the revive runs
 on the next update - but a release that beats that tick does reach it, and the handler
-revives there instead of letting the ghost run (§5.9).
+revives there instead of letting the ghost run (§5.10).
 
 ### 5.2 The item snapshot is the item_instance row
 
@@ -137,8 +139,8 @@ The template (module SQL, `data/sql/world/base/survivor_10_gameobject.sql`):
 | Data9/Data10 (min/max gold) | `0` | `SendLoot` runs `generateMoneyLoot` for every gameobject regardless of lootId (`Player.cpp:8089`), so non-zero gold here would inject money into every container |
 
 `gameobject_template_addon` gets `faction = 0` and `flags = 0` - the container must be
-visible and clickable by the owner only, and ownership is enforced in code (§5.6), not by a
-gameobject flag: no `GAMEOBJECT_FLAGS` value expresses a player identity
+visible and clickable, and who may open it is enforced in code (§5.6), not by a gameobject
+flag: no `GAMEOBJECT_FLAGS` value expresses a player identity
 (`SharedDefines.h:1605-1616`) [V].
 
 ### 5.4 Recovery is lossless
@@ -169,30 +171,53 @@ battleground insignia (`Player.cpp:8187`) [V], and the survivor death path calls
 (`Player.cpp:4782-4798`) [V]. The chest is independent, so the revival at the graveyard, a
 logout, or a server restart all leave the loot where it was.
 
-Persistence: `survivor_corpses` holds `map, x, y, z, o, zone, created_ts, lifetime` and the
-owner guid. A summoned gameobject is never saved (`SummonGameObject` sets neither
-`m_spawnId` nor a DB row, `Object.cpp:2401-2425`; `SaveRespawnTime` is guarded on
-`m_goData && m_spawnedByDefault`, `GameObject.cpp:1236-1241`) [V], so the module re-summons
-from the row when the owner enters the map and on login, and sweeps expired rows at startup
-and on `OnUpdate`.
+Persistence: `survivor_corpses` holds `map, x, y, z, o, zone, created_ts, expires_ts`, the
+owner guid (the character that died) and `no_mail`. A summoned gameobject is never saved
+(`SummonGameObject` sets neither `m_spawnId` nor a DB row, `Object.cpp:2401-2425`;
+`SaveRespawnTime` is guarded on `m_goData && m_spawnedByDefault`, `GameObject.cpp:1236-1241`)
+[V], so the module re-summons from the row when **any** Survivor-flagged character enters the
+map, and on that character's login. The select is map-wide (`WHERE map = ?`), not keyed on
+the owner: a container belongs to whoever plays the ruleset, and its owner may never come
+back at all - a bot that moved on, or a Hardcore character that fell (§5.9). The hook itself
+still does nothing for a character that is not flagged, so it costs non-Survivors no query.
 
 `Survivor.ContainerLifetimeDays` (default 7) becomes the `respawnTime` handed to
-`SummonGameObject`; expiry destroys the object and the module mails the remaining items to
-the owner rather than losing them.
+`SummonGameObject`; expiry destroys the object. Expired rows are swept at startup and every
+30 s from `WorldScript::OnUpdate` (`SweepIntervalMs`). The remaining items are then mailed to
+the owner - unless the row's `no_mail` is set, in which case the `item_instance` rows are deleted
+and the gear is gone: a bot is re-geared by the factory, and a Hardcore character is a ghost
+for good, so a mailbox would only hide the gear instead of letting it go (§5.8, §5.9).
+`no_mail` is a schema column, not a config key.
 
-### 5.6 Owner-only access
+### 5.6 Whoever plays the ruleset may open any container
 
 `GlobalScript::OnAllowedToLootContainerCheck(Player const*, ObjectGuid source)`
 (`ScriptDefines/GlobalScript.h:101`) is the last gate before `SMSG_LOOT_RESPONSE`
 (`Player.cpp:8373-8377`) [V]. **Its boolean is inverted**: the wrapper uses
 `CALL_ENABLED_BOOLEAN_HOOKS` without negation (`GlobalScript.cpp:112-115`,
 `ScriptMgrMacros.h:69-73`) and the core denies on `false`, so returning `true` from the hook
-means deny [V]. The module returns deny for every player except the owner of the corpse row
-and allow (false) otherwise, including for gameobjects it does not own.
+means deny [V].
 
-Bots: a randombot must never flag itself and must never loot a container. Both are guid/session
-checks, matching the hardcore module's `IsBotControlled` (`modules/mod-hardcore/src/Hardcore.cpp`
-`WorldSession::IsHeadless`).
+The rule is the ruleset, not the owner. Any character flagged Survivor may open **any** death
+container on the realm - its own, another player's, a bot's, a fallen Hardcore character's -
+and a character that never opted in may open none. The module returns deny (true) only when
+the looter is not flagged; everything else, including gameobjects it does not manage, is
+left at `false` so the core's own verdict stands:
+
+- A container belongs to whoever plays the ruleset. Its owner may never come back - a bot
+  moves on and is re-geared by the factory, a Hardcore character is finished - and a
+  container nobody can open is litter, not content.
+- It stops a normal alt from farming the containers a Survivor left behind. Opting in is the
+  price of the gear, and the flag is one-way (§5.9), so the access cannot be borrowed for one
+  loot.
+
+The lookup is two in-memory maps under the module mutex (`GoToCorpse`, `FlaggedGuids`); the
+hook never touches the database or the map.
+
+Bots never flag themselves: `.survivor on` refuses a headless session and `Survivor::Flag`
+refuses one too, matching the hardcore module's `IsBotControlled`
+(`modules/mod-hardcore/src/Hardcore.cpp`, `WorldSession::IsHeadless`). A bot is therefore
+never flagged, so the same check denies it - there is no separate bot branch in the gate.
 
 ### 5.7 The map marker
 
@@ -235,12 +260,14 @@ same rules: it drops what it carries and is replaced with a fresh random set for
 level and current specialization.
 
 `Survivor.BotDropContainer = 1` (default) is what makes the drop reachable: a bot death
-leaves a lootable container at the death spot like a player death does, and **any real
-player may loot it**. That is deliberate on a solo realm - the bot does not need its gear
-back (the factory re-rolls it), so the container is a source of level-appropriate gear and
-bags for the one real player, for the same reason the loot bags exist. A bot container that
-nobody loots rots at `Survivor.ContainerLifetimeDays` and its items are **not** mailed
-anywhere: a mailbox no bot reads would only hide the gear instead of letting it go.
+leaves a lootable container at the death spot like a player death does, and **any
+Survivor-flagged character may loot it** (§5.6) - the bot that dropped it is not the owner of
+the access. That is deliberate on a solo realm: the bot does not need its gear back (the
+factory re-rolls it), so the container is a source of level-appropriate gear and bags for the
+one real player, for the same reason the loot bags exist. The row is written with
+`no_mail = 1`, so a bot container that nobody loots rots at `Survivor.ContainerLifetimeDays`
+and its items are **not** mailed anywhere: a mailbox no bot reads would only hide the gear
+instead of letting it go.
 
 The alternative, `Survivor.BotDropContainer = 0`, destroys a bot's gear outright and leaves
 nothing behind. Worth knowing when tuning a realm's economy: with `1` every bot death is a
@@ -283,7 +310,51 @@ Bots are skipped in battlegrounds and arenas, exactly like players: the core res
 at the end of the match, and re-rolling gear on every BG death would churn the DB for
 nothing.
 
-### 5.9 Waking at the graveyard
+### 5.9 The mode ladder, and the hardcore death container
+
+The two rulesets are one-way steps on a single ladder: normal -> Survivor -> Hardcore, and
+normal -> Hardcore. A character can only move up. That is what keeps the pair from
+contradicting each other - a death that is final must not be recoverable - without forbidding
+the promotion a player may want.
+
+- `.hardcore on` on a Survivor-flagged character is **allowed**. The command reads
+  `survivor_flags` with a plain query (a missing table means "not flagged"), deletes the row
+  (`ClearSurvivorFlag`) so exactly one ruleset is stored for the character, then flags
+  Hardcore and prints "Hardcore ENABLED for X. Survivor mode is dropped: from here on this
+  character permanently falls on death."
+- `.survivor on` still refuses a Hardcore character: "Hardcore is terminal: it cannot be
+  combined with Survivor." Nothing can walk back down the ladder.
+- Neither flag can be removed: there is no `.survivor off` and no `.hardcore off`. The one
+  and only removal is the promotion dropping the Survivor opt-in.
+
+The promotion is immediate in the database, but mod-survivor keeps its own in-process copy of
+the flag until the next boot, so its cold paths ask the hardcore table rather than trusting
+the cache: `HandleDeath` runs `SELECT enabled FROM hardcore_flags WHERE guid = ?` (one query,
+once per death) **before** it looks at the Survivor flag, `ReviveAtGraveyard` returns without
+reviving a Hardcore-flagged character, and `.survivor status` answers "Survivor: superseded -
+this character is flagged Hardcore, and Hardcore is terminal." None of these paths links
+against mod-hardcore; a missing table simply means "not Hardcore".
+
+A Hardcore death therefore leaves a container too, and it leaves no revival at all:
+
+- `HandleDeath` sees `hardcore_flags` first and calls `DropGearAtDeath(player, cfg,
+  /*noMail=*/true)`. The items are lifted into `survivor_corpses` / `survivor_corpse_items`
+  exactly as for a survivor, the container is summoned at the death spot, and the same `SURV`
+  map pin goes to the dying character (§5.7). It is governed by the same `Survivor.Enable`,
+  `Survivor.DropEquipped`, `Survivor.DropBags` and `Survivor.ContainerEntry` switches as a
+  survivor drop, and announced server-wide when `Survivor.AnnounceDeaths = 1`.
+- Then it returns: no revive is queued and no ghost handling changes. Hardcore's own policy
+  runs as before (`modules/mod-hardcore/README.md`), which by default makes the character a
+  ghost that can never be resurrected.
+- The row is written with `no_mail = 1`, so when the container expires its instances are
+  deleted instead of mailed to a character that can no longer be played (§5.5).
+- The fallen character is not Survivor-flagged any more, so it cannot open its own container.
+  Any Survivor-flagged character can (§5.6) - which is the point on a solo realm: the gear of
+  a finished run stays reachable for the next one.
+- `Hardcore.DeathPolicy = archive` and `delete` kick and rename or delete on logout, and the
+  container still simply rots at expiry, because `no_mail` is already set.
+
+### 5.10 Waking at the graveyard
 
 A survivor death leaves no ghost and no corpse run. Every survivor death outside a
 battleground or arena is queued for a revival - whether or not the drop found anything to
@@ -349,6 +420,7 @@ CREATE TABLE IF NOT EXISTS `survivor_corpses` (
   `level` TINYINT UNSIGNED NOT NULL,
   `created_ts` INT UNSIGNED NOT NULL,
   `expires_ts` INT UNSIGNED NOT NULL,
+  `no_mail` TINYINT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `idx_survivor_corpses_guid` (`guid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -374,6 +446,12 @@ CREATE TABLE IF NOT EXISTS `survivor_corpse_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
+`survivor_corpses.no_mail` is a column, not a knob: `1` means "this container rots at expiry
+instead of being mailed to its owner". It is set for bot containers and for Hardcore death
+containers (§5.5, §5.8, §5.9). Rows existing before the column was added get it through a
+guarded `ALTER` - the module asks `information_schema` first, so a duplicate `ALTER` never
+logs an error on boot.
+
 `survivor_corpse_items` mirrors `item_instance` column for column (same names, same types,
 `itemEntry` capitalised like the core's dump) so recovery is a straight re-insert and the
 payload is auditable with plain SQL.
@@ -394,39 +472,50 @@ payload is auditable with plain SQL.
 | `Survivor.ContainerEntry` | `5000000` | the gameobject template entry (the SQL above) |
 | `Survivor.ApplyToBots` | `1` | the ruleset also applies to bot-controlled characters (§5.8) |
 | `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory on death; `0` leaves it naked |
-| `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container that any real player may take; `0` destroys the gear outright (§5.8) |
+| `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container that any Survivor-flagged character may take; `0` destroys the gear outright (§5.8) |
 
-## Activation and exclusivity
+## Activation and the ladder
 
 - `.survivor on` / `.survivor status`, `SEC_PLAYER`, `Console::No` - the same shape as
   `.hardcore on|status` (`modules/mod-hardcore/src/Hardcore.cpp:376-460`).
-- `.survivor on` refuses when the character is Hardcore-flagged. The check reads
-  `hardcore_flags` directly (`SELECT enabled FROM hardcore_flags WHERE guid = ?`), so
-  mod-survivor does not link against mod-hardcore and stays buildable if it is removed.
-- `.hardcore on` refuses when the character is Survivor-flagged: a small addition to the
-  vendored mod-hardcore that reads `survivor_flags` the same way, tolerating the table being
-  absent.
-- Both refuse a headless (bot) session.
+- `.survivor on` refuses a character that `hardcore_flags` reports as enabled. The check reads
+  the table directly (`SELECT enabled FROM hardcore_flags WHERE guid = ?`), so mod-survivor
+  does not link against mod-hardcore and stays buildable if it is removed.
+- `.hardcore on` **accepts** a Survivor-flagged character and drops the Survivor flag: it
+  deletes the `survivor_flags` row and reports that Survivor mode is dropped. This is the only
+  way either flag is ever removed (§5.9).
+- The ladder is therefore normal -> Survivor -> Hardcore, and normal -> Hardcore. Nothing moves
+  down: there is no `.survivor off` and no `.hardcore off`, and a Hardcore character can never
+  become a Survivor.
+- `.survivor status` on a Hardcore character reports "Survivor: superseded - this character is
+  flagged Hardcore, and Hardcore is terminal.", because this process's flag cache may still
+  carry the opt-in the promotion removed.
+- Both commands refuse a headless (bot) session.
 
 ## Edge cases
 
 | case | behaviour | why |
 |---|---|---|
-| death in an instance | container is created in the instance and the character wakes at that instance's closest graveyard, so it can walk back in; the container can only be reached while the instance exists | the row records the instance map and expires; items are mailed on expiry; the instance's `graveyard_zone` row supplies the destination (§5.9) |
+| death in an instance | container is created in the instance and the character wakes at that instance's closest graveyard, so it can walk back in; the container can only be reached while the instance exists | the row records the instance map and expires; items are mailed on expiry; the instance's `graveyard_zone` row supplies the destination (§5.10) |
 | death in a battleground or arena | **no drop and no revival** - the core's own death handling runs, and the character is restored at the end of the match | a container in a BG would be unreachable after the match, and a graveyard teleport would fight the match logic |
 | death while duelling | drop happens, same as any death; the character wakes at the closest graveyard like any other survivor death | duel deaths already run the full death path |
 | under-map / fatigue death | drop happens at the death position; the character is revived at the closest graveyard exactly as for any other survivor death | same path the core already takes for unreachable deaths (`Player.cpp:5024-5030`); the container is not the corpse |
-| death with nothing left to drop (a survivor who already lost everything) | no second container, no announcement and no map pin, but the revival is the same: the character wakes at the closest graveyard | the revival is queued for every survivor death outside a battleground; the drop is a separate half of the ruleset (§5.9) |
-| death, then logout before the revive tick | the logout itself releases the ghost, which is the same revive: the character leaves alive and comes back alive | `WorldSession::LogoutPlayer` calls `BuildPlayerRepop` for a character with a death timer (`Server/WorldSession.cpp:708`), which fires `OnPlayerReleasedGhost`, and the handler revives (§5.9) |
+| death with nothing left to drop (a survivor who already lost everything) | no second container, no announcement and no map pin, but the revival is the same: the character wakes at the closest graveyard | the revival is queued for every survivor death outside a battleground; the drop is a separate half of the ruleset (§5.10) |
+| death, then logout before the revive tick | the logout itself releases the ghost, which is the same revive: the character leaves alive and comes back alive | `WorldSession::LogoutPlayer` calls `BuildPlayerRepop` for a character with a death timer (`Server/WorldSession.cpp:708`), which fires `OnPlayerReleasedGhost`, and the handler revives (§5.10) |
 | death, then a crash or restart before the revive tick | the character logs in alive at the death spot, at half health, standing on its own container - not a ghost, but not the graveyard wake either | the queued revive is in memory; on login the core sees a dead character with no saved corpse and resurrects it in place at `0.5f` (`Player::LoadCorpse`, `Entities/Player/PlayerStorage.cpp:5948-5962`) before `OnPlayerLogin` runs. A one-tick window, and the outcome keeps the container under the player |
 | logout after a death, before recovering | nothing special: the character is already alive and the container is a DB row, not a live object | §5.5 |
-| server restart | container re-summons on the owner's next login/map entry | §5.5 |
+| server restart | container re-summons when any Survivor-flagged character enters that map (or logs in on it) | §5.5 |
 | bags full on recovery | item is mailed with the core's recovery mail | §5.4 |
 | bank / mail / gold / quest items | untouched | the ruleset is gear and bags only |
 | second death before recovering the first | a second container is created; both are independent and both marked (the addon keeps the newest) | rows are keyed by id, not by guid |
 | bot death | gear and bags destroyed, a lootable container left where it fell, a fresh set rolled for class/level/spec, no map message | §5.8 |
-| bot container nobody loots | rots at expiry; its items are dropped, not mailed (a bot mailbox is never read) | §5.8 |
-| looting a bot's container | allowed for any real player, unlike a player's container which only its owner may open | §5.8 |
+| bot container nobody loots | rots at expiry; its items are dropped, not mailed (`no_mail = 1`) | §5.8 |
+| any Survivor-flagged character finds a container | may open it - its own, another player's, a bot's, a fallen Hardcore character's; there is no owner check | §5.6 |
+| a character that never opted in finds a container | cannot open it, whatever its level or relation to the character that died | §5.6 |
+| container whose owner never returns (a bot that moved on, a fallen Hardcore character) | stays openable and marked for whoever plays the ruleset; rots at expiry instead of being mailed (`no_mail = 1`) | §5.5, §5.6 |
+| a Hardcore character dies | gear and bags go into a container at the death spot, announced if `Survivor.AnnounceDeaths = 1`; no revival, and the Hardcore death policy applies unchanged | §5.9 |
+| a Survivor is promoted to Hardcore (`.hardcore on`) | the `survivor_flags` row is deleted, the character falls permanently on its next death, and its later containers are `no_mail` ones | §5.9 |
+| a fallen Hardcore character tries `.survivor on` | refused - "Hardcore is terminal: it cannot be combined with Survivor" | §5.9 |
 | bot death in a battleground/arena | skipped | the core restores the bot at match end |
 | bot with no gear (level 1, freshly spawned) | skip the re-roll, nothing to take | avoids a pointless DB churn |
 | container map unloaded | row survives; re-summons on next entry | §5.5 |
@@ -440,7 +529,7 @@ payload is auditable with plain SQL.
 | a hand-filled `go->loot` is cleared by `SendLoot` | `lootId = 0` in the template (§5.3) |
 | a summoned chest that never despawns | `consumable = 1` + non-zero respawn time -> core deletes it on release (`GameObject.cpp:872-876`) |
 | loot lost when the container expires | mail the remaining items at expiry |
-| a player loots another player's container | `OnAllowedToLootContainerCheck`, inverted boolean handled explicitly (§5.6) |
+| a non-flagged character opens a container | `OnAllowedToLootContainerCheck` denies every looter that is not Survivor-flagged; inverted boolean handled explicitly (§5.6) |
 | the item row is lost between destroy and insert | both happen in one characters-DB transaction; the snapshot row is written *before* the item is destroyed |
 | double-flagging | both commands check the other table; both tolerate a missing table |
 | a module SQL failure aborting boot | no module SQL for the tables (programmatic creation), only the gameobject template row |

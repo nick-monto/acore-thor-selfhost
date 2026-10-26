@@ -164,14 +164,17 @@ The admin escape hatch is the database: delete the character's `hardcore_flags` 
 `mod-creature-gear`) and is compiled into the artifact as one target of `libmodules.a`. The generated
 `ModulesLoader.cpp` calls `Addmod_survivorScripts()` - the folder name fixes the symbol, the convention
 `mod-hardcore` already follows - and that loader is where the module registers its `PlayerScript` and
-`GlobalScript` hooks. It is a second opt-in ruleset, mutually exclusive with Hardcore: on death the
-equipped items and the bag contents are lifted into a lootable container at the death position, the
-position is re-sent to the player's map add-on, and a bot-controlled death destroys and re-rolls the
-gear instead of dropping it. There is no ghost phase and no corpse run: the character is revived
-alive at the closest graveyard, at full health, without resurrection sickness, and the corpse is
-turned to bones, so the walk back is to the container. Battleground and arena deaths keep the core's
-own handling. The mechanism, the core hooks it uses and their evidence are in
-[`SURVIVOR-DESIGN.md`](SURVIVOR-DESIGN.md).
+`GlobalScript` hooks. It is a second opt-in ruleset, one rung below Hardcore on a one-way
+ladder (normal -> Survivor -> Hardcore, and normal -> Hardcore): on death the
+equipped items and the bag contents are lifted into a lootable container at the death position,
+the position is re-sent to the player's map add-on, and a bot-controlled death destroys and
+re-rolls the gear instead of dropping it. Any Survivor-flagged character may open any death
+container; a character that never opted in may open none. There is no ghost phase and no corpse
+run: the character is revived alive at the closest graveyard, at full health, without
+resurrection sickness, and the corpse is turned to bones, so the walk back is to the container.
+Battleground and arena deaths keep the core's own handling, and a Hardcore-flagged death has its
+gear left in a container with no revival at all. The mechanism, the core hooks it uses and their
+evidence are in [`SURVIVOR-DESIGN.md`](SURVIVOR-DESIGN.md).
 
 | Item | Value | Evidence |
 |---|---|---|
@@ -179,8 +182,11 @@ own handling. The mechanism, the core hooks it uses and their evidence are in
 | Config | `$PREFIX/etc/modules/mod-survivor.conf`, created from the shipped `mod-survivor.conf.dist`; eleven keys, `Survivor.Enable` through `Survivor.BotDropContainer`. CMake installs the `.dist`, the installer creates the live file and restores any key it cannot use | `server-aarch64.yml` asserts the `.dist` and `Survivor.Enable = 1`; `thor-install.sh` [V] |
 | SQL | one world file, `data/sql/world/base/survivor_10_gameobject.sql`: the container template (entry `5000000`, type 3 chest, `displayId` 4093, `Data0` lootId 0, `Data2` consumable 1, zero gold) plus its `gameobject_template_addon` row. Packed as `$PREFIX/src/modules/mod-survivor/data/sql`, so the updater picks it up with state `MODULE` under `SourceDirectory` | `server-aarch64.yml` "SQL sources" step; `docs/SURVIVOR-DESIGN.md` §5.3 [V] |
 | Tables | `survivor_flags`, `survivor_corpses` and `survivor_corpse_items` in the characters database, created programmatically at startup - deliberately no module SQL for them, because a failing module SQL file aborts the worldserver boot on this fork | `docs/SURVIVOR-DESIGN.md` §Schema [V] |
-| Bot modifier | with `Survivor.ApplyToBots = 1` a bot death strips the equipped gear with `PlayerbotFactory::DestroyEquippedGear` and the bags with `PlayerbotFactory::InitBags(true)`, then re-rolls gear for the bot's own class, level and spec on its next `OnPlayerUpdate` with `PlayerbotFactory::AutoGear`; and with `Survivor.BotDropContainer = 1` (default) the taken gear is left in a lootable container that any real player may open | `PlayerbotFactory.cpp:3978-4003` [V] |
-| Mutual exclusion | `.survivor on` refuses a Hardcore-flagged character and `.hardcore on` refuses a Survivor-flagged one; each reads the other's table directly and tolerates it being absent, so neither module links the other | `modules/mod-hardcore`, `docs/SURVIVOR-DESIGN.md` §Activation [V] |
+| Bot modifier | with `Survivor.ApplyToBots = 1` a bot death strips the equipped gear with `PlayerbotFactory::DestroyEquippedGear` and the bags with `PlayerbotFactory::InitBags(true)`, then re-rolls gear for the bot's own class, level and spec on its next `OnPlayerUpdate` with `PlayerbotFactory::AutoGear`; and with `Survivor.BotDropContainer = 1` (default) the taken gear is left in a lootable container that any Survivor-flagged character may open, written with `no_mail = 1` so it rots at expiry instead of being mailed | `PlayerbotFactory.cpp:3978-4003` [V] |
+| Mode ladder | `.survivor on` refuses a Hardcore-flagged character (Hardcore is terminal); `.hardcore on` accepts a Survivor-flagged one, deletes its `survivor_flags` row (`ClearSurvivorFlag`) and reports that Survivor mode is dropped, so the ladder is one-way: normal -> Survivor -> Hardcore, and normal -> Hardcore. Each module reads the other's table directly and tolerates it being absent, so neither links the other | `modules/mod-hardcore/src/Hardcore.cpp`, `modules/mod-survivor/src/Survivor.cpp`, `docs/SURVIVOR-DESIGN.md` §5.9 [V] |
+| Access rule | `OnAllowedToLootContainerCheck` denies every looter that is not Survivor-flagged and allows the rest, so any Survivor may open any death container (own, another player's, a bot's, a fallen Hardcore character's); the inverted boolean is handled explicitly | `docs/SURVIVOR-DESIGN.md` §5.6 [V] |
+| Container restore | unclaimed rows are re-summoned map-wide (`WHERE map = ?`) when a Survivor-flagged character enters the map, not keyed on the owner, because the owner may never return (a bot that moved on, a fallen Hardcore character) | `docs/SURVIVOR-DESIGN.md` §5.5 [V] |
+| Hardcore death container | a Hardcore-flagged death is caught in `Survivor::HandleDeath` before the Survivor flag: `DropGearAtDeath(..., noMail = true)` leaves the equipment and bags in a container at the death spot, announced when `Survivor.AnnounceDeaths = 1`; no revival is queued, `Hardcore.DeathPolicy` applies unchanged, and the `no_mail = 1` row rots at expiry instead of being mailed | `modules/mod-survivor/src/Survivor.cpp`, `docs/SURVIVOR-DESIGN.md` §5.9 [V] |
 | Verified | what was checked is what `docs/SURVIVOR-DESIGN.md` §Verification lists (the core APIs against pin `8a4e76e`, the gameobject entry against the base dump). The in-game behaviour - the container at the death spot, the loot window, the map pin, the enchanted item coming back, and waking alive at the closest graveyard at full health with bones where the corpse was - needs a client session on the Thor and was **not** run in a client or on the Thor | **not a build, client or Thor run** |
 
 ## 14. Travel and death on a solo realm
