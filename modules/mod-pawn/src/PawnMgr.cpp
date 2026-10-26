@@ -45,6 +45,13 @@ namespace
         }
     }
 
+    // The alliance races, as RandomPlayerbotMgr::PrepareAddclassCache buckets them.
+    bool IsAllianceRace(uint8 race)
+    {
+        return race == RACE_HUMAN || race == RACE_DWARF || race == RACE_NIGHTELF ||
+               race == RACE_GNOME || race == RACE_DRAENEI;
+    }
+
     // SplitMix64: a seeded shuffle that leaves the global RNG alone, so the draw
     // is reproducible from (player, instance) and cannot be perturbed by anything
     // else on the world thread.
@@ -283,14 +290,19 @@ std::vector<PawnOffer> PawnMgr::DrawOffers(Player* player)
 
     ObjectGuid const owner = player->GetGUID();
     uint8 const ownerLevel = player->GetLevel();
+    bool const alliance = player->GetTeamId() == TEAM_ALLIANCE;
     uint32 const heroicStart = sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL);
 
     std::vector<PawnPoolChar const*> candidates;
     candidates.reserve(_pool.size());
     for (PawnPoolChar const& poolChar : _pool)
     {
-        // The same rules the addclass command applies: no death knight before
-        // the heroic start level, and no class without a premade PvE spec.
+        // The same rules the addclass command applies: same team as the player
+        // (its pool is bucketed by team, and a pawn of the other faction cannot
+        // be grouped or summoned), no death knight before the heroic start
+        // level, and no class without a premade PvE spec.
+        if (IsAllianceRace(poolChar.Race) != alliance)
+            continue;
         if (poolChar.Class == CLASS_DEATH_KNIGHT && ownerLevel < heroicStart)
             continue;
         if (sPawnArchetype.PveSpecs(poolChar.Class).empty())
