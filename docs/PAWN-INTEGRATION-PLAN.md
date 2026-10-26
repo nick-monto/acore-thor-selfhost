@@ -179,30 +179,34 @@ quest rewards — so a restriction cannot be undone by any of them.
 A pawn has to arrive dressed for the spec it was pinned to, at its own level — not in the gear the
 factory rolled for a spec it no longer has. The order in `PawnMgr::ApplyPawn` is therefore:
 
-1. if the pawn is outside the level window, `PlayerbotFactory::Randomize` (level, spells, talents,
-   and gear for whatever spec it happened to roll);
+1. `PlayerbotFactory::Randomize` — on the first build and on a re-level (level, spells, talents,
+   gear for whatever spec it happened to roll, bags, food, reagents);
 2. `PawnArchetype::Apply` — the pinned spec's talents, and the blacklist;
 3. `PlayerbotAI::ResetStrategies(false)` — the weight calculator's role test (`IsTank`/`IsHeal`/
    `IsCaster` with `bySpec=false`) reads `STRATEGY_TYPE_*` on the AI's engines, not the talent tab,
    and those strategies still describe the spec step 1 rolled. This is the same call `Randomize`
    makes after it changes talents;
-4. `DestroyEquippedGear`, because step 1's items were chosen for the other spec;
-5. `InitEquipment` at the pawn's level, then ammo, enchants/gems and a durability repair.
+4. `InitGlyphs(false)` — `Randomize` set glyphs from the rolled spec's tab, and `InitGlyphs` reads
+   the tab, so it runs again against the pinned talents (`ChangeTalentsAction::SpecPick` does the
+   same);
+5. `DestroyEquippedGear`, because step 1's items were chosen for the other spec;
+6. `InitEquipment` at the pawn's level, then ammo, enchants/gems and a durability repair.
 
-Step 4 is `PlayerbotFactory::AutoGear`'s own sequence with one difference: the gear-score cap comes
+Step 6 is `PlayerbotFactory::AutoGear`'s own sequence with one difference: the gear-score cap comes
 from the **owner** (`GetMixedGearScore(owner) * AutoInitEquipLevelLimitRatio`) instead of an item
 level, so a pawn is never better equipped than the player it follows. Item choice is spec-aware
 because `InitEquipment` scores every candidate with `StatsWeightCalculator`, whose collector type
 comes from the AI's strategies (`TankWarriorStrategy` declares `STRATEGY_TYPE_TANK`, and
 `AddDefaultCombatStrategies` picks it from the talent tab) and whose tab comes from
-`GetPlayerSpecTab`. Step 3 is what makes those agree with the pinned spec.
+`GetPlayerSpecTab`. Steps 3 and 4 are what make those agree with the pinned spec.
 
 That pass runs **once**: the roster's `built` column records it, so afterwards the pawn keeps
 whatever it wears, including gear the player gives it, and playerbots' own level-up maintenance
 (`AutoMaintenanceOnLevelupAction` → `InitEquipment(true)`, also spec-weighted) keeps it current as
 it levels in the party. A pawn that is re-levelled because it fell outside the window is rebuilt and
 re-geared, which is the price of pulling it back into the window. A dismissed pawn keeps its `built`
-flag, so re-recruiting it does not strip the gear it earned.
+flag, so re-recruiting it does not strip the gear it earned — unless the recruit names a different
+spec, in which case the gear on it was scored for the old one and the pass runs again.
 
 ### Picker
 

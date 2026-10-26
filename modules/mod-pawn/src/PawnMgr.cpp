@@ -8,6 +8,8 @@
 
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "Guild.h"
+#include "GuildMgr.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "PawnArchetype.h"
@@ -177,7 +179,7 @@ void PawnMgr::EnsureSchema()
         "AND TABLE_NAME = 'pawn_roster' AND COLUMN_NAME = 'built'");
     if (hasBuilt && hasBuilt->Fetch()[0].Get<uint64>() == 0)
         CharacterDatabase.DirectExecute(
-            "ALTER TABLE `pawn_roster` ADD COLUMN `built` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `state`");
+            "ALTER TABLE `pawn_roster` ADD COLUMN `built` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `target_level`");
 }
 
 void PawnMgr::LoadRoster()
@@ -467,11 +469,25 @@ void PawnMgr::ApplyPawn(Player* bot)
             LOG_INFO("module", "Pawn: pawn {}: level {} -> {} (owner {})", bot->GetName(),
                      uint32(bot->GetLevel()), uint32(wanted), uint32(owner->GetLevel()));
 
+        uint32 const guildBefore = bot->GetGuildId();
+
         // A full playerbots build, at the level the pawn is meant to have: level,
         // stats, spells, a random spec, gear, bags, food and reagents. Its gear is
         // thrown away two steps down, because it was chosen for the random spec.
         PlayerbotFactory factory(bot, level, ITEM_QUALITY_LEGENDARY, gearScoreLimit);
         factory.Randomize(false);
+
+        // Randomize also enrols the bot in a random bot guild (Playerbots.RandomBotGuildCount,
+        // default 20) and hands it a guild tabard. A pawn is the player's companion, and a guild
+        // it cannot leave would stop the player inviting it to their own, so the enrolment is
+        // undone. DeleteMember is the core's own removal path (Player.cpp, character deletion).
+        if (bot->GetGuildId() && !guildBefore)
+        {
+            if (Guild* guild = sGuildMgr->GetGuildById(bot->GetGuildId()))
+                guild->DeleteMember(bot->GetGUID(), false, false, true);
+            if (uint32 tabards = bot->GetItemCount(5976))
+                bot->DestroyItemCount(5976, tabards, true);
+        }
 
         // Pin the spec before the gear pass. InitEquipment scores every candidate
         // item with StatsWeightCalculator, whose collector type comes from the
@@ -487,6 +503,12 @@ void PawnMgr::ApplyPawn(Player* bot)
         // talents - or a prot pawn is scored as a damage dealer.
         if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
             botAI->ResetStrategies(false);
+
+        // Randomize set glyphs for the spec it rolled, and InitGlyphs reads the
+        // tab (with the PvP exceptions keyed on talent auras), so the same pass
+        // has to run again now that the talents are the pinned ones. This is
+        // what ChangeTalentsAction::SpecPick does after it pins a spec.
+        PlayerbotFactory(bot, bot->GetLevel()).InitGlyphs(false);
 
         // Then gear the pawn for the spec it now has, at its level, with the
         // owner's gear score as the ceiling so a pawn is never better equipped
@@ -567,9 +589,11 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
     row.TargetLevel = offer.Level;
 
     // A dismissed pawn keeps its row, so a returning one keeps the gear it
-    // earned: without this the next login would re-equip it from scratch.
+    // earned: without this the next login would re-equip it from scratch. Only
+    // while the spec is unchanged - a different spec means the gear on it was
+    // scored for the old one.
     if (auto it = _rows.find(offer.Bot.GetCounter()); it != _rows.end())
-        row.Built = it->second.Built;
+        row.Built = it->second.Built && it->second.SpecNo == offer.SpecNo;
 
     Upsert(row);
     _rows[offer.Bot.GetCounter()] = row;
