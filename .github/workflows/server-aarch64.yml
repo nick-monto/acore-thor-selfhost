@@ -383,12 +383,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The notes are rewritten on every run, not just when the release is created. They were
+          # only passed to "gh release create" before, so after the first ever run the page kept
+          # describing whichever build created it - by 2026-10-26 it still named a core/playerbots
+          # pair from 2026-10-17 and no module list, while the asset beside it was three builds
+          # newer. The body is the only place a device can be matched to a build, so it names this
+          # repository's commit and the run that produced the asset.
+          #
+          # The upload comes before the edit: the notes must not claim a build whose asset failed
+          # to upload. On the very first run "create" needs notes to make the release at all, so
+          # the same text is built once and handed to both.
+          notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/arm64, with client data v20.0 and the SQL sources." \
+            "Artifact sha256: $(awk '{print $1}' acore-server-arm64.tar.zst.sha256). Compare it with ARTIFACT_SHA in \$ROOT/.thor-state/state.env on the device to tell which build is installed." \
+            "Modules: mod-creature-gear, mod-hardcore (ghost default), mod-e-interact (one interact key, with the local gameobject pass) and mod-survivor (death drops the gear into a lootable container), plus the loot-bag patch and the player-centric bot patch." \
+            "Install with scripts/thor-install.sh. A server that is already installed is left alone unless --force is passed: the installer skips the artifact whenever \$ROOT/bin/worldserver exists, so a newer build does not reach the device by re-running the script.")"
           gh release view server-build -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create server-build -R "$GITHUB_REPOSITORY" --latest \
               --title "Latest arm64 server build" \
-              --notes "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear + mod-hardcore (ghost default) + mod-e-interact (one interact key, with the local gameobject pass) + mod-survivor (death drops the gear into a lootable container), the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh."
+              --notes "$notes"
           gh release upload server-build -R "$GITHUB_REPOSITORY" \
             acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256 --clobber
+          gh release edit server-build -R "$GITHUB_REPOSITORY" --notes "$notes"
 
       - name: Publish the tagged release
         if: startsWith(github.ref, 'refs/tags/server-v')
@@ -397,5 +413,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
             --title "Server build $GITHUB_REF_NAME" \
-            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT + mod-creature-gear + mod-hardcore (ghost default) + mod-e-interact (one interact key, with the local gameobject pass) + mod-survivor (death drops the gear into a lootable container), the loot-bag patch and the player-centric bot patch (this repository's commit), linux/arm64, with client data v20.0 and the SQL sources. Install with scripts/thor-install.sh." \
+            --notes "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/arm64, with client data v20.0 and the SQL sources. Modules: mod-creature-gear, mod-hardcore (ghost default), mod-e-interact (one interact key, with the local gameobject pass) and mod-survivor (death drops the gear into a lootable container), plus the loot-bag patch and the player-centric bot patch. Install with scripts/thor-install.sh." \
             acore-server-arm64.tar.zst acore-server-arm64.tar.zst.sha256
