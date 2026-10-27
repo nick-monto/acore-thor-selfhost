@@ -669,6 +669,19 @@ def check_startup_tables() -> None:
              "so a call sits outside the `if (reload)` guard; the first pass runs before the "
              "spell store is loaded and that call resolves nothing")
 
+    # The same trap catches anything else that reads a store the core fills after the config:
+    # a manager reached from this body reads a half-built world. Only sConfigMgr is safe here.
+    # Comments are stripped first: this body explains why it defers, and it names the managers
+    # it must not touch.
+    code = re.sub(r"/\*.*?\*/", "", config, flags=re.S)
+    code = re.sub(r"//[^\n]*", "", code)
+    premature = sorted(set(re.findall(r"\b(sSpellMgr|sObjectMgr|sWorld|sMapMgr|sPlayerbotAIConfig)\b",
+                                      code)))
+    if premature:
+        fail(f"startup: the OnAfterConfigLoad body reaches {', '.join(premature)}, which the core "
+             f"fills after the config pass (sSpellMgr at World.cpp:407, and a module's own "
+             f"config in its own hook, in no guaranteed order); read it from OnStartup instead")
+
     notes.append("startup: the archetype and personality tables are built in OnStartup, after "
                  "the spell store, and a reload-only rebuild is guarded by `if (reload)`")
 

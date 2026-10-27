@@ -45,8 +45,31 @@ Parts 1–9 below are exactly what the install does, in order — read them to k
 
 ---
 
-## Part 0 — What you need
+## Part 0a — Check the sources before pushing
 
+Two checks run on a development host in under a minute and cover what the arm64 build used to be the first to see. Run both before committing anything under `modules/`:
+
+```sh
+python3 scripts/pawn/check_pawn.py     # the module's invariants, no build needed
+bash scripts/syntax-check.sh           # -fsyntax-only over every module TU, with the real flags
+```
+
+`check_pawn.py` reads the conf, the installer, the workflow and the module sources, and fails on the faults that only appeared at boot or at the next build: a conf key the code reads that the conf does not define, a hook that is not a hook the core declares, a class deriving from a database-bound script type (dropped at boot when `script_name` has no row for it), a table built during the first config pass — before `sSpellMgr->LoadSpellInfoStore` — a temperament key probed instead of enumerated, and traits applied before the last `ResetStrategies`.
+
+`syntax-check.sh` compiles each `modules/*/src/*.cpp` with `-fsyntax-only`, lifting the include set, defines and C++ standard from one recorded command in the core's `compile_commands.json`. It proves every core symbol the module names exists, which is the class of error that stopped the build twice: `GetMSTime` for `getMSTime` and `OnLogin` for `OnPlayerLogin`. It needs a configured core checkout beside this repository and the core's dependency headers; without either it prints why and exits 0 rather than failing. The headers need no root:
+
+```sh
+mkdir -p /tmp/acore-debs && cd /tmp/acore-debs
+apt-get download libboost1.83-dev libmysqlclient-dev libargon2-dev
+mkdir -p ~/.cache/acore-deps/root
+for d in *.deb; do dpkg-deb -x "$d" ~/.cache/acore-deps/root; done
+```
+
+Neither check proves the module links or behaves — the arm64 build and a client session still do that. They only keep the next hour-long build from being spent on a typo or a boot-time assumption.
+
+---
+
+## Part 0 — What you need
 1. Termux from **F-Droid** (the Play Store build is deprecated) [R].
 2. ~12 GB free: server ~5 GB (binaries, `maps`/`vmaps`/`mmaps` ~1.2 GB packed, world/characters DB ~1.5–2 GB) + client ~10 GB.
 3. A **3.3.5a client** (`Wow.exe` + `Data/`), e.g. Chromiecraft HD or your own copy. Keep a PC copy for step 8.
@@ -355,11 +378,23 @@ grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
   equipped for its pinned spec, which is what keeps a returning pawn's gear untouched; `paid` is `1`
   once that owner has paid its hire fee at the level in `target_level`, which is what makes a re-hire
   at that level free. A non-zero `in_party` is a pawn currently in someone's party.
-- (4) is the important one: `module.pawn: archetypes: N specs named, ... R blacklisted spells
-  resolved, V variant abilities over S specs, U names unresolved`. Any `Pawn.Blacklist.<class>.<spec>:
-  no spell is named '...'` or `Pawn.Variant.<class>.<spec>: no spell is named '...'` line is an ERROR
-  and means that particular restriction or variation does nothing - fix the name in
-  `/opt/acore/etc/modules/mod-pawn.conf` and restart. The config is read at load, not per use.
+- (4) is the important one. A healthy boot has exactly two `module.pawn` lines and no `Pawn` warning
+  or error anywhere:
+
+  ```
+  Pawn: archetypes: 33 specs named, 33 PvE specs offerable, N blacklisted ids, V variant abilities over S specs, 0 names unresolved
+  Pawn: personality: 33 temperament pools over 33 temperament keys, 2 voices
+  ```
+
+  `names unresolved` above zero, or any `Pawn.Blacklist.<class>.<spec>: no spell is named '...'`
+  or `Pawn.Variant.<class>.<spec>: no spell is named '...'` line, is an ERROR and means that
+  restriction or variation does nothing — fix the name in `/opt/acore/etc/modules/mod-pawn.conf` and
+  restart; the config is read at load, not per use. `Config: Missing property Pawn.Temperament...`
+  means the module and the conf disagree about which keys exist: the loaders enumerate the keys the
+  conf defines, so that line only appears from a build older than the enumeration. And
+  `Script named 'npc_pawn_innkeeper' is not assigned in the database.` means the picker is a
+  database-bound `CreatureScript` again, which the core drops — it must be the `AllCreatureScript`
+  plus `CreatureAI` that `scripts/pawn/check_pawn.py` asserts.
 
 Then talk to any innkeeper - the capital inns and the town inns all carry the line - and pick
 "Recruit companions". What needs a client session, and has not been run on the Thor: the line
