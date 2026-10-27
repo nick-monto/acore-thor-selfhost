@@ -13,6 +13,8 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "PawnArchetype.h"
+#include "PawnPersonality.h"
+#include "Pet.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
@@ -21,6 +23,8 @@
 #include "Playerbots.h"
 #include "PlayerbotsDatabase.h"
 #include "SharedDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
@@ -66,6 +70,30 @@ namespace
         state *= 0x94D049BB133111EBull;
         state ^= state >> 31;
         return state;
+    }
+
+    // The mount spell the pawn knows, if any. Playerbots rolls the mount once and
+    // the character keeps it (spells are saved), so it is read back rather than
+    // chosen: the only reliable answer to "what does this pawn ride" is the spell
+    // that is actually on it. A summon spell carries the mount as an applied aura.
+    uint32 FindMountSpell(Player* bot)
+    {
+        for (auto const& [id, playerSpell] : bot->GetSpellMap())
+        {
+            if (!playerSpell || !bot->HasSpell(id))
+                continue;
+
+            SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
+            if (!info)
+                continue;
+
+            for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+                if (info->Effects[i].Effect == SPELL_EFFECT_APPLY_AURA &&
+                    info->Effects[i].ApplyAuraName == SPELL_AURA_MOUNTED)
+                    return id;
+        }
+
+        return 0;
     }
 }
 
@@ -197,6 +225,8 @@ void PawnMgr::EnsureSchema()
         "`target_level` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`built` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`paid` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+        "`mount_spell` INT UNSIGNED NOT NULL DEFAULT 0,"
+        "`pet_name` VARCHAR(21) NOT NULL DEFAULT '',"
         "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
         "PRIMARY KEY (`owner_guid`, `bot_guid`),"
         "KEY `bot_guid` (`bot_guid`),"
@@ -208,6 +238,8 @@ void PawnMgr::EnsureSchema()
     // is looked up first. information_schema is portable to both.
     AddMissingColumn("built", "`built` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `target_level`");
     AddMissingColumn("paid", "`paid` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `built`");
+    AddMissingColumn("mount_spell", "`mount_spell` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `paid`");
+    AddMissingColumn("pet_name", "`pet_name` VARCHAR(21) NOT NULL DEFAULT '' AFTER `mount_spell`");
 }
 
 void PawnMgr::LoadRoster()
@@ -216,7 +248,7 @@ void PawnMgr::LoadRoster()
     _rows.clear();
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level, built, paid FROM pawn_roster");
+        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level, built, paid, mount_spell, pet_name FROM pawn_roster");
     if (!result)
     {
         LOG_INFO("module", "Pawn: roster: empty");
@@ -237,6 +269,8 @@ void PawnMgr::LoadRoster()
         row.TargetLevel = fields[5].Get<uint8>();
         row.Built = fields[6].Get<uint8>() == 1;
         row.Paid = fields[7].Get<uint8>() == 1;
+        row.MountSpell = fields[8].Get<uint32>();
+        row.PetName = fields[9].Get<std::string>();
 
         if (row.Recruited)
             ++recruited;
@@ -380,7 +414,16 @@ PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uin
         offer.SpecName = sPawnArchetype.SpecName(poolChar.Class, offer.SpecNo);
         offer.Role = sPawnArchetype.RoleFor(poolChar.Class, offer.SpecNo);
         offer.Withheld = WithheldVariants(owner, poolChar.Bot, poolChar.Class, offer.SpecNo);
+
+        // The temperament is a per-spec profile, so it can only be drawn once the
+        // spec is; the voice is not spec-scoped and is drawn either way.
+        if (PawnProfile const* temperament =
+                sPawnPersonality.Temperament(owner, poolChar.Bot, poolChar.Class, offer.SpecNo))
+            offer.TemperamentLabel = temperament->Label;
     }
+
+    if (PawnProfile const* voice = sPawnPersonality.Voice(owner, poolChar.Bot))
+        offer.VoiceLabel = voice->Label;
 
     return offer;
 }
@@ -712,6 +755,32 @@ void PawnMgr::ApplyPawn(Player* bot)
         sPawnArchetype.Apply(bot, bot->getClass(), row->SpecNo,
                              WithheldVariants(row->Owner, row->Bot, bot->getClass(), row->SpecNo));
 
+    // The trait has to be applied after every ResetStrategies, because that call
+    // rebuilds the role defaults (tank face, behind, save mana for healers) and
+    // would otherwise wipe it on the first login.
+    sPawnPersonality.Apply(bot,
+                           sPawnPersonality.Temperament(row->Owner, row->Bot, bot->getClass(), row->SpecNo),
+                           sPawnPersonality.Voice(row->Owner, row->Bot));
+
+    // Vanity is what the pawn *has*, not what it is promised, so it is read back
+    // after the build instead of chosen: a pawn below the mount level simply
+    // records 0 and the party row says nothing about how it travels. Written only
+    // when it changed, because ApplyPawn runs on every login and a write per
+    // login would be churn for a value that almost never moves.
+    {
+        uint32 const mount = FindMountSpell(bot);
+        std::string petName;
+        if (Pet* pet = bot->GetPet())
+            petName = pet->GetName();
+
+        if (mount != row->MountSpell || petName != row->PetName)
+        {
+            row->MountSpell = mount;
+            row->PetName = petName;
+            Upsert(*row);
+        }
+    }
+
     // With Pawn.GainXP the pawn does level in the party, so the roster follows it
     // instead of pinning it: the row's target is what the fee and the party row
     // are measured against either way, and with the pin off the bot's level is
@@ -925,8 +994,9 @@ bool PawnMgr::IsSpellForbidden(Player* bot, uint32 spellId) const
 void PawnMgr::Upsert(PawnRosterRow const& row)
 {
     CharacterDatabase.Execute(
-        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built, paid) "
-        "VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
+        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built, paid, mount_spell, pet_name) "
+        "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
         row.Owner.GetCounter(), row.Bot.GetCounter(), uint32(row.SpecNo), uint32(row.Role),
-        row.Recruited ? 1 : 0, uint32(row.TargetLevel), row.Built ? 1 : 0, row.Paid ? 1 : 0);
+        row.Recruited ? 1 : 0, uint32(row.TargetLevel), row.Built ? 1 : 0, row.Paid ? 1 : 0,
+        row.MountSpell, row.PetName);
 }

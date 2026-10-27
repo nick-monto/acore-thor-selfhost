@@ -118,6 +118,7 @@ PAWN_CONF_DEFAULTS=(
     "Pawn.GainXP=0"
     "Pawn.VariantWithholdMin=1"
     "Pawn.VariantWithholdMax=2"
+    "Pawn.Voice=Talkative: +emote | Quiet: -emote"
     "Pawn.HireFeePercent=100"
     "Pawn.HireFeeHeldPercent=100"
     "Pawn.GearFloorPercent=85"
@@ -283,6 +284,15 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
     # refresh 1-1440 minutes each, the two fee percentages 0-10000 and 0-1000, and the gear
     # band 25-100 for the floor and 100-300 for the cap.
     local key="$1" val="$2"
+    # A voice pool is a profile list, not a number - labels, strategies and `|` separators -
+    # so it is settled here, before the numeric guard below can see it. A pool is any
+    # non-empty value carrying a `:`; the module skips the profiles it cannot parse.
+    if [ "$key" = Pawn.Voice ]; then
+        case "$val" in
+            ?*:*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
     case "$val" in ''|*[!0-9]*) return 1 ;; esac
     case "$key" in
         Pawn.Enable|Pawn.Debug)

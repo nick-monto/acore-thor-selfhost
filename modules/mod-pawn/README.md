@@ -7,7 +7,7 @@ in [docs/PAWN-INTEGRATION-PLAN.md](../../docs/PAWN-INTEGRATION-PLAN.md).
 A pawn is a **type-2 "AddClass" character** from the playerbots pool — a real character on a real
 account, in a real group. Everything that makes that work already exists upstream: the character
 keeps its gear and saves itself. It does **not** gain XP — a pawn is pinned to the level it was hired
-at (see "A pawn is what you hired" below). This module adds the four things the pool does not have:
+at (see "A pawn is what you hired" below). This module adds the six things the pool does not have:
 
 1. **A roster** (`pawn_roster`, characters database, created at startup by
    `PawnMgr::EnsureSchema`) so a recruited pawn comes back after a relog and after a world-server
@@ -35,6 +35,10 @@ at (see "A pawn is what you hired" below). This module adds the four things the 
    gear-score cap taken from the player, so a pawn is never better geared than its owner. It runs
    once, recorded by the roster's `built` column: after that the pawn keeps what it wears, and the
    pass only runs again if the level it was hired at has to be restored.
+6. **A temperament, a voice, and the vanity that comes with them.** Two pawns of one spec already
+   differ in what they carry; they now differ in how they fight and how they talk, and the mount and
+   pet each one ends up with are read back onto the roster. See "How they fight, and how they talk"
+   and "What they ride" below.
 
 ## Two pawns of one spec
 
@@ -65,6 +69,58 @@ Every shipped name was validated against the 3.3.5 spell table on 2026-10-26: 15
 the 293 entries of the 31 blacklists and 31 variant pools, all resolving, none naming an ability only
 another class can learn. That check is not part of the build, so a name added later is proven by the
 `archetypes:` line in `Server.log` at the next startup.
+
+## How they fight, and how they talk
+
+The variant pool decides what a pawn carries. Two further draws decide how it behaves, and both come
+from the same seed as its level, spec and gear ratio, so a face keeps them for as long as its owner
+keeps the face.
+
+**Temperament** is the combat half. `Pawn.Temperament.<class>.<spec_no>` is a pool of named profiles
+per spec, and a profile is exactly what `PlayerbotAI::ChangeStrategy` takes: a label and a
+comma-separated list of `+name` / `-name` tokens, such as the shipped
+`Relentless: +aggressive,+close` against `Patient: +wait for attack`. Each pawn is dealt one profile
+from its own spec's pool and it is applied to the combat engine, so two fury warriors now differ in
+how they fight as well as in what they carry.
+
+**Voice** is the non-combat half. It is one global pool, `Pawn.Voice`, because small talk is not a
+class skill: `Talkative: +emote` against `Quiet: -emote`, applied to the non-combat engine. `emote`
+is the strategy that drives a bot's speech and emotes; `chat` is chat-command handling — `follow`,
+`stay`, trade — and is deliberately not a voice dial, because a quiet pawn must still obey.
+
+A profile moves a pawn *inside* the server's own allowance, not around it: the global
+`Playerbots.RandomBotTalk` and `Playerbots.RandomBotEmote` gates still decide whether random bots
+talk at all, so `Talkative` on a server with speech switched off changes nothing.
+
+Names are checked twice, for the reason `Engine::addStrategy` gives: it ignores an unknown one without
+a word, so a typo would be a silent no-op. A malformed profile is dropped with an error when the
+pools load, and a `+name` the bot does not actually have is reported once, the first time a pawn
+draws it — one mistake shared by every pawn, not one line per login.
+
+The picker row names the pair it is offering. Vanity below does not, because it does not exist yet at
+that point.
+
+### Where the traits land
+
+playerbots rebuilds the role defaults every time it rebuilds strategies: `ResetStrategies` puts
+`tank face` back on a tank, `behind` back on melee dps and `save mana` back on a healer. The pawn's
+own build calls it too, to score gear against the pinned spec, so a trait applied earlier in the
+build — or at recruit — would be gone before the pawn ever fought. The profiles are therefore applied
+at the *end* of `PawnMgr::ApplyPawn`, the one path every pawn login passes through: after the build
+and after the last strategy rebuild. A trait added anywhere else would evaporate on the first login
+and the pawn would arrive plain.
+
+## What they ride
+
+playerbots rolls a pawn's mount and pet during the build, so neither is known before the pawn exists
+— it is not drawn from the seed, it is whatever the build rolled. The module therefore reads both
+back after the build and records them on the roster row, `mount_spell` and `pet_name`, and the party
+row draws them from there (`rides Black Stallion, with Wolf`): a pawn in that list may be offline, so
+there is no object to ask. A pawn too low for a mount records 0, and an empty `pet_name` means no pet
+— the row then says nothing rather than inventing one.
+
+They are deliberately not on the offer row. Before hiring there is nothing to promise, and a row
+that promised a mount would be guessing at what the build will roll.
 
 ## A pawn is what you hired
 
@@ -150,6 +206,7 @@ PASS), `Playerbots.LootGreedRollLevel = 0` (GREED becomes PASS) and `Playerbots.
 |---|---|
 | Roster schema, I/O, offers, recruit/dismiss, the gear pass | `src/PawnMgr.cpp` |
 | Spec pinning and the spellbook blacklist | `src/PawnArchetype.cpp` |
+| Temperament and voice pools, and applying them | `src/PawnPersonality.cpp` |
 | The innkeeper line and the gossip menu | `src/PawnInnkeeper.cpp` |
 | Login queue and the learn-spell gate | `src/PawnScripts.cpp` |
 | Loader symbol `Addmod_pawnScripts` | `src/pawn_loader.cpp` |
@@ -165,8 +222,9 @@ login pass — the pass that would otherwise rebuild the pawn at its owner's lev
 `conf/mod-pawn.conf.dist`: `Pawn.Enable`, `Pawn.MaxPawns`, `Pawn.LevelWindow`, `Pawn.GainXP`,
 `Pawn.HireFeePercent`, `Pawn.HireFeeHeldPercent`, `Pawn.GearFloorPercent`, `Pawn.GearCapPercent`,
 `Pawn.OfferedPerPage`, `Pawn.FeaturedMin`/`FeaturedMax`,
-`Pawn.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Pawn.Debug`, and one
-`Pawn.Blacklist.<class>.<spec_no>` list per archetype. Spell names in the blacklist are
+`Pawn.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Pawn.Debug`, one `Pawn.Voice` pool, and one
+`Pawn.Blacklist.<class>.<spec_no>` list and one `Pawn.Variant.<class>.<spec_no>` pool and one
+`Pawn.Temperament.<class>.<spec_no>` pool per archetype. Spell names in the blacklist are
 resolved once at startup; an unresolved name is logged as an error rather than ignored.
 
 ## The pool and the featured draw
@@ -193,9 +251,9 @@ On a pool of ~75 eligible characters that is a face coming back after about six 
 straight sample of 12 from 75 repeats two or three faces on every visit.
 
 The result is kept for the menu instance, so paging and dismissing do not move rows under the
-pointer; recruiting removes the row; closing and reopening deals again. Level, spec and gear ratio
-stay a pure function of the two guids, so a face you have seen keeps its level and spec whenever it
-comes back.
+pointer; recruiting removes the row; closing and reopening deals again. Level, spec, gear ratio,
+temperament and voice stay a pure function of the two guids, so a face you have seen keeps them
+whenever it comes back.
 
 ## Why there is no SQL
 

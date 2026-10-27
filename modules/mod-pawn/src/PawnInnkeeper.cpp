@@ -38,6 +38,8 @@
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 
 #include <algorithm>
 #include <string>
@@ -252,6 +254,31 @@ private:
             // inn's answer to it.
             if (row.TargetLevel + sPawnMgr.Config().LevelWindow < player->GetLevel())
                 text += " - fallen behind";
+
+            // Vanity comes from the roster, not the pawn: the pawn is usually
+            // offline while the player is browsing, so the row only knows what was
+            // recorded at build time. A null spell or an empty recorded value adds
+            // nothing rather than a broken clause.
+            bool rides = false;
+            if (row.MountSpell)
+            {
+                if (SpellInfo const* info = sSpellMgr->GetSpellInfo(row.MountSpell))
+                {
+                    std::string mountName = info->SpellName[0] ? info->SpellName[0] : "";
+                    static std::string const summonPrefix = "Summon ";
+                    if (mountName.compare(0, summonPrefix.size(), summonPrefix) == 0)
+                        mountName.erase(0, summonPrefix.size());
+                    if (!mountName.empty())
+                    {
+                        text += " - rides " + mountName;
+                        rides = true;
+                    }
+                }
+            }
+
+            if (!row.PetName.empty())
+                text += (rides ? ", with " : " - with ") + row.PetName;
+
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, text, GOSSIP_SENDER_MAIN, PAWN_ACTION_DISMISS + i);
         }
 
@@ -277,6 +304,14 @@ private:
                 text += ", " + std::string(offer.GearRatio > 100 ? "+" : "-") +
                         std::to_string(offer.GearRatio > 100 ? uint32(offer.GearRatio) - 100
                                                              : 100 - uint32(offer.GearRatio)) + "% gear";
+
+            // How this pawn fights and how it talks: the two axes the level, the
+            // spec and the gear do not cover, and the reason two pawns of the same
+            // build can still feel like different companions.
+            if (!offer.TemperamentLabel.empty())
+                text += ", " + offer.TemperamentLabel;
+            if (!offer.VoiceLabel.empty())
+                text += ", " + offer.VoiceLabel;
 
             // What this pawn of that spec does not bring. Two fury warriors are
             // different companions partly by which of these they are missing, and

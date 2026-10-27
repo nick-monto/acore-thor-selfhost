@@ -8,7 +8,12 @@ the agreement between the files, which is where a module of this shape actually 
   * every Pawn.* key the C++ reads is defined, uncommented, in conf/mod-pawn.conf.dist;
   * the installer's PAWN_CONF_DEFAULTS and the shipped conf agree, both ways: the repair path
     restores exactly what the conf ships, and no key can be added to one without the other;
-  * every column the roster code writes exists in the table it creates;
+  * every column the roster code writes exists in the table it creates, and the vanity columns
+    survive a save;
+  * every personality pool parses, names a strategy playerbots registers, never drags in
+    `chat` for speech, and puts a dial only where it does something: `save mana` on a healer,
+    `close`/`ranged` off the classes whose strategy already inherits it, and a pool on every
+    PvE premade spec;
   * the loader symbol is the one the build derives from the directory name;
   * the picker is the creature hook it is meant to be, and nothing still refers to the obelisk
     gameobject it replaced;
@@ -32,9 +37,15 @@ SRC = MODULE / "src"
 PINS = ROOT / "pins.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "server-aarch64.yml"
 INSTALLER = ROOT / "scripts" / "thor-install.sh"
+# Sibling checkout, present on a developer host but not in CI's arm64 job, which builds only this
+# repository. The vocabulary check degrades to a note when it is absent rather than failing.
+PLAYERBOTS = ROOT.parent / "mod-playerbots"
 
 PLAYABLE_CLASSES = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
 MAX_SPECS = 8
+
+# One strategy dial in a personality pool: "+aggressive", "-close", "save mana".
+PROFILE_TOKEN = re.compile(r"^[+-][a-z][a-z ]*$")
 
 failures: list[str] = []
 notes: list[str] = []
@@ -94,7 +105,7 @@ def check_config_keys() -> dict[str, str]:
 
     # Blacklist keys: class must be playable, spec inside the premade spec table.
     for key in sorted(keys):
-        match = re.fullmatch(r"Pawn\.(?:Blacklist|Variant)\.(\d+)\.(\d+)", key)
+        match = re.fullmatch(r"Pawn\.(?:Blacklist|Variant|Temperament)\.(\d+)\.(\d+)", key)
         if not match:
             continue
         cls, spec = int(match.group(1)), int(match.group(2))
@@ -107,7 +118,8 @@ def check_config_keys() -> dict[str, str]:
 
     notes.append(f"conf: {len(keys)} keys, {len(used)} read by the code, "
                  f"{sum(1 for k in keys if k.startswith('Pawn.Blacklist.'))} blacklist blocks, "
-                 f"{sum(1 for k in keys if k.startswith('Pawn.Variant.'))} variant blocks")
+                 f"{sum(1 for k in keys if k.startswith('Pawn.Variant.'))} variant blocks, "
+                 f"{sum(1 for k in keys if k.startswith('Pawn.Temperament.'))} temperament blocks")
     return keys
 
 
@@ -132,9 +144,11 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
             fail(f"installer: {key}={value} but the conf ships {keys[key]}; a repair would "
                  f"rewrite a value the conf does not carry")
 
-    # The other direction: every non-blacklist key is one the repair path can restore.
+    # The other direction: every key the repair path can restore is in the defaults. The
+    # per-class pools are deliberately absent: they are long, they change with balance, and the
+    # player is meant to edit them, so a repair leaves them alone.
     for key in sorted(keys):
-        if key.startswith(("Pawn.Blacklist.", "Pawn.Variant.")):
+        if key.startswith(("Pawn.Blacklist.", "Pawn.Variant.", "Pawn.Temperament.")):
             continue
         if key not in defaults:
             fail(f"installer: {key} is in the conf but not in PAWN_CONF_DEFAULTS; a repair "
@@ -173,7 +187,8 @@ def check_picker(keys: dict[str, str]) -> None:
     mgr = read(SRC / "PawnMgr.cpp")
     if "addclassCache" in mgr:
         fail("pool: PawnMgr.cpp reads addclassCache, which is empty with AddClassCommand = 0")
-    for needle in ("playerbots_account_type", "RefreshPool", "DrawOffers"):
+    for needle in ("playerbots_account_type", "RefreshPool", "DrawOffers",
+                   "sPawnPersonality.Temperament", "sPawnPersonality.Apply"):
         if needle not in mgr:
             fail(f"pool: PawnMgr.cpp has no {needle}")
 
@@ -190,6 +205,168 @@ def check_picker(keys: dict[str, str]) -> None:
         fail("installer: does not drop a stale Pawn.ObeliskEntry from an existing conf")
 
     notes.append("picker: creature hook on innkeepers, actions clear of the core's option range")
+
+
+def strategy_vocabulary() -> set[str] | None:
+    """Every strategy name playerbots registers, or None when the sibling tree is absent."""
+    if not PLAYERBOTS.is_dir():
+        return None
+
+    sources = [PLAYERBOTS / "src" / "Ai" / "Base" / "StrategyContext.h"]
+    sources += sorted(PLAYERBOTS.glob("src/Ai/Class/*/*AiObjectContext.cpp"))
+    names: set[str] = set()
+    for path in sources:
+        if path.is_file():
+            names.update(re.findall(r'creators\["([^"]+)"\]', path.read_text(encoding="utf-8")))
+    return names or None
+
+
+PLAYERBOTS_CONF = PLAYERBOTS / "conf" / "playerbots.conf.dist"
+TEMPERAMENT_KEY = re.compile(r"^Pawn\.Temperament\.(\d+)\.(\d+)$")
+# Playerbots names its premade specs by talent, and the healer ones are the only specs whose
+# healing actions the mana-conservation strategy ever sees. These are whole words, as in the
+# module: "unholy pve" contains "holy" as a substring, and a death knight is no healer.
+HEALER_SPEC_WORDS = ("holy", "resto", "disc")
+
+# These class strategies already inherit the base the dial would add, so the trigger is already
+# there and the dial changes nothing: the token is dead on that class whatever the spec.
+CLASS_BASE_DIALS = {
+    (6, "close"): "GenericDKStrategy inherits MeleeCombatStrategy",
+    (8, "ranged"): "GenericMageStrategy inherits RangedCombatStrategy",
+    (5, "ranged"): "GenericPriestStrategy inherits RangedCombatStrategy",
+}
+
+
+def premade_specs() -> dict[tuple[int, int], str] | None:
+    """Playerbots' premade spec names by (class, spec), or None when the sibling conf is absent."""
+    if not PLAYERBOTS_CONF.is_file():
+        return None
+    text = PLAYERBOTS_CONF.read_text(encoding="utf-8")
+    specs: dict[tuple[int, int], str] = {}
+    for match in re.finditer(r"^Playerbots\.PremadeSpecName\.(\d+)\.(\d+)\s*=\s*(.+)$",
+                             text, re.M):
+        specs[(int(match.group(1)), int(match.group(2)))] = match.group(3).strip()
+    return specs or None
+
+
+def parse_pool(value: str, key: str) -> list[tuple[str, list[str]]]:
+    """Split one pool value into (label, change tokens), reporting anything malformed."""
+    profiles: list[tuple[str, list[str]]] = []
+    for chunk in value.split("|"):
+        profile = chunk.strip()
+        if not profile:
+            continue  # a trailing or doubled '|' is a formatting slip, as in the module
+        if ":" not in profile:
+            fail(f"conf: {key}: profile {profile!r} has no label")
+            continue
+        label, changes = profile.split(":", 1)
+        label, changes = label.strip(), changes.strip()
+        if not label:
+            fail(f"conf: {key}: a profile has an empty label")
+            continue
+        if not changes:
+            fail(f"conf: {key}: profile {label} has an empty change list")
+            continue
+        tokens: list[str] = []
+        for token in changes.split(","):
+            token = token.strip()
+            if not token:
+                fail(f"conf: {key}: profile {label} has an empty change token")
+            elif not PROFILE_TOKEN.fullmatch(token):
+                fail(f"conf: {key}: profile {label} has the malformed token {token!r}; each "
+                     f"token is +name or -name, lower case, spaces allowed inside")
+            else:
+                tokens.append(token)
+        profiles.append((label, tokens))
+    return profiles
+
+
+def has_word(name: str, word: str) -> bool:
+    """True when `word` is a whole word of `name`, the rule PawnArchetype::RoleFor uses."""
+    return re.search(rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])", name.lower()) is not None
+
+
+def check_personality(keys: dict[str, str]) -> None:
+    vocabulary = strategy_vocabulary()
+    specs = premade_specs()
+
+    pools: list[tuple[str, str]] = []
+    if "Pawn.Voice" not in keys:
+        fail("conf: no Pawn.Voice; every pawn would roll the same non-combat behaviour")
+    else:
+        pools.append(("Pawn.Voice", keys["Pawn.Voice"]))
+    temperament_keys = sorted(k for k in keys if k.startswith("Pawn.Temperament."))
+    if not temperament_keys:
+        fail("conf: no Pawn.Temperament.* blocks; every pawn would roll an empty temperament")
+    pools.extend((key, keys[key]) for key in temperament_keys)
+
+    voice_profiles = 0
+    dials: set[str] = set()
+    dead: set[tuple[str, str]] = set()
+    for key, value in pools:
+        profiles = parse_pool(value, key)
+        if key == "Pawn.Voice":
+            voice_profiles = len(profiles)
+            if not profiles:
+                fail(f"conf: {key} defines no profiles")
+        spec_key = TEMPERAMENT_KEY.fullmatch(key)
+        cls = int(spec_key.group(1)) if spec_key else None
+        spec = int(spec_key.group(2)) if spec_key else None
+        spec_name = specs.get((cls, spec)) if specs is not None and cls is not None else None
+        for label, tokens in profiles:
+            for token in tokens:
+                name = token[1:]
+                dials.add(name)
+                # The engine ignores an unknown name without a word, so the only place a typo
+                # can be caught is here.
+                if name == "chat":
+                    fail(f"conf: {key}: profile {label} names {token!r}; chat is chat-command "
+                         f"handling, not speech - use emote for a voice")
+                elif vocabulary is not None and name not in vocabulary:
+                    fail(f"conf: {key}: profile {label} names {token!r}, which playerbots does "
+                         f"not register; the engine would silently ignore it")
+                if (key, name) in dead:
+                    continue  # one report per block and dial; the second profile adds nothing
+                # HealerAutoSaveManaStrategy multiplies only CastHealingSpellAction, so on a
+                # class that never casts a heal the dial is inert rather than frugal.
+                if name == "save mana" and spec_name is not None:
+                    if not any(has_word(spec_name, word) for word in HEALER_SPEC_WORDS):
+                        dead.add((key, name))
+                        fail(f"conf: {key}: profile {label} uses {token!r} on {spec_name}, "
+                             f"which is not a healer spec; the mana-conservation strategy only "
+                             f"scales healing spells, so the dial does nothing")
+                reason = CLASS_BASE_DIALS.get((cls, name)) if cls is not None else None
+                if reason:
+                    dead.add((key, name))
+                    fail(f"conf: {key}: profile {label} uses {token!r} on class {cls}, where "
+                         f"{reason}; the base is already there and the dial does nothing")
+
+    notes.append(f"personality: {voice_profiles} voice profiles, {len(temperament_keys)} "
+                 f"temperament blocks, {len(dials)} dials")
+    if vocabulary is None:
+        notes.append("personality: strategy vocabulary check skipped (no mod-playerbots checkout)")
+    else:
+        notes.append(f"personality: every dial is one of {len(vocabulary)} playerbots strategies")
+
+    if specs is None:
+        notes.append("personality: spec applicability and coverage checks skipped "
+                     "(no mod-playerbots conf)")
+        return
+
+    # Every PvE spec the module offers must have a pool, because an offer with no temperament
+    # rolls a pawn that behaves like every other pawn of its class. Blacklist and variant blocks
+    # are not held to this: 6.3 and 8.3 never had one, and that gap is not this check's to close.
+    pve = {pair: name for pair, name in specs.items() if name.endswith("pve")}
+    covered = {
+        (int(match.group(1)), int(match.group(2)))
+        for match in (TEMPERAMENT_KEY.fullmatch(k) for k in temperament_keys) if match
+    }
+    for pair, name in sorted(pve.items()):
+        if pair not in covered:
+            fail(f"conf: no Pawn.Temperament.{pair[0]}.{pair[1]} for the PvE premade spec "
+                 f"{name}; an offer of it would roll an empty temperament")
+    notes.append(f"personality: {len(set(pve) & covered)}/{len(pve)} PvE specs have a "
+                 f"temperament")
 
 
 def check_roster() -> None:
@@ -213,6 +390,16 @@ def check_roster() -> None:
         missing = written - columns
         if missing:
             fail(f"code: writes columns the table does not have: {sorted(missing)}")
+        for column in ("mount_spell", "pet_name"):
+            if column not in written:
+                fail(f"code: the REPLACE INTO column list does not name {column}; the "
+                     f"vanity read back after the build would be dropped on the next save")
+
+    # Vanity is read back after the build because the mount and pet are the outcome, not an
+    # input: the row has to carry them or the party menu can only say "a mount".
+    for column in ("mount_spell", "pet_name"):
+        if column not in columns:
+            fail(f"code: the roster table has no {column} column")
 
     if "state" not in columns or "target_level" not in columns:
         fail("code: the roster table is missing state or target_level")
@@ -260,6 +447,7 @@ def main() -> int:
     keys = check_config_keys()
     check_installer_defaults(keys)
     check_picker(keys)
+    check_personality(keys)
     check_roster()
     check_loader()
     check_wiring()

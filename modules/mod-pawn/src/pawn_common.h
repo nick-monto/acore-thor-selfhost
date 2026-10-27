@@ -97,6 +97,10 @@ struct PawnOffer
     uint8       Level    = 0;
     uint8       SpecNo   = 0;
     PawnRole    Role     = PAWN_ROLE_NONE;
+    // The profile words the picker shows, drawn from the same seed as the level
+    // so a pawn's temperament and voice are as stable as everything else about it.
+    std::string TemperamentLabel;
+    std::string VoiceLabel;
     // Percent of the owner's gear score this pawn is geared to: 100 is a match,
     // the band is [GearFloorPercent, GearCapPercent]. Drawn from the same seed as
     // the level, so a pawn is always offered at the same strength for the same
@@ -125,6 +129,11 @@ struct PawnRosterRow
     // you have already paid for is free, so swapping companions costs nothing
     // after the first time.
     bool       Paid        = false;
+    // The mount spell and pet name the pawn had when it was built, recorded
+    // because the party row is drawn from the roster while the pawn may be
+    // offline. Zero and empty mean the pawn has neither.
+    uint32     MountSpell  = 0;
+    std::string PetName;
 };
 
 // "51g 20s" / "20s 5c" / "0c": the price strings the picker and the recruit

@@ -266,6 +266,15 @@ how many strangers are around while the pawns are in the party.
    abilities, so the toolkit is the reason to swap pawns.
 8. **Party cap** — the player plus two pawns; a third needs strangers from the world, which are not
    pool pawns and are not counted.
+9. **Temperament and voice** — two more per-pawn draws from the same `(owner, bot)` seed, so two
+   pawns of one spec differ in behaviour as well as in toolkit: `Pawn.Temperament.<class>.<spec_no>`
+   is a pool of named combat profiles (`Relentless: +aggressive,+close`) applied to the combat
+   engine, and the one global `Pawn.Voice` pool (`Talkative: +emote` / `Quiet: -emote`) to the
+   non-combat one (`emote` drives speech; `chat` is command handling and is left alone). Both are
+   re-applied at the end of `PawnMgr::ApplyPawn`, because playerbots restores its role defaults on
+   every `ResetStrategies`. Vanity rides along: the mount and pet a pawn ends up with are read back
+   after the build into `pawn_roster.mount_spell` / `pet_name`, because the party row is drawn from
+   the roster while the pawn itself may be offline.
 
 ## Risks
 

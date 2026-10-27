@@ -21,6 +21,7 @@
 
 #include "PawnArchetype.h"
 #include "PawnMgr.h"
+#include "PawnPersonality.h"
 
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -62,6 +63,7 @@ public:
     {
         sPawnMgr.LoadConfig();
         sPawnArchetype.Load();
+        sPawnPersonality.Load();
     }
 
     void OnStartup() override

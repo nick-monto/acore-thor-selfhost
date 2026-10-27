@@ -68,6 +68,23 @@ namespace
         return s;
     }
 
+    // The spec names are words ("unholy pve", "double aura blood"), so the role is read
+    // off whole words: a substring test reads "unholy" as "holy" and calls a death
+    // knight a healer.
+    bool HasWord(std::string const& name, std::string const& word)
+    {
+        auto const isAlpha = [](unsigned char c) { return std::isalpha(c) != 0; };
+        for (size_t at = name.find(word); at != std::string::npos; at = name.find(word, at + 1))
+        {
+            size_t const end = at + word.size();
+            bool const leftFree = at == 0 || !isAlpha(static_cast<unsigned char>(name[at - 1]));
+            bool const rightFree = end == name.size() || !isAlpha(static_cast<unsigned char>(name[end]));
+            if (leftFree && rightFree)
+                return true;
+        }
+        return false;
+    }
+
     // Spell names are the only reviewable key the configuration can carry: the
     // server keeps no name -> id table, so build one once. SpellName[0] is enUS
     // and is what the .dist comments are written against.
@@ -214,12 +231,10 @@ PawnRole PawnArchetype::RoleFor(uint8 cls, uint8 spec) const
     // The spec names are the module's own vocabulary ("prot pve", "bear pve",
     // "blood pve", "resto pve", "disc pve"), so the role is read off the name
     // rather than off a second table that could drift from it.
-    if (name.find("prot") != std::string::npos || name.find("bear") != std::string::npos ||
-        name.find("blood") != std::string::npos)
+    if (HasWord(name, "prot") || HasWord(name, "bear") || HasWord(name, "blood"))
         return PAWN_ROLE_TANK;
 
-    if (name.find("holy") != std::string::npos || name.find("resto") != std::string::npos ||
-        name.find("disc") != std::string::npos)
+    if (HasWord(name, "holy") || HasWord(name, "resto") || HasWord(name, "disc"))
         return PAWN_ROLE_HEALER;
 
     return PAWN_ROLE_DPS;

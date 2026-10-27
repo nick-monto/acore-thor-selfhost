@@ -346,3 +346,100 @@ Pawn.Variant.11.0 = Entangling Roots, Hibernate, Cyclone
 Pawn.Variant.11.1 = Bash, Feral Charge, Survival Instincts
 Pawn.Variant.11.2 = Entangling Roots, Hibernate, Nature's Swiftness
 Pawn.Variant.11.3 = Dash, Cower, Survival Instincts
+
+########################################
+#
+# Per-pawn voice and temperament: how a pawn sounds and how it fights.
+#
+# The variant blocks above give a pawn its own toolkit. These two give it a
+# manner. Both are drawn from the same seed as its level and spec, so a face
+# never changes under the owner who hired it.
+#
+# A profile list is not a number: each `Label: +strategy,-strategy` entry is one
+# profile, entries are separated by `|`, and the pawn is dealt one of them. A
+# profile may move two dials at once; join them with a comma and no space,
+# because the engine's own parser does not trim the tokens it splits on.
+#
+# Voice drives the non-combat engine and answers how the pawn sounds between
+# fights. One pool serves every pawn - a voice is a manner, not a spec. `emote`
+# is the strategy that drives talking and emoting and it is on for bots by
+# default, so `-emote` is what makes a pawn quiet. Two realm-wide settings keep
+# the last word underneath: Playerbots.RandomBotTalk and Playerbots.RandomBotEmote
+# in playerbots.conf gate whether a bot may speak at all, so a silent realm
+# cannot be talked into life by this file.
+#
+# Default: Talkative: +emote | Quiet: -emote
+Pawn.Voice = Talkative: +emote | Quiet: -emote
+
+# Temperament drives the combat engine and answers how the pawn fights. Unlike
+# voice it is per spec, because what bold means for a fury warrior is not what
+# it means for a holy priest - a tank that charges in dies, and a healer that
+# charges in wipes the party. Each spec carries two or three profiles and the
+# pawn gets one of them, so two arms warriors fight differently and neither
+# fights wrong. Only strategy dials are touched here; the class rotation is
+# left alone. An unknown strategy name is ignored by the engine, so a typo
+# makes a pawn ordinary rather than broken.
+#
+#   Pawn.Temperament.<class>.<spec_no> = Label: +strategy | Label: ...
+#
+# Two dials are not what they look like. `save mana` is the healer mana
+# multiplier and returns 1.0 for anything that is not a healing cast, so it
+# does nothing on a tank or a dps. `close` and `ranged` add melee and ranged
+# combat, which a death knight, mage or priest already has from its class
+# strategy, so those tokens are dead on those classes.
+#
+# Same class ids and spec numbers as the blacklist and variant blocks. A spec
+# with no block, or an empty one, keeps the untouched defaults.
+
+# Warrior: arms, fury, prot
+Pawn.Temperament.1.0 = Relentless: +aggressive,+close | Patient: +wait for attack | Wary: +avoid aoe
+Pawn.Temperament.1.1 = Reckless: +aggressive | Careful: +avoid aoe,-potions | Steady: +close
+Pawn.Temperament.1.2 = Stalwart: +close | Wary: +avoid aoe | Frugal: -potions
+
+# Paladin: holy, prot, ret
+Pawn.Temperament.2.0 = Frugal: +save mana | Distant: +ranged | Careful: +avoid aoe
+Pawn.Temperament.2.1 = Stalwart: +close | Frugal: -potions | Wary: +avoid aoe
+Pawn.Temperament.2.2 = Relentless: +aggressive,+close | Spare: -potions | Careful: +avoid aoe
+
+# Hunter: beast mastery, marksmanship, survival
+Pawn.Temperament.3.0 = Bold: +aggressive | Distant: +ranged | Restless: +kite
+Pawn.Temperament.3.1 = Patient: +wait for attack | Distant: +ranged | Spare: -potions
+Pawn.Temperament.3.2 = Bold: +aggressive,+ranged | Restless: +kite | Wary: +avoid aoe
+
+# Rogue: assassination, combat, subtlety
+Pawn.Temperament.4.0 = Relentless: +aggressive,+close | Spare: -potions | Wary: +avoid aoe
+Pawn.Temperament.4.1 = Steady: +close | Bold: +aggressive | Spare: -potions
+Pawn.Temperament.4.2 = Patient: +wait for attack | Careful: +avoid aoe | Relentless: +aggressive
+
+# Priest: discipline, holy, shadow
+Pawn.Temperament.5.0 = Frugal: +save mana | Careful: +avoid aoe | Spare: -potions
+Pawn.Temperament.5.1 = Frugal: +save mana | Restless: +kite | Careful: +avoid aoe
+Pawn.Temperament.5.2 = Bold: +aggressive | Restless: +kite | Wary: +avoid aoe
+
+# Death knight: blood, frost, unholy, double aura blood
+Pawn.Temperament.6.0 = Stalwart: +avoid aoe | Frugal: -potions
+Pawn.Temperament.6.1 = Relentless: +aggressive | Spare: -potions | Wary: +avoid aoe
+Pawn.Temperament.6.2 = Bold: +aggressive | Patient: +wait for attack | Careful: +avoid aoe
+Pawn.Temperament.6.3 = Wary: +avoid aoe | Spare: -potions
+
+# Shaman: elemental, enhancement, restoration
+Pawn.Temperament.7.0 = Bold: +aggressive,+ranged | Restless: +kite | Wary: +avoid aoe
+Pawn.Temperament.7.1 = Relentless: +aggressive,+close | Spare: -potions | Careful: +avoid aoe
+Pawn.Temperament.7.2 = Frugal: +save mana | Distant: +ranged | Careful: +avoid aoe
+
+# Mage: arcane, fire, frost, frostfire
+Pawn.Temperament.8.0 = Bold: +aggressive | Frugal: -potions | Careful: +avoid aoe
+Pawn.Temperament.8.1 = Reckless: +aggressive | Distant: +kite | Careful: +avoid aoe
+Pawn.Temperament.8.2 = Careful: +avoid aoe | Restless: +kite | Frugal: -potions
+Pawn.Temperament.8.3 = Bold: +aggressive | Patient: +wait for attack | Spare: -potions
+
+# Warlock: affliction, demonology, destruction
+Pawn.Temperament.9.0 = Patient: +wait for attack | Careful: +avoid aoe | Restless: +kite
+Pawn.Temperament.9.1 = Bold: +aggressive,+ranged | Frugal: -potions | Careful: +avoid aoe
+Pawn.Temperament.9.2 = Reckless: +aggressive | Distant: +ranged | Spare: -potions
+
+# Druid: balance, bear, restoration, cat
+Pawn.Temperament.11.0 = Distant: +ranged | Bold: +aggressive | Wary: +avoid aoe
+Pawn.Temperament.11.1 = Stalwart: +close | Wary: +avoid aoe | Frugal: -potions
+Pawn.Temperament.11.2 = Frugal: +save mana | Careful: +avoid aoe | Distant: +ranged
+Pawn.Temperament.11.3 = Relentless: +aggressive,+close | Patient: +wait for attack | Spare: -potions
