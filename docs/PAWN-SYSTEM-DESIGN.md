@@ -253,8 +253,10 @@ how many strangers are around while the pawns are in the party.
    `Playerbots.AddClassAccountPoolSize = 5`. 50 accounts was 500 characters and made the picker a
    database dump.
 2. **Offered roster** — the whole team-and-class pool, paged, with a stable level and spec per pawn
-   derived from the two guids. No per-player subset: a stable subset would hide the class the
-   player wants, and paging already keeps the page short.
+   derived from the two guids. The picker shows a per-player selection of it (10-15 rows, dealt off
+   a deck) rather than the whole pool: the pool is large enough that listing it reads as a database
+   dump, and a selection that holds for the whole pool cycle cannot be rerolled by walking back into
+   the inn. Paging keeps the page short either way.
 3. **Own-account pawns** — allowed by the pool rules (`AllowAccountBots`), but the obelisk is the
    only doorway, and `Playerbots.AddClassCommand = 0` keeps the command GM-only so the party cap
    cannot be sidestepped.

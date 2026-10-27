@@ -206,7 +206,12 @@ void PawnMgr::RefreshPool()
     // Every deck was built against the old pool, so it is dealt out against the
     // new one. Counters are guids and survive, but a roll that added or dropped
     // characters should change who is on offer, not just who is eligible.
+    //
+    // The selections go with them: this is the one moment a player's crowd
+    // changes without them recruiting anyone, and the next open deals a new one
+    // off the reshuffled deck.
     _decks.clear();
+    _selections.clear();
 
     QueryResult accounts = PlayerbotsDatabase.Query("SELECT account_id FROM playerbots_account_type WHERE account_type = 2");
     if (!accounts)
@@ -490,7 +495,7 @@ PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uin
     return offer;
 }
 
-std::vector<PawnOffer> PawnMgr::DrawOffers(Player* player)
+std::vector<PawnOffer> PawnMgr::SelectionFor(Player* player)
 {
     std::vector<PawnOffer> offers;
     if (!player)
@@ -544,10 +549,11 @@ std::vector<PawnOffer> PawnMgr::DrawOffers(Player* player)
 
     // Deal from the player's deck rather than drawing a fresh sample: a face that
     // has been shown is not shown again until the deck is dealt out and reshuffled,
-    // which is what makes two visits to an inn feel like two different crowds
-    // instead of the same twelve of fifty with a few swapped. The deck is dealt
-    // without replacement, so a small pool is cycled rather than repeated.
+    // which is what makes two pool cycles feel like two different crowds instead of
+    // the same twelve of fifty with a few swapped. The deck is dealt without
+    // replacement, so a small pool is cycled rather than repeated.
     PawnDeck& deck = _decks[owner.GetCounter()];
+    std::vector<uint32>& selection = _selections[owner.GetCounter()];
     std::unordered_set<uint32> shown;
 
     auto const reshuffle = [&]()
@@ -560,9 +566,10 @@ std::vector<PawnOffer> PawnMgr::DrawOffers(Player* player)
         for (size_t i = deck.Order.size(); i > 1; --i)
             std::swap(deck.Order[i - 1], deck.Order[Mix(state) % i]);
 
-        // The last visit's faces go to the back of the new order. A reshuffle is
-        // the one moment a repeat could land in the very next visit, and this is
-        // what stops it; they are still in the deck, just later in it.
+        // The previous selection's faces go to the back of the new order. A
+        // reshuffle is the one moment a repeat could land in the very next
+        // selection, and this is what stops it; they are still in the deck, just
+        // later in it.
         if (!deck.Recent.empty())
             std::stable_partition(deck.Order.begin(), deck.Order.end(), [&deck](uint32 counter)
             {
@@ -572,43 +579,62 @@ std::vector<PawnOffer> PawnMgr::DrawOffers(Player* player)
         deck.Cursor = 0;
     };
 
-    // Never straddle a reshuffle inside one visit: if the deck cannot cover the
-    // whole visit, reshuffle first. A visit that crossed the end of the deck would
-    // mix the tail of one cycle with the head of the next, and the head can hold
-    // faces shown two or three visits ago. The tail that is skipped is not lost,
-    // it is back in the next shuffle.
-    if (deck.Order.size() - deck.Cursor < std::min<size_t>(wanted, candidates.size()))
-        reshuffle();
+    // The selection is dealt once per pool cycle and kept on every open, so the
+    // same crowd is at the inn until RefreshPool() runs or the server restarts. It
+    // is dealt again only when nothing on it is still eligible - every pawn
+    // recruited, or the whole selection logged in or dropped from the pool -
+    // because a menu with no rows cannot be browsed.
+    bool const usable = std::any_of(selection.begin(), selection.end(),
+                                    [&byCounter](uint32 counter) { return byCounter.count(counter) != 0; });
 
-    while (offers.size() < wanted && shown.size() < candidates.size())
+    if (!usable)
     {
-        if (deck.Cursor >= deck.Order.size())
+        selection.clear();
+
+        // Never straddle a reshuffle inside one selection: if the deck cannot
+        // cover the whole selection, reshuffle first. A selection that crossed the
+        // end of the deck would mix the tail of one cycle with the head of the
+        // next, and the head can hold faces shown two or three cycles ago. The tail
+        // that is skipped is not lost, it is back in the next shuffle.
+        if (deck.Order.size() - deck.Cursor < std::min<size_t>(wanted, candidates.size()))
             reshuffle();
 
-        // A dealt counter may have stopped being a candidate since the deck was
-        // built - recruited, logged in, or dropped by a pool refresh - so it is
-        // looked up again rather than trusted.
-        uint32 const counter = deck.Order[deck.Cursor++];
+        while (selection.size() < wanted && shown.size() < candidates.size())
+        {
+            if (deck.Cursor >= deck.Order.size())
+                reshuffle();
+
+            // A dealt counter may have stopped being a candidate since the deck
+            // was built - recruited, logged in, or dropped by a pool refresh - so
+            // it is looked up again rather than trusted.
+            uint32 const counter = deck.Order[deck.Cursor++];
+            auto const found = byCounter.find(counter);
+            if (found == byCounter.end() || !shown.insert(counter).second)
+                continue;
+
+            selection.push_back(counter);
+        }
+
+        deck.Recent = selection;
+    }
+
+    // The rows are rebuilt every time: level, gear ratio and fee are functions of
+    // the player's current level, so a pawn offered at 30 reads as 34 once the
+    // player has levelled, instead of staying at the number it first showed.
+    offers.reserve(selection.size());
+    for (uint32 const counter : selection)
+    {
         auto const found = byCounter.find(counter);
-        if (found == byCounter.end() || !shown.insert(counter).second)
-            continue;
+        if (found == byCounter.end())
+            continue;   // recruited since the deal, or logged in
 
         offers.push_back(MakeOffer(*found->second, owner, ownerLevel));
     }
 
-    deck.Recent.clear();
-    for (PawnOffer const& offer : offers)
-        deck.Recent.push_back(offer.Bot.GetCounter());
-
-    LOG_DEBUG("module", "Pawn: {} offers dealt from {} candidates for {} ({} left in the deck)",
-              uint32(offers.size()), uint32(candidates.size()), player->GetName(),
+    LOG_DEBUG("module", "Pawn: {} offers for {} from a selection of {} of {} candidates ({} left in the deck)",
+              uint32(offers.size()), player->GetName(), uint32(selection.size()), uint32(candidates.size()),
               uint32(deck.Order.size() - deck.Cursor));
     return offers;
-}
-
-void PawnMgr::ForgetPlayer(ObjectGuid player)
-{
-    _decks.erase(player.GetCounter());
 }
 
 void PawnMgr::OnPlayerLogin(Player* player)
@@ -996,6 +1022,16 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
 
     Upsert(row);
     _rows[offer.Bot.GetCounter()] = row;
+
+    // The selection outlives the menu, so the pawn has to leave it as well as the
+    // page: otherwise the next open would offer a pawn that is standing in the
+    // party. It comes back with the next pool cycle, like any other face.
+    if (auto it = _selections.find(player->GetGUID().GetCounter()); it != _selections.end())
+    {
+        std::vector<uint32>& selection = it->second;
+        selection.erase(std::remove(selection.begin(), selection.end(), offer.Bot.GetCounter()),
+                        selection.end());
+    }
 
     mgr->AddPlayerBot(offer.Bot, player->GetSession()->GetAccountId());
 

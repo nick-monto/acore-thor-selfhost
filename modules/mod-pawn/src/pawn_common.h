@@ -52,8 +52,9 @@ struct PawnConfig
     uint8  VariantWithholdMin   = 1;
     uint8  VariantWithholdMax   = 2;
     uint8  OfferedPerPage       = 12;
-    // A picker instance shows a random subsample of the pool, not the pool: the
-    // count is drawn from [FeaturedMin, FeaturedMax] every time the menu opens.
+    // A picker shows a selection of the pool, not the pool: the count is drawn
+    // from [FeaturedMin, FeaturedMax] when the selection is dealt, once per pool
+    // cycle, and kept until the pool is re-read.
     uint8  FeaturedMin          = 10;
     uint8  FeaturedMax          = 15;
     // The pool itself (which characters exist, their level and whether they are

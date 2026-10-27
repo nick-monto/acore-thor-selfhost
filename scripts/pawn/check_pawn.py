@@ -219,10 +219,19 @@ def check_picker(keys: dict[str, str]) -> None:
     mgr = read(SRC / "PawnMgr.cpp")
     if "addclassCache" in mgr:
         fail("pool: PawnMgr.cpp reads addclassCache, which is empty with AddClassCommand = 0")
-    for needle in ("playerbots_account_type", "RefreshPool", "DrawOffers",
+    for needle in ("playerbots_account_type", "RefreshPool", "SelectionFor",
                    "sPawnPersonality.Temperament", "sPawnPersonality.Apply"):
         if needle not in mgr:
             fail(f"pool: PawnMgr.cpp has no {needle}")
+
+    # The selection is the pool cycle's, not the menu's: RefreshPool has to clear it, or walking out
+    # of the inn and back in would reroll the crowd. And nothing may drop it on logout for the same
+    # reason - the only things that end a selection are a refresh and a restart.
+    if not re.search(r"_decks\.clear\(\)\s*;\s*\n\s*_selections\.clear\(\)", mgr):
+        fail("pool: RefreshPool does not clear the selections with the decks")
+    if re.search(r"_selections\.erase", mgr):
+        fail("pool: PawnMgr.cpp erases a selection outside RefreshPool; only a pool refresh or a "
+             "restart may change a player's crowd")
 
     for key in ("Pawn.FeaturedMin", "Pawn.FeaturedMax",
                 "Pawn.PoolRefreshMinMinutes", "Pawn.PoolRefreshMaxMinutes"):

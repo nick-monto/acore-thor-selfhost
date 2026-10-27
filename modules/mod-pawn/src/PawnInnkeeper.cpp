@@ -84,7 +84,7 @@ namespace
 
     struct PawnMenuState
     {
-        std::vector<PawnOffer>     Offers;   // the draw for this menu instance
+        std::vector<PawnOffer>     Offers;   // the cycle's selection, as this visit shows it
         std::vector<PawnRosterRow> Party;
         uint8                      Page = 0;
         uint32                     First = 0;   // index of the first offer on the page
@@ -230,13 +230,14 @@ public:
     }
 
 private:
-    // A new picker instance: draw a fresh random subsample of the pool. The draw
-    // is kept until the player opens the picker again, so browsing pages or
-    // dismissing a pawn does not move the rows under the pointer.
+    // The rows come from the selection dealt for this pool cycle, not from a draw
+    // per menu: opening the picker again shows the same pawns, and only the page
+    // is reset. A new crowd arrives when the pool is re-read or the server
+    // restarts.
     static void Open(Player* player, Creature* creature)
     {
         PawnMenuState& state = g_menus[player->GetGUID().GetCounter()];
-        state.Offers = sPawnMgr.DrawOffers(player);
+        state.Offers = sPawnMgr.SelectionFor(player);
         state.Page = 0;
         state.First = 0;
         ShowMenu(player, creature, 0);

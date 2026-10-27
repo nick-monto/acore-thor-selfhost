@@ -104,7 +104,7 @@ Pawn.GearCapPercent = 150
 Pawn.LevelWindow = 2               # D1, in levels either way
 Pawn.GainXP = 0                    # a pawn is pinned to the level it was hired at
 Pawn.OfferedPerPage = 12           # gossip carries at most 16 rows per page
-Pawn.FeaturedMin = 10              # per picker instance, drawn from the pool
+Pawn.FeaturedMin = 10              # per selection, one per pool cycle
 Pawn.FeaturedMax = 15
 Pawn.PoolRefreshMinMinutes = 40    # pool re-read, random inside the range
 Pawn.PoolRefreshMaxMinutes = 60
@@ -254,9 +254,9 @@ Action codes start at `1000`: a database gossip row's action *is* its `OptionTyp
 have swallowed the bind option. `1000` opens the picker, `1010..1099` recruit an offer,
 `1110..1199` dismiss a party pawn, `1200`/`1201` change page. Pages hold `Pawn.OfferedPerPage` rows
 (12) plus navigation, under the 16-row packet cap (`GossipDef.cpp:199-201`) and far under the
-32-row fatal `ASSERT` (`GossipDef.cpp:43`). The draw is cached per player for the life of one menu
-instance, so a click on a stale menu reopens the picker instead of acting on a guid that is no longer
-offered.
+32-row fatal `ASSERT` (`GossipDef.cpp:43`). The selection is cached per player for the life of one
+pool cycle and the rows shown are rebuilt from it, so a click on a stale menu reopens the picker
+instead of acting on a guid that is no longer offered.
 
 ### Pool and featured draw
 
@@ -267,21 +267,29 @@ it is still empty — a boot can finish before playerbots has created the pool c
 does **not** read `sRandomPlayerbotMgr.addclassCache`: that cache is only filled when
 `Playerbots.AddClassCommand` is on, and the installer turns it off (D5).
 
-Each picker instance takes a random count in `[Pawn.FeaturedMin, Pawn.FeaturedMax]` of candidates,
+A player's **selection** is a random count in `[Pawn.FeaturedMin, Pawn.FeaturedMax]` of candidates,
 dealt off a per-player **deck** rather than sampled: the eligible pool is shuffled with Fisher-Yates
 (SplitMix64 seeded from the player and a per-draw counter, so the global RNG is untouched), the next
-rows are handed out, and the cursor carries across visits until the deck is exhausted — then it is
-reshuffled, with the previous visit's faces dealt last so the reshuffle cannot put a repeat in the
-very next visit, and with a visit never straddling a reshuffle (the skipped tail goes into the next
-shuffle). No face repeats until the whole deck has been dealt, and a pool refresh reshuffles every
-deck. Same team only, the same death-knight level gate the addclass command applies, and no candidate
-that is already in this player's party or online; a dealt counter that stopped being a candidate is
-skipped when it comes up. The result is kept for the menu instance so paging and dismissing do not
-move rows; recruiting removes that row; reopening deals again. A pawn's level and spec stay a pure
-function of the two guids, so the same face keeps the same level and spec however often it comes
-round. The installer widens the pool to 15 accounts (about 150 characters, roughly 75 per team):
-12 dealt from 75 is about six visits before a repeat, where 12 sampled from 75 repeats two faces on
-every visit.
+rows are handed out, and the cursor carries across cycles until the deck is exhausted — then it is
+reshuffled, with the previous selection's faces dealt last so the reshuffle cannot put a repeat in
+the very next selection, and with a selection never straddling a reshuffle (the skipped tail goes
+into the next shuffle). No face repeats until the whole deck has been dealt, and a pool refresh
+reshuffles every deck.
+
+The selection is dealt once per pool cycle and **not** per visit: the first open after a refresh (or
+a restart) deals it, and every open until the next refresh shows the same pawns at the same spec, so
+the picker cannot be rerolled by walking out of the inn and back in. Recruiting a pawn takes it out
+of the selection; dismissing it does not put it back; a selection with nothing eligible left on it
+(all recruited, logged in or dropped from the pool) is dealt again, because a menu with no rows
+cannot be browsed.
+
+Same team only, the same death-knight level gate the addclass command applies, and no candidate that
+is already in this player's party or online; a dealt counter that stopped being a candidate is
+skipped when it comes up. The rows are rebuilt from the selection on every open, so level, gear ratio
+and hire fee follow the player's own level; spec stays a pure function of the two guids, so the same
+face keeps the same spec however often it comes round. The installer widens the pool to 15 accounts
+(about 150 characters, roughly 75 per team): 12 dealt from 75 is about six cycles before a repeat,
+where 12 sampled from 75 repeats two faces on every visit.
 
 ### Loot (D4)
 
@@ -335,7 +343,7 @@ cross-checked before the 40-minute build rather than after it. The in-game steps
 
 1. Talk to an innkeeper: the line sits beside "make this inn your home" and the bind option still
    works. The page lists 10-15 pawns within ±2 levels of the player, each with class, spec and
-   level; closing and reopening shows a different subset, and the same face keeps its level and spec.
+   level; closing and reopening shows the same pawns, and the same face keeps its level and spec.
 2. Recruit one: it appears in the party, at the level the menu showed, with the spec the menu named.
 3. Recruit a second; a third recruit is refused and the message names the two exits.
 4. `.playerbots bot addclass warrior` as a non-GM is refused.

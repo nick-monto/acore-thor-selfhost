@@ -271,26 +271,29 @@ The pool is every offline character on a type-2 AddClass account — about 150 w
 startup, on a random 40-60 minute timer, and on demand if it is still empty (a boot can finish
 before playerbots has created the pool characters).
 
-Each time the picker opens it takes a random count in `[FeaturedMin, FeaturedMax]` (10-15) from the
-pool, restricted to the player's team and to candidates that are neither in the party nor online.
+Each player gets a **selection**: a random count in `[FeaturedMin, FeaturedMax]` (10-15) of the
+pool, restricted to the player's team and to candidates that are neither in the party nor online. It
+is dealt the first time the player opens the picker after a pool refresh or a server restart, and
+kept from then on — opening the picker again, at any innkeeper, shows the same pawns at the same spec
+until the pool is re-read. Recruiting one takes it out of the selection for good; dismissing it does
+not put it back.
 
-It **deals rather than samples**: `PawnMgr::DrawOffers` keeps a per-player deck — the eligible pool in
-a shuffled order, with a cursor — and hands out the next rows off the top. No face comes round again
-until the deck has been dealt out; a pool refresh reshuffles it, and the deck is dropped at logout.
+It **deals rather than samples**: `PawnMgr::SelectionFor` keeps a per-player deck — the eligible pool
+in a shuffled order, with a cursor — and takes the selection off the top when it is dealt. No face
+comes round again until the deck has been dealt out; a pool refresh reshuffles it.
 
-Two rules keep visits from blurring together. A visit never straddles a reshuffle — if the deck
-cannot cover the whole visit it is reshuffled first, and the tail it skips goes back into the next
-shuffle. And the faces the previous visit showed are dealt *last* in a new order, so the one moment a
-repeat could land in the very next visit does not. A dealt counter that has stopped being a candidate
-(recruited, logged in, dropped by a refresh) is skipped when it comes up, so the deck heals itself.
+Two rules keep cycles from blurring together. A selection never straddles a reshuffle — if the deck
+cannot cover the whole selection it is reshuffled first, and the tail it skips goes back into the
+next shuffle. And the faces of the previous selection are dealt *last* in a new order, so the one
+moment a repeat could land in the very next selection does not. A dealt counter that has stopped
+being a candidate (recruited, logged in, dropped by a refresh) is skipped when it comes up, so the
+deck heals itself.
 
-On a pool of ~75 eligible characters that is a face coming back after about six visits, where a
-straight sample of 12 from 75 repeats two or three faces on every visit.
+On a pool of ~75 eligible characters that is a face coming back after about six pool cycles.
 
-The result is kept for the menu instance, so paging and dismissing do not move rows under the
-pointer; recruiting removes the row; closing and reopening deals again. Level, spec, gear ratio,
-temperament and voice stay a pure function of the two guids, so a face you have seen keeps them
-whenever it comes back.
+The selection is the crowd, not the numbers: the rows are rebuilt from it on every open, so level,
+gear ratio and hire fee follow the player's own level. Spec, temperament and voice stay a pure
+function of the two guids, so a face you have seen keeps them whenever it comes back.
 
 ## Why there is no SQL
 

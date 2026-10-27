@@ -40,14 +40,15 @@ public:
     [[nodiscard]] PawnConfig const& Config() const { return _config; }
     [[nodiscard]] bool IsPawn(ObjectGuid guid) const;
 
-    // One picker instance: a fresh random subsample of the pool, between
-    // FeaturedMin and FeaturedMax rows. Two calls return different rows, so the
-    // list is drawn once per menu and kept for as long as the player browses it.
-    [[nodiscard]] std::vector<PawnOffer> DrawOffers(Player* player);
-
-    // Drops a player's deal order. Called on logout with the picker's own cache,
-    // so a character that is never seen again leaves nothing behind.
-    void ForgetPlayer(ObjectGuid player);
+    // The picker's rows for this player: the selection dealt for the current pool
+    // cycle, between FeaturedMin and FeaturedMax rows. It is dealt the first time
+    // the player opens the picker after a pool refresh or a restart and kept
+    // afterwards, so every open shows the same crowd until RefreshPool() clears it.
+    // The rows themselves are rebuilt from the selection on each call, so a pawn's
+    // level, gear and fee follow the player's own level instead of freezing at the
+    // level they were first shown at. A selection with nothing still eligible left
+    // on it is dealt again, because a menu with no rows cannot be browsed.
+    [[nodiscard]] std::vector<PawnOffer> SelectionFor(Player* player);
     [[nodiscard]] std::vector<PawnRosterRow> ListParty(ObjectGuid owner) const;
     [[nodiscard]] uint32 CountParty(ObjectGuid owner) const;
 
@@ -80,17 +81,18 @@ private:
     void Upsert(PawnRosterRow const& row);
 
     // A player's deck: the eligible pool in a random deal order, dealt without
-    // replacement, so the same crowd is not on offer twice - no face comes round
-    // until the deck has been dealt out, and the last visit's faces are dealt last
-    // after a reshuffle, so none of them lands in the next visit. Counters, not
-    // pointers: the pool is re-read under it, and an entry that is no longer a
-    // candidate is skipped when it comes up.
+    // replacement. It is dealt when the player's selection is dealt - once per
+    // pool cycle - so no face comes round until the deck has been dealt out, and
+    // the faces of the previous selection are dealt last after a reshuffle, so
+    // none of them lands in the very next selection. Counters, not pointers: the
+    // pool is re-read under it, and an entry that is no longer a candidate is
+    // skipped when it comes up.
     struct PawnDeck
     {
         std::vector<uint32> Order;
         size_t              Cursor = 0;
-        // The faces the last visit showed. A reshuffle deals them last, so the
-        // one moment a repeat could land in the very next visit does not.
+        // The faces the last selection showed. A reshuffle deals them last, so
+        // the one moment a repeat could land in the very next selection does not.
         std::vector<uint32> Recent;
     };
 
@@ -102,6 +104,10 @@ private:
     std::unordered_set<uint32>                _pendingPawns;   // bot counters
     std::unordered_set<uint32>                _pendingOwners;  // player counters
     std::unordered_map<uint32, PawnDeck>      _decks;          // player counter -> deal order
+    // The pawns on offer to a player for the current pool cycle, in the order the
+    // deck dealt them. Cleared with the decks when the pool is re-read, and never
+    // by a menu: opening the picker again shows the same selection.
+    std::unordered_map<uint32, std::vector<uint32>> _selections;   // player counter -> bot counters
 };
 
 #define sPawnMgr PawnMgr::instance()

@@ -44,11 +44,12 @@ public:
 
     void OnPlayerLogout(Player* player) override
     {
-        // The picker caches one small entry per player and the pool keeps one deal
-        // order per player; drop both rather than keep them for every character
-        // that ever talked to an innkeeper.
+        // The picker caches one small entry per player for the menu they are
+        // browsing; drop it rather than keep it for every character that ever
+        // talked to an innkeeper. The selection and the deal order are not
+        // dropped: they belong to the pool cycle, and the refresh that ends the
+        // cycle clears both, so a relogin finds the same crowd at the inn.
         PawnMenuForgetPlayer(player->GetGUID());
-        sPawnMgr.ForgetPlayer(player->GetGUID());
     }
 
     [[nodiscard]] bool OnPlayerCanLearnSpell(Player* player, uint32 spellId) override
