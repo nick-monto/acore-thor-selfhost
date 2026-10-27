@@ -106,7 +106,15 @@ right one. Play testing proved it twice: the row assigned to L3 made the launche
 *Left click* run the action, moving the same row to R3 moved it to *Right click*, and neither stick
 click did anything, because their presses are consumed by the profile and never reach ConsolePort.
 
-So: leave ConsolePort's L3 and R3 rows empty. The pad's own click buttons are the mouse.
+That is not fixable from ConsolePort's side: `CheckCalibration` (`Config/Splash.lua:36`) explicitly
+skips the stick clicks - `isDynamicKeyAllowed = not button:match("CP_T_.3")` - so they are never
+offered for calibration and can never become real buttons; its own help says to assign each stick
+click to the matching mouse button (`ConsolePortHelp/Pages/Controller.lua:83`). L3 and R3 are the
+mouse buttons, permanently.
+
+So: leave ConsolePort's L3 and R3 rows empty. The pad's own click buttons are the mouse. To give a
+stick click an arbitrary action, bind it to a key in the launcher's controller profile and bind that
+key in the client's Key Bindings frame - a client binding, not a `/cp` action.
 
 ### What the two stick clicks do
 
