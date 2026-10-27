@@ -13,8 +13,11 @@
  *     it: factory initialisation, trainer, level-up maintenance or a quest.
  *   * PlayerScript::OnPlayerLogout drops the picker's per-player cache entry.
  *
- * The picker itself lives in PawnInnkeeper.cpp: a CreatureScript, so the line is
- * on every innkeeper without a template row, a spawn or a ScriptName.
+ * The picker itself lives in PawnInnkeeper.cpp: a CreatureAI handed out by an
+ * AllCreatureScript, so the line is on every innkeeper without a template row, a
+ * spawn or a ScriptName. It cannot be a named CreatureScript: those are
+ * database-bound and gossip is dispatched by the creature's own script id, and an
+ * innkeeper's is the core's npc_innkeeper.
  *
  * Released under GNU GPL v2 or (at your option) any later version.
  */
@@ -26,7 +29,7 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 
-void AddPawnInnkeeperScript();
+void AddPawnAllCreatureScript();
 void PawnMenuForgetPlayer(ObjectGuid player);
 
 class PawnPlayerScript : public PlayerScript
@@ -59,15 +62,28 @@ class PawnWorldScript : public WorldScript
 public:
     PawnWorldScript() : WorldScript("PawnWorldScript") { }
 
-    void OnAfterConfigLoad(bool /*reload*/) override
+    void OnAfterConfigLoad(bool reload) override
     {
         sPawnMgr.LoadConfig();
-        sPawnArchetype.Load();
-        sPawnPersonality.Load();
+
+        // The archetype table is built from the spell store, and the first config pass runs
+        // before it exists: World::SetInitialWorldSettings calls OnAfterConfigLoad at
+        // World.cpp:302 and sSpellMgr->LoadSpellInfoStore at World.cpp:407, so a build here
+        // finds an empty store and every blacklist and variant name fails to resolve. The
+        // first build is therefore in OnStartup, which worldserver calls once the world is
+        // up (Main.cpp:398). A reload only happens on a running server, where the store is
+        // already loaded.
+        if (reload)
+        {
+            sPawnArchetype.Load();
+            sPawnPersonality.Load();
+        }
     }
 
     void OnStartup() override
     {
+        sPawnArchetype.Load();
+        sPawnPersonality.Load();
         sPawnMgr.LoadRoster();
     }
 
@@ -81,5 +97,5 @@ void AddPawnScripts()
 {
     new PawnPlayerScript();
     new PawnWorldScript();
-    AddPawnInnkeeperScript();
+    AddPawnAllCreatureScript();
 }

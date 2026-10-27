@@ -388,8 +388,11 @@ Pawn.Voice = Talkative: +emote | Quiet: -emote
 # combat, which a death knight, mage or priest already has from its class
 # strategy, so those tokens are dead on those classes.
 #
-# Same class ids and spec numbers as the blacklist and variant blocks. A spec
-# with no block, or an empty one, keeps the untouched defaults.
+# Same class ids and spec numbers as the blacklist and variant blocks. The loader
+# reads the keys that exist rather than asking for every class and spec in turn,
+# so a spec with no `<class>.<spec>` key has no temperament at all and nothing is
+# logged for it - the class x spec grid is mostly undefined by design. An empty
+# block is dropped the same way.
 #
 # The profile is applied on top of the strategy list playerbots replayed from the
 # pawn's last logout, not on the role defaults, so the module first undoes the

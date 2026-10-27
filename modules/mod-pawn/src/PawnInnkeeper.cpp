@@ -1,25 +1,45 @@
 /*
  * mod-pawn: the picker, on the innkeepers.
  *
- * Every innkeeper in the world carries one extra gossip line. A CreatureScript
- * hook runs for every creature, so no template row, no ScriptName and no spawn
- * is involved: the line exists wherever an innkeeper does, and nowhere else.
+ * Every innkeeper in the world carries one extra gossip line. The picker is a
+ * CreatureAI, handed out by an AllCreatureScript to innkeepers that have no AI
+ * of their own. An AllCreatureScript is code-only: it registers through
+ * ScriptRegistry<AllCreatureScript> without ever being matched against
+ * script_name (src/server/game/Scripting/ScriptDefines/AllCreatureScript.cpp:84),
+ * and ScriptMgr::GetCreatureAI walks that registry directly
+ * (src/server/game/Scripting/ScriptDefines/CreatureScript.cpp:156-168). So no
+ * template row, no spawn and no ScriptName is involved: the line exists wherever
+ * an innkeeper does, and nowhere else.
  *
- * Two details decide the shape of this file.
+ * A named CreatureScript cannot be used here. CreatureScript::IsDatabaseBound()
+ * is true unconditionally
+ * (src/server/game/Scripting/ScriptDefines/CreatureScript.h:30), so the manager
+ * looks the name up in script_name, logs "Script named ... is not assigned in
+ * the database" when there is no row, and registers nothing
+ * (src/server/game/Scripting/ScriptMgr.h:817-885). And even with a row, gossip is
+ * dispatched by the creature's own script id, GetScriptById(creature->GetScriptId())
+ * (src/server/game/Scripting/ScriptDefines/CreatureScript.cpp:24-41); an
+ * innkeeper's creature_template.ScriptName is the core's npc_innkeeper, so a
+ * module script under any other name is never reached for an innkeeper.
  *
- * Returning false from OnGossipHello leaves the innkeeper's own menu alone, so
- * that is what every creature except an innkeeper gets
- * (src/server/game/Handlers/NPCHandler.cpp:188-193). For an innkeeper the menu
- * is built here instead - Player::PrepareGossipMenu with the creature's own menu
- * id, so "make this inn your home" and any quest rows survive, plus our line -
- * and Player::SendPreparedGossip sends it.
+ * Two details decide the shape of the rest of this file.
  *
- * Returning false from OnGossipSelect hands the click back to the core, which is
- * how the innkeeper's own options keep working
- * (src/server/game/Handlers/MiscHandler.cpp:201-203). The action codes below
- * therefore start at 1000: a database gossip row's action is its OptionType,
- * and GOSSIP_OPTION_MAX is 21 (src/server/game/Entities/Creature/GossipDef.h:33-57),
- * so a range based at 1 would swallow the bind option.
+ * The menu is the core's, not ours: NPCHandler.cpp:188-193 calls
+ * Player::PrepareGossipMenu with the creature's own menu id - so "make this inn
+ * your home" and any quest rows survive - and Player::SendPreparedGossip, and
+ * only then runs UnitAI::sGossipHello. So the hello below appends its one line to
+ * that prepared menu and re-sends it rather than building a menu of its own.
+ *
+ * The gossip select hands the AI the gossip list index, not the action, so the
+ * action is read back with
+ * Player::PlayerTalkClass->GetGossipOptionAction - the same call the core makes
+ * for its own dispatch (MiscHandler.cpp:199). An option outside our range is
+ * ignored here, and the core still runs the innkeeper's own script afterwards
+ * (MiscHandler.cpp:199-200), which is how bind and quests keep working. The
+ * action codes below therefore start at 1000: a database gossip row's action is
+ * its OptionType, and GOSSIP_OPTION_MAX is 21
+ * (src/server/game/Entities/Creature/GossipDef.h:33-57), so a range based at 1
+ * would swallow the bind option.
  *
  * Pages carry at most Pawn.OfferedPerPage offers plus the party rows and two
  * navigation rows, because the gossip packet carries at most 16 options
@@ -34,6 +54,7 @@
 #include "Chat.h"
 #include "CharacterCache.h"
 #include "Creature.h"
+#include "PassiveAI.h"
 #include "Player.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
@@ -49,8 +70,9 @@
 namespace
 {
     // Action code ranges. The action travels through the gossip menu untouched
-    // and comes back in OnGossipSelect, so it is the only state the click needs
-    // beyond the per-player cache below. Both indexes are page-local: a page
+    // and comes back as PlayerTalkClass->GetGossipOptionAction(gossipListId) in
+    // sGossipSelect, so it is the only state the click needs beyond the
+    // per-player cache below. Both indexes are page-local: a page
     // holds at most 16 rows, so a page-local index always fits its range however
     // many candidates a draw has.
     constexpr uint32 PAWN_ACTION_OPEN    = 1000;
@@ -122,66 +144,67 @@ namespace
     }
 }
 
-class PawnInnkeeperScript : public CreatureScript
+class PawnInnkeeperAI : public NullCreatureAI
 {
 public:
-    PawnInnkeeperScript() : CreatureScript("npc_pawn_innkeeper") { }
+    explicit PawnInnkeeperAI(Creature* creature) : NullCreatureAI(creature) { }
 
-    [[nodiscard]] bool OnGossipHello(Player* player, Creature* creature) override
+    void sGossipHello(Player* player) override
     {
-        if (!sPawnMgr.Config().Enabled || !creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER))
-            return false;   // not ours: let the core send whatever this creature has
+        if (!sPawnMgr.Config().Enabled || !me->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER))
+            return;   // not ours: let the core send whatever this creature has
 
-        player->PrepareGossipMenu(creature, creature->GetGossipMenuId(), true);
-
-        // One line, on a menu the creature already has. A menu that fills the client's 16 visible
-        // rows gets no line: a 17th is not shown anyway, and adding past GOSSIP_MAX_MENU_ITEMS
-        // aborts the server with an ASSERT rather than clamping (GossipDef.cpp:43).
+        // One line, on the menu the core has already prepared and sent (NPCHandler.cpp:188-193);
+        // building it again here with PrepareGossipMenu would drop that send. A menu that fills the
+        // client's 16 visible rows gets no line: a 17th is not shown anyway, and adding past
+        // GOSSIP_MAX_MENU_ITEMS aborts the server with an ASSERT rather than clamping (GossipDef.cpp:43).
         if (player->PlayerTalkClass->GetGossipMenu().GetMenuItemCount() < 15)
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Recruit companions", GOSSIP_SENDER_MAIN, PAWN_ACTION_OPEN);
 
-        player->SendPreparedGossip(creature);
-        return true;
+        player->SendPreparedGossip(me);
     }
 
-    [[nodiscard]] bool OnGossipSelect(Player* player, Creature* creature, uint32 /*sender*/, uint32 action) override
+    void sGossipSelect(Player* player, uint32 /*sender*/, uint32 action) override
     {
-        if (action < PAWN_ACTION_OPEN || action > PAWN_ACTION_PREV)
-            return false;   // the innkeeper's own options: bind, quests, vendor
+        // The AI is handed the gossip list index, not the action, so the action is read back the
+        // way the core does it for its own dispatch (MiscHandler.cpp:199).
+        uint32 const option = player->PlayerTalkClass->GetGossipOptionAction(action);
+        if (option < PAWN_ACTION_OPEN || option > PAWN_ACTION_PREV)
+            return;   // the innkeeper's own options: bind, quests, vendor - the core runs them
 
         auto it = g_menus.find(player->GetGUID().GetCounter());
         if (it == g_menus.end())
         {
-            Open(player, creature);
-            return true;
+            Open(player, me);
+            return;
         }
 
         PawnMenuState& state = it->second;
 
-        if (action == PAWN_ACTION_OPEN)
+        if (option == PAWN_ACTION_OPEN)
         {
-            Open(player, creature);
-            return true;
+            Open(player, me);
+            return;
         }
 
-        if (action == PAWN_ACTION_NEXT)
+        if (option == PAWN_ACTION_NEXT)
         {
-            ShowMenu(player, creature, uint8(state.Page + 1));
-            return true;
+            ShowMenu(player, me, uint8(state.Page + 1));
+            return;
         }
 
-        if (action == PAWN_ACTION_PREV)
+        if (option == PAWN_ACTION_PREV)
         {
-            ShowMenu(player, creature, uint8(state.Page ? state.Page - 1 : 0));
-            return true;
+            ShowMenu(player, me, uint8(state.Page ? state.Page - 1 : 0));
+            return;
         }
 
-        if (action >= PAWN_ACTION_RECRUIT && action < PAWN_ACTION_RECRUIT + PAWN_ACTION_SPAN)
+        if (option >= PAWN_ACTION_RECRUIT && option < PAWN_ACTION_RECRUIT + PAWN_ACTION_SPAN)
         {
-            // The action carries the index within the page, not within the draw:
+            // The option carries the index within the page, not within the draw:
             // a draw of several hundred would otherwise run past the dismissal
             // range and collide with the page actions.
-            uint32 const index = state.First + (action - PAWN_ACTION_RECRUIT);
+            uint32 const index = state.First + (option - PAWN_ACTION_RECRUIT);
             if (index < state.Offers.size())
             {
                 PawnOffer const offer = state.Offers[index];
@@ -192,19 +215,18 @@ public:
 
                 Notify(player, message);
             }
-            ShowMenu(player, creature, state.Page);
-            return true;
+            ShowMenu(player, me, state.Page);
+            return;
         }
 
-        uint32 const index = action - PAWN_ACTION_DISMISS;
+        uint32 const index = option - PAWN_ACTION_DISMISS;
         if (index < state.Party.size())
         {
             std::string message;
             sPawnMgr.Dismiss(player, state.Party[index].Bot, message);
             Notify(player, message);
         }
-        ShowMenu(player, creature, state.Page);
-        return true;
+        ShowMenu(player, me, state.Page);
     }
 
 private:
@@ -357,9 +379,26 @@ private:
     }
 };
 
-void AddPawnInnkeeperScript()
+// Handed the picker only where it belongs: an innkeeper with no AI of its own. A
+// null return leaves the core's own AIName selection alone, so a creature with a
+// real AI keeps it.
+class PawnAllCreatureScript : public AllCreatureScript
 {
-    new PawnInnkeeperScript();
+public:
+    PawnAllCreatureScript() : AllCreatureScript("PawnAllCreatureScript") { }
+
+    [[nodiscard]] CreatureAI* GetCreatureAI(Creature* creature) const override
+    {
+        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER) || !creature->GetCreatureTemplate()->AIName.empty())
+            return nullptr;
+
+        return new PawnInnkeeperAI(creature);
+    }
+};
+
+void AddPawnAllCreatureScript()
+{
+    new PawnAllCreatureScript();
 }
 
 void PawnMenuForgetPlayer(ObjectGuid player)

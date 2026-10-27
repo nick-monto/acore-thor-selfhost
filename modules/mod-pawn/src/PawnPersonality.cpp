@@ -71,6 +71,26 @@ namespace
         return out;
     }
 
+    // One decimal field of a Pawn.Temperament.<class>.<spec> key. A class or spec
+    // number is at most two digits, so a field that is not all digits - or is long
+    // enough to be a typo rather than a number - is refused instead of parsed.
+    bool ParseNumber(std::string const& text, uint32& out)
+    {
+        if (text.empty() || text.size() > 3)
+            return false;
+
+        uint32 value = 0;
+        for (unsigned char c : text)
+        {
+            if (!std::isdigit(c))
+                return false;
+            value = value * 10 + uint32(c - '0');
+        }
+
+        out = value;
+        return true;
+    }
+
     // One profile of a pool: "Label: +a, -b". Anything malformed is dropped here
     // rather than at apply time, because Engine::addStrategy silently ignores an
     // unknown name, so a typo in the configuration would otherwise do nothing and
@@ -253,34 +273,65 @@ void PawnPersonality::Load()
 
     _voices = ParsePool("Pawn.Voice", sConfigMgr->GetOption<std::string>("Pawn.Voice", "Talkative: +emote | Quiet: -emote"));
 
+    // The keys the configuration defines, enumerated rather than probed: asking for
+    // a key the conf does not define is a missing-option warning, and the class x
+    // spec grid is mostly undefined by design.
+    //
     // Only the keys that are actually set become pools: an empty value means the
     // class/spec has no temperament at all, which is what keeps a spec the
     // configuration has not thought about untouched rather than crowded with
     // random traits.
-    uint32 specs = 0;
-    for (uint8 const cls : kClasses)
+    std::string const prefix = "Pawn.Temperament.";
+    uint32 keysFound = 0;
+    for (std::string const& key : sConfigMgr->GetKeysByString(prefix))
     {
-        for (uint8 spec = 0; spec < kMaxSpecs; ++spec)
-        {
-            ++specs;
-            std::string const key = "Pawn.Temperament." + std::to_string(cls) + '.' + std::to_string(spec);
-            std::string const value = sConfigMgr->GetOption<std::string>(key, "");
-            if (value.empty())
-                continue;
+        ++keysFound;
 
-            // A block that survived parsing with no profile left is not a pool:
-            // storing it would count towards TemperamentPools() and read as a
-            // temperament the class does not actually have.
-            std::vector<PawnProfile> pool = ParsePool(key, value);
-            if (!pool.empty())
-                _temperaments[Key(cls, spec)] = pool;
+        std::vector<std::string> const parts = Split(key.substr(prefix.size()), '.');
+        uint32 cls = 0;
+        uint32 spec = 0;
+
+        // A key that is not exactly <class>.<spec> is named and skipped, never
+        // ignored: an ignored typo would read as "that spec has no temperament".
+        if (parts.size() != 2 || !ParseNumber(parts[0], cls) || !ParseNumber(parts[1], spec))
+        {
+            LOG_WARN("module", "Pawn: {}: not <class>.<spec>; skipped", key);
+            continue;
         }
+
+        // The checker validates the shipped conf, but nothing validates a
+        // hand-edited conf at boot, so a class or spec this module does not cover is
+        // refused here rather than kept as a pool no pawn can ever draw.
+        bool knownClass = false;
+        for (uint8 const candidate : kClasses)
+            if (uint32(candidate) == cls)
+                knownClass = true;
+
+        if (!knownClass || spec >= kMaxSpecs)
+        {
+            LOG_WARN("module", "Pawn: {}: class {} or spec {} is outside the classes and specs this module covers; skipped",
+                     key, cls, spec);
+            continue;
+        }
+
+        // The key came out of the option map, so it exists: the default is
+        // unreachable and there is nothing missing to log.
+        std::string const value = sConfigMgr->GetOption<std::string>(key, "", false);
+        if (value.empty())
+            continue;
+
+        // A block that survived parsing with no profile left is not a pool:
+        // storing it would count towards TemperamentPools() and read as a
+        // temperament the class does not actually have.
+        std::vector<PawnProfile> pool = ParsePool(key, value);
+        if (!pool.empty())
+            _temperaments[Key(uint8(cls), uint8(spec))] = pool;
     }
 
     // _temperaments only holds non-empty pools, so the two counts together read
-    // as "how much of the grid is populated".
-    LOG_INFO("module", "Pawn: personality: {} temperament pools over {} specs, {} voices",
-             _temperaments.size(), specs, _voices.size());
+    // as "how much of the enumerated keys is populated".
+    LOG_INFO("module", "Pawn: personality: {} temperament pools over {} temperament keys, {} voices",
+             _temperaments.size(), keysFound, _voices.size());
 }
 
 PawnProfile const* PawnPersonality::Temperament(ObjectGuid owner, ObjectGuid bot, uint8 cls, uint8 spec) const

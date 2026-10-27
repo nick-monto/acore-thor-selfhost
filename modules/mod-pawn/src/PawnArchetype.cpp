@@ -68,6 +68,58 @@ namespace
         return s;
     }
 
+    // One decimal field of a <class>.<spec> grid key. A class or spec number is at
+    // most two digits, so a field that is not all digits - or is long enough to be
+    // a typo rather than a number - is refused instead of parsed.
+    bool ParseNumber(std::string const& text, uint32& out)
+    {
+        if (text.empty() || text.size() > 3)
+            return false;
+
+        uint32 value = 0;
+        for (unsigned char c : text)
+        {
+            if (!std::isdigit(c))
+                return false;
+            value = value * 10 + uint32(c - '0');
+        }
+
+        out = value;
+        return true;
+    }
+
+    // One key of a configuration grid: the keys are enumerated from the conf
+    // rather than probed, so a malformed key is named and skipped instead of
+    // reading as "that spec is unconfigured".
+    bool ParseGridKey(std::string const& prefix, std::string const& key, uint32& cls, uint32& spec)
+    {
+        std::string const rest = key.substr(prefix.size());
+        size_t const dot = rest.find('.');
+        if (dot == std::string::npos || rest.find('.', dot + 1) != std::string::npos
+            || !ParseNumber(rest.substr(0, dot), cls) || !ParseNumber(rest.substr(dot + 1), spec))
+        {
+            LOG_WARN("module", "Pawn: {}: not <class>.<spec>; skipped", key);
+            return false;
+        }
+
+        // The checker validates the shipped conf, but nothing validates a
+        // hand-edited conf at boot, so a class or spec this module does not cover is
+        // refused here rather than kept as a table entry no pawn can reach.
+        bool knownClass = false;
+        for (uint8 const candidate : kClasses)
+            if (uint32(candidate) == cls)
+                knownClass = true;
+
+        if (!knownClass || spec >= kMaxSpecs)
+        {
+            LOG_WARN("module", "Pawn: {}: class {} or spec {} is outside the classes and specs this module covers; skipped",
+                     key, cls, spec);
+            return false;
+        }
+
+        return true;
+    }
+
     // The spec names are words ("unholy pve", "double aura blood"), so the role is read
     // off whole words: a substring test reads "unholy" as "holy" and calls a death
     // knight a healer.
@@ -116,97 +168,113 @@ void PawnArchetype::Load()
     _specNames.clear();
     _pveSpecs.clear();
 
-    for (uint8 cls : kClasses)
+    // The keys the configuration defines, enumerated rather than probed: asking
+    // for a key the conf does not define is a missing-option warning, and the
+    // class x spec grids define only the specs the configuration ships.
+    //
+    // Read from the config manager rather than sPlayerbotAIConfig: hook order
+    // between modules is not guaranteed, so at this point the playerbots config
+    // struct may not have parsed its spec table yet. The key is the same one that
+    // table is built from.
+    std::string const specPrefix = "Playerbots.PremadeSpecName.";
+    uint32 pveSpecs = 0;
+    for (std::string const& key : sConfigMgr->GetKeysByString(specPrefix))
     {
-        for (uint8 spec = 0; spec < kMaxSpecs; ++spec)
+        uint32 cls = 0;
+        uint32 spec = 0;
+        if (!ParseGridKey(specPrefix, key, cls, spec))
+            continue;
+
+        // The key came out of the option map, so it exists: the default is
+        // unreachable and there is nothing missing to log.
+        std::string const name = sConfigMgr->GetOption<std::string>(key, "", false);
+        if (name.empty())
+            continue;
+
+        _specNames[Key(uint8(cls), uint8(spec))] = name;
+
+        // "arms pve", "bear pve": the PvE specs are the ones the picker may
+        // offer. The pvp variants are a different archetype and stay out of
+        // the roster.
+        std::string const lower = Lower(name);
+        if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, " pve") == 0)
         {
-            // Read from the config manager rather than sPlayerbotAIConfig: hook
-            // order between modules is not guaranteed, so at this point the
-            // playerbots config struct may not have parsed its spec table yet.
-            // The key is the same one that table is built from.
-            std::string const key = "Playerbots.PremadeSpecName." + std::to_string(cls) + "." + std::to_string(spec);
-            std::string const name = sConfigMgr->GetOption<std::string>(key, "");
-            if (name.empty())
-                continue;
-
-            _specNames[Key(cls, spec)] = name;
-
-            // "arms pve", "bear pve": the PvE specs are the ones the picker may
-            // offer. The pvp variants are a different archetype and stay out of
-            // the roster.
-            std::string const lower = Lower(name);
-            if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, " pve") == 0)
-                _pveSpecs[cls].push_back(spec);
+            _pveSpecs[uint8(cls)].push_back(uint8(spec));
+            ++pveSpecs;
         }
     }
 
     auto const nameIndex = BuildNameIndex();
-    uint32 resolved = 0;
+    uint32 blacklisted = 0;
     uint32 missing = 0;
 
-    for (uint8 cls : kClasses)
+    std::string const blacklistPrefix = "Pawn.Blacklist.";
+    for (std::string const& key : sConfigMgr->GetKeysByString(blacklistPrefix))
     {
-        for (uint8 spec = 0; spec < kMaxSpecs; ++spec)
+        uint32 cls = 0;
+        uint32 spec = 0;
+        if (!ParseGridKey(blacklistPrefix, key, cls, spec))
+            continue;
+
+        std::string const list = sConfigMgr->GetOption<std::string>(key, "", false);
+        if (list.empty())
+            continue;
+
+        std::vector<uint32>& ids = _forbidden[Key(uint8(cls), uint8(spec))];
+        for (std::string const& name : SplitNames(list))
         {
-            std::string const key = "Pawn.Blacklist." + std::to_string(cls) + "." + std::to_string(spec);
-            std::string const list = sConfigMgr->GetOption<std::string>(key, "");
-            if (list.empty())
-                continue;
-
-            std::vector<uint32>& ids = _forbidden[Key(cls, spec)];
-            for (std::string const& name : SplitNames(list))
+            auto it = nameIndex.find(name);
+            if (it == nameIndex.end())
             {
-                auto it = nameIndex.find(name);
-                if (it == nameIndex.end())
-                {
-                    ++missing;
-                    LOG_ERROR("module", "Pawn: blacklist {}.{}: no spell is named '{}'; that restriction does nothing",
-                              uint32(cls), uint32(spec), name);
-                    continue;
-                }
-
-                ids.insert(ids.end(), it->second.begin(), it->second.end());
-                resolved += uint32(it->second.size());
+                ++missing;
+                LOG_ERROR("module", "Pawn: blacklist {}.{}: no spell is named '{}'; that restriction does nothing",
+                          cls, spec, name);
+                continue;
             }
 
-            std::sort(ids.begin(), ids.end());
-            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+            ids.insert(ids.end(), it->second.begin(), it->second.end());
         }
+
+        std::sort(ids.begin(), ids.end());
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        blacklisted += uint32(ids.size());
     }
 
     // The variant pools: abilities a pawn of the spec may or may not arrive with,
     // kept as name + every id it resolves to, because the picker names them and
     // the learn gate has to match the ids.
     uint32 variantNames = 0;
-    for (uint8 cls : kClasses)
+    std::string const variantPrefix = "Pawn.Variant.";
+    for (std::string const& key : sConfigMgr->GetKeysByString(variantPrefix))
     {
-        for (uint8 spec = 0; spec < kMaxSpecs; ++spec)
+        uint32 cls = 0;
+        uint32 spec = 0;
+        if (!ParseGridKey(variantPrefix, key, cls, spec))
+            continue;
+
+        std::string const list = sConfigMgr->GetOption<std::string>(key, "", false);
+        if (list.empty())
+            continue;
+
+        std::vector<PawnVariantSpell>& pool = _variants[Key(uint8(cls), uint8(spec))];
+        for (std::string const& name : SplitNames(list))
         {
-            std::string const key = "Pawn.Variant." + std::to_string(cls) + "." + std::to_string(spec);
-            std::string const list = sConfigMgr->GetOption<std::string>(key, "");
-            if (list.empty())
-                continue;
-
-            std::vector<PawnVariantSpell>& pool = _variants[Key(cls, spec)];
-            for (std::string const& name : SplitNames(list))
+            auto it = nameIndex.find(name);
+            if (it == nameIndex.end())
             {
-                auto it = nameIndex.find(name);
-                if (it == nameIndex.end())
-                {
-                    ++missing;
-                    LOG_ERROR("module", "Pawn: variant {}.{}: no spell is named '{}'; that pawn variation does nothing",
-                              uint32(cls), uint32(spec), name);
-                    continue;
-                }
-
-                pool.push_back(PawnVariantSpell{name, it->second});
-                ++variantNames;
+                ++missing;
+                LOG_ERROR("module", "Pawn: variant {}.{}: no spell is named '{}'; that pawn variation does nothing",
+                          cls, spec, name);
+                continue;
             }
+
+            pool.push_back(PawnVariantSpell{name, it->second});
+            ++variantNames;
         }
     }
 
-    LOG_INFO("module", "Pawn: archetypes: {} specs named, {} PvE specs offerable, {} blacklisted spells resolved, {} variant abilities over {} specs, {} names unresolved",
-             uint32(_specNames.size()), uint32(_pveSpecs.size()), resolved, variantNames,
+    LOG_INFO("module", "Pawn: archetypes: {} specs named, {} PvE specs offerable, {} blacklisted ids, {} variant abilities over {} specs, {} names unresolved",
+             uint32(_specNames.size()), pveSpecs, blacklisted, variantNames,
              uint32(_variants.size()), missing);
 }
 

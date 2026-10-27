@@ -46,9 +46,19 @@ PLAYERBOTS = ROOT.parent / "mod-playerbots"
 # The core is the other sibling; its script headers are what an override has to match.
 CORE = ROOT.parent / "azerothcore-wotlk"
 SCRIPT_HOOKS = CORE / "src" / "server" / "game" / "Scripting" / "ScriptDefines"
+# An AI override is checked the same way as a script override, and its hooks are declared here:
+# sGossipHello and sGossipSelect are UnitAI members (UnitAI.h:421-423), not ScriptDefines ones.
+AI_HOOKS = [CORE / "src" / "server" / "game" / "AI" / "CoreAI" / "UnitAI.h",
+            CORE / "src" / "server" / "game" / "AI" / "CreatureAI.h"]
 # A hook declaration in the core, and a hook the module claims to override.
 DECLARED_HOOK = re.compile(r"\bvirtual\s+[\w:<>&*\s]+?\b(\w+)\s*\(")
 OVERRIDE = re.compile(r"\b(\w+)\s*\([^()]*\)\s*(?:const\s*)?override\b")
+# A script type derived from ScriptObject whose header makes IsDatabaseBound return true: the
+# manager matches its name against script_name and registers nothing without a row.
+DATABASE_BOUND = re.compile(r"IsDatabaseBound\(\)\s*const\s*override\s*\{\s*return\s+true")
+SCRIPT_OBJECT = re.compile(r"\bclass\s+(\w+)\s*:\s*public\s+ScriptObject\b")
+# A class in the module and its base list: `class X : public Y`, `class X : Y("name") {`.
+MODULE_CLASS = re.compile(r"\bclass\s+(\w+)\s*(?:final\s*)?:\s*([^{;]*)\{")
 
 PLAYABLE_CLASSES = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
 MAX_SPECS = 8
@@ -171,11 +181,22 @@ def check_picker(keys: dict[str, str]) -> None:
     if not picker:
         return
 
-    # The picker is one line on every innkeeper, not a gameobject: a CreatureScript hook runs for
-    # every creature and the flag check decides which ones show it. A GameObjectScript here would
-    # need a template row and a spawn, and the module ships no SQL at all.
-    if 'CreatureScript("npc_pawn_innkeeper")' not in picker:
-        fail("picker: PawnInnkeeper.cpp does not register a CreatureScript")
+    # The picker is one line on every innkeeper, not a gameobject: the AllCreatureScript hands a
+    # CreatureAI to innkeepers that have no AI of their own, and the flag check decides which ones
+    # get it. A GameObjectScript here would need a template row and a spawn, and the module ships
+    # no SQL at all. A named CreatureScript cannot serve it either: CreatureScript is
+    # database-bound, and gossip is dispatched by the creature's own script id, which for an
+    # innkeeper is the core's npc_innkeeper.
+    if not re.search(r"\bclass\s+\w+\s*:\s*public\s+AllCreatureScript\b", picker):
+        fail("picker: PawnInnkeeper.cpp declares no AllCreatureScript; the picker has no way "
+             "to reach a creature without a template row or a ScriptName")
+    if not re.search(r"\bGetCreatureAI\s*\(\s*Creature\s*\*\s*\w+\s*\)", picker):
+        fail("picker: the AllCreatureScript has no GetCreatureAI; it cannot hand the picker out")
+    if not re.search(r"\bclass\s+\w+\s*:\s*public\s+\w*CreatureAI\b", picker):
+        fail("picker: PawnInnkeeper.cpp declares no CreatureAI subclass; the gossip hook has "
+             "no AI to override it")
+    if not re.search(r"\bsGossipHello\s*\(\s*Player\s*\*\s*\w+\s*\)\s*override", picker):
+        fail("picker: the CreatureAI does not override sGossipHello")
     if "UNIT_NPC_FLAG_INNKEEPER" not in picker:
         fail("picker: the hello hook does not gate on UNIT_NPC_FLAG_INNKEEPER")
     if "GameObjectScript" in picker:
@@ -213,7 +234,8 @@ def check_picker(keys: dict[str, str]) -> None:
     if "Pawn\\.ObeliskEntry" not in read(INSTALLER):
         fail("installer: does not drop a stale Pawn.ObeliskEntry from an existing conf")
 
-    notes.append("picker: creature hook on innkeepers, actions clear of the core's option range")
+    notes.append("picker: a CreatureAI handed out by an AllCreatureScript on innkeepers, "
+                 "actions clear of the core's option range")
 
 
 # Every kind of playerbots AI object registers the same way, `creators["name"] = &Class::factory;`,
@@ -416,6 +438,18 @@ def check_personality(keys: dict[str, str]) -> None:
     notes.append(f"personality: {len(set(pve) & covered)}/{len(pve)} PvE specs have a "
                  f"temperament")
 
+    # The traits must land after the last ResetStrategies in the build path: that call rebuilds
+    # the role defaults, so a trait applied before it is wiped on the next login.
+    mgr = read(SRC / "PawnMgr.cpp")
+    reset = mgr.rfind("ResetStrategies")
+    applied = mgr.rfind("sPawnPersonality.Apply")
+    if reset == -1 or applied == -1:
+        fail("personality: PawnMgr.cpp has no ResetStrategies or no sPawnPersonality.Apply; the "
+             "traits cannot be landing on a rebuilt engine")
+    elif applied < reset:
+        fail("personality: sPawnPersonality.Apply comes before the last ResetStrategies in "
+             "PawnMgr.cpp; that call rebuilds the role defaults, so the trait is wiped")
+
 
 def check_roster() -> None:
     cpp = read(SRC / "PawnMgr.cpp")
@@ -514,14 +548,19 @@ def check_core_hooks() -> None:
     A misspelt hook is not an override: the compiler says so, and the arm64 job is the only
     compiler this repository has, so the names are checked here instead. `OnLogin` for
     `OnPlayerLogin` compiled nowhere and failed the build a day after it was written.
+
+    The AI hooks count as much as the script hooks: `sGossipHello` and `sGossipSelect` are
+    UnitAI members (UnitAI.h:421-423), which no ScriptDefines header declares, and the picker
+    is a CreatureAI now.
     """
     if not SCRIPT_HOOKS.is_dir():
-        notes.append("hooks: no core checkout beside this repository, so the override names "
-                     "are unchecked")
+        notes.append("hooks: no core checkout beside this repository, so the override names, "
+                     "the database-bound script types and the config-pass order are unchecked")
         return
 
     declared: set[str] = set()
-    for header in SCRIPT_HOOKS.glob("*.h"):
+    headers = list(SCRIPT_HOOKS.glob("*.h")) + [path for path in AI_HOOKS if path.is_file()]
+    for header in headers:
         declared.update(DECLARED_HOOK.findall(header.read_text()))
 
     overridden: set[str] = set()
@@ -532,7 +571,134 @@ def check_core_hooks() -> None:
         fail(f"hooks: {name} is marked override, but the core declares no such hook; the "
              f"script would compile nowhere and the arm64 build would stop")
 
-    notes.append(f"hooks: {len(overridden)} overrides, all declared by the core")
+    notes.append(f"hooks: {len(overridden)} overrides, all declared by the core's script and "
+                 f"AI headers")
+
+
+def database_bound_types() -> set[str] | None:
+    """The script types the core matches against script_name, or None without a core checkout.
+
+    A header makes its type database-bound by overriding IsDatabaseBound to return true; the
+    concrete type is the one deriving from ScriptObject in that same header.
+    """
+    if not SCRIPT_HOOKS.is_dir():
+        return None
+
+    types: set[str] = set()
+    for header in SCRIPT_HOOKS.glob("*.h"):
+        text = header.read_text()
+        if DATABASE_BOUND.search(text):
+            types.update(SCRIPT_OBJECT.findall(text))
+    return types or None
+
+
+def check_database_bound_scripts() -> None:
+    """No module class may derive from a database-bound script type.
+
+    Such a script is looked up in script_name and dropped with `Script named ... is not assigned
+    in the database` when there is no row (ScriptMgr.h:817-885), and this module ships no SQL to
+    add one. That was the boot failure of the picker's first shape.
+    """
+    types = database_bound_types()
+    if types is None:
+        notes.append("scripts: no core checkout, so the database-bound script types are "
+                     "unchecked")
+        return
+
+    unbound = []
+    for path in sorted([*SRC.glob("*.cpp"), *SRC.glob("*.h")]):
+        text = path.read_text(encoding="utf-8")
+        for match in MODULE_CLASS.finditer(text):
+            derived, bases = match.group(1), match.group(2)
+            for base in re.findall(r"\b[A-Za-z_]\w*\b", bases):
+                if base in types:
+                    unbound.append(f"{path.relative_to(ROOT)}: {derived} : {base}")
+
+    for derived in unbound:
+        fail(f"scripts: {derived} derives from a database-bound script type; the manager looks "
+             f"its name up in script_name and registers nothing when there is no row, so it is "
+             f"dropped at boot unless the database has a row for its name")
+
+    notes.append(f"scripts: no class derives from the {len(types)} database-bound script types "
+                 f"({', '.join(sorted(types))})")
+
+
+def method_body(text: str, name: str) -> str:
+    """The body of the first `name(...)` method in `text`, with its braces matched."""
+    match = re.search(rf"\b{name}\s*\([^)]*\)\s*(?:const\s*)?(?:override\s*)?\{{", text)
+    if not match:
+        return ""
+
+    depth = 0
+    for index in range(match.end() - 1, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[match.end():index]
+    return ""
+
+
+def check_startup_tables() -> None:
+    """The spell-derived tables are built in OnStartup, not at the first config load.
+
+    World::SetInitialWorldSettings calls OnAfterConfigLoad at World.cpp:302 and
+    sSpellMgr->LoadSpellInfoStore at World.cpp:407, so the spell store is empty during the first
+    config pass: every blacklist and variant spell name fails to resolve there. A reload happens
+    on a running server, where the store is loaded, so that rebuild stays guarded.
+    """
+    cpp = read(SRC / "PawnScripts.cpp")
+    if not cpp:
+        return
+
+    if "sPawnArchetype.Load()" not in method_body(cpp, "OnStartup"):
+        fail("startup: sPawnArchetype.Load() is not in the OnStartup body; the first config "
+             "pass runs before sSpellMgr->LoadSpellInfoStore (World.cpp:302 and World.cpp:407), "
+             "so the archetype and variant tables build against an empty spell store and every "
+             "blacklist and variant spell name fails to resolve")
+
+    config = method_body(cpp, "OnAfterConfigLoad")
+    guarded = re.search(r"if\s*\(\s*reload\s*\)\s*\{[^}]*sPawnArchetype\.Load\(\)", config)
+    if not guarded:
+        fail("startup: the rebuild in the OnAfterConfigLoad body is not guarded by "
+             "`if (reload)`; the first pass runs before the spell store is loaded, so an "
+             "unguarded build leaves every blacklist and variant spell name unresolved")
+    elif config.count("sPawnArchetype.Load()") != 1:
+        fail("startup: the OnAfterConfigLoad body builds the archetype table more than once, "
+             "so a call sits outside the `if (reload)` guard; the first pass runs before the "
+             "spell store is loaded and that call resolves nothing")
+
+    notes.append("startup: the archetype and personality tables are built in OnStartup, after "
+                 "the spell store, and a reload-only rebuild is guarded by `if (reload)`")
+
+
+def check_temperament_keys() -> None:
+    """The temperament keys are enumerated, never probed.
+
+    A probe of `Pawn.Temperament.<class>.<spec>` is a missing-option warning for every spec the
+    conf does not define, and the class x spec grid is mostly undefined by design: the old
+    probe wrote 47 `Config: Missing property` lines at boot.
+    """
+    cpp = read(SRC / "PawnPersonality.cpp")
+    if not cpp:
+        return
+
+    if re.search(r'GetOption<[^>]+>\(\s*"Pawn\.Temperament\.', cpp):
+        fail("temperament: PawnPersonality.cpp asks for a literal Pawn.Temperament.<class>."
+             "<spec> key; every spec the conf does not define logs `Config: Missing property` "
+             "at boot, so the keys must be enumerated instead")
+
+    prefix = re.search(r'(\w+)\s*=\s*"Pawn\.Temperament\."', cpp)
+    iterate = re.search(r"GetKeysByString\(\s*([^)]*?)\s*\)", cpp)
+    if not prefix or not iterate or iterate.group(1) not in (prefix.group(1),
+                                                             '"Pawn.Temperament."'):
+        fail("temperament: PawnPersonality.cpp does not enumerate the keys with "
+             "GetKeysByString over the Pawn.Temperament. prefix; a spec the conf leaves out "
+             "would then be probed and log `Config: Missing property`")
+
+    notes.append("temperament: the keys present are enumerated with GetKeysByString, so an "
+                 "absent <class>.<spec> is silent and that spec has no temperament")
 
 
 def main() -> int:
@@ -545,6 +711,9 @@ def main() -> int:
     check_loader()
     check_wiring()
     check_core_hooks()
+    check_database_bound_scripts()
+    check_startup_tables()
+    check_temperament_keys()
 
     for note in notes:
         print(f"ok   {note}")

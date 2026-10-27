@@ -81,7 +81,9 @@ per spec, and a profile is exactly what `PlayerbotAI::ChangeStrategy` takes: a l
 comma-separated list of `+name` / `-name` tokens, such as the shipped
 `Relentless: +aggressive,+close` against `Patient: +wait for attack`. Each pawn is dealt one profile
 from its own spec's pool and it is applied to the combat engine, so two fury warriors now differ in
-how they fight as well as in what they carry.
+how they fight as well as in what they carry. The loader enumerates the keys the conf actually
+defines rather than probing the class × spec grid, so a spec with no `Pawn.Temperament` key simply has
+no temperament: nothing is rolled for it and boot stays quiet about it.
 
 **Voice** is the non-combat half. It is one global pool, `Pawn.Voice`, because small talk is not a
 class skill: `Talkative: +emote` against `Quiet: -emote`, applied to the non-combat engine. `emote`
@@ -247,7 +249,11 @@ login pass — the pass that would otherwise rebuild the pawn at its owner's lev
 `Pawn.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Pawn.Debug`, one `Pawn.Voice` pool, and one
 `Pawn.Blacklist.<class>.<spec_no>` list and one `Pawn.Variant.<class>.<spec_no>` pool and one
 `Pawn.Temperament.<class>.<spec_no>` pool per archetype. Spell names in the blacklist are
-resolved once at startup; an unresolved name is logged as an error rather than ignored.
+resolved once at startup; an unresolved name is logged as an error rather than ignored. That
+resolution happens in `OnStartup`, not at the first config load: `OnAfterConfigLoad` runs at
+`World.cpp:302` and `sSpellMgr->LoadSpellInfoStore` at `World.cpp:407`, so a build there finds an
+empty spell store and every blacklist and variant name fails to resolve. A reload rebuilds both
+tables, on a running server where the store is already loaded.
 
 The pool keys are where an upgrade shows. `scripts/thor-install.sh` copies the `.dist` only when the
 live conf is missing, so an install made before a pool shipped would keep a conf with no
@@ -288,6 +294,9 @@ whenever it comes back.
 
 ## Why there is no SQL
 
-The line is a `CreatureScript` hook gated on `UNIT_NPC_FLAG_INNKEEPER`, so it needs no template row,
-no spawn and no `ScriptName`: it exists wherever an innkeeper does, and nowhere else. The roster
+The line is a `CreatureAI` handed out by an `AllCreatureScript` gated on `UNIT_NPC_FLAG_INNKEEPER`,
+so it needs no template row, no spawn and no `ScriptName`: it exists wherever an innkeeper does, and
+nowhere else. A named `CreatureScript` cannot serve it: those are database-bound, so the manager looks
+the name up in `script_name` and registers nothing when there is no row, and gossip is dispatched by
+the creature's own script id, which for an innkeeper is the core's `npc_innkeeper`. The roster
 table is created in code for the reason in item 1 above. The module ships no `data/sql` tree at all.
