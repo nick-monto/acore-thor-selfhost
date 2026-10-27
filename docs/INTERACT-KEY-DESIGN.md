@@ -63,10 +63,7 @@ won by someone else stay on the corpse or object.
 
 The first version of this module shipped the opposite: the add-on called
 `SetOverrideBindingClick(frame, true, "E", "EInteractButton")` at login. That is a global override,
-invisible to every UI - and it collided with ConsolePortLK, which is what drives the pad: ConsolePort's
-default controller set claims both stick clicks as mouse buttons (`["CP_T_L3"] = "BUTTON1"`,
-`["CP_T_R3"] = "BUTTON2"`, `ConsolePort/Config/Binds.lua:104-105`), so a stick click that also held
-`E` had two owners and whichever wrote last won.
+invisible to every UI, and it collided with ConsolePortLK, which is what drives the pad.
 
 The add-on now uses a normal client binding: a click binding on its hidden button.
 
@@ -87,9 +84,25 @@ Three things follow from that:
   EInteractButton:LeftButton" }`, the same shape ConsolePort uses for its own actions
   (`CLICK ConsolePortUtilityToggle:LeftButton` and friends). The row then appears in `/cp` and any
   pad button can be assigned to it.
-- The launcher's pad profile sends `E` on the left stick click and nothing else, so the button works
-  out of the box. A player who would rather have ConsolePort's left click there assigns it in `/cp`:
-  one place owns the pad, and both actions are visible in it.
+- The launcher's own controller profile is what a pad button becomes before the game sees it, so
+  the button works out of the box: `ensureLocalControllerProfile` (`WoWForeverScreen.kt`) maps the
+  Thor's pad to keys - Y/B/A/X to F9-F12, the d-pad to F1-F4, Select/Start/Mode to F5/F6/KP_Multiply,
+  the shoulders to F7/F8 and Shift/Ctrl, the left stick to WASD, the right stick to mouse movement -
+  and the left stick click to `E`, which is the key this add-on binds on its first run.
+
+### What that means for `/cp`
+
+`PhysicalControllerHandler.onKeyEvent` consumes a button that has a profile binding and sends its
+binding instead, so the game never receives those buttons as controller input. ConsolePort's
+controller bindings - including its `["CP_T_L3"] = "BUTTON1"` and `["CP_T_R3"] = "BUTTON2"` stick-click
+mouse defaults (`ConsolePort/Config/Binds.lua:104-105`) - therefore only act on inputs the profile
+leaves alone; R3 is one of them, because the profile does not bind it.
+
+A `/cp` row assigned to L3 cannot fire for that reason: pressing L3 sends the `E` key, and the add-on's
+own binding is what answers. Play testing confirmed it - assigning the row to L3 changed nothing,
+while the same button kept firing the add-on. The row is still worth having for a player who edits the
+profile (it is theirs after the first launch) or plays on a pad that does reach the game as a
+controller; on the Thor the key is the whole mechanism, and `/ei key <key>` moves it.
 
 ConsolePort's own interact bindings (right-click simulation, "Interact With Mouseover") need the
 cursor on the target or a mouseover unit, and its "smart interaction" setting only caches friendly
@@ -152,6 +165,14 @@ tree, so the DB updater never sees it, and `src/modules/mod-e-interact` is not i
   (`Frames/Atlas.lua:691`). Its own interact bindings need the cursor or a mouseover target, and its
   "smart interaction" setting (`Config/Lookup.lua:801-802`, off by default) only caches
   friendly-nameplate GUIDs to retarget in range.
+- Play testing on the Thor: the key fires from the pad, and the add-on's answer is what the player
+  sees. Two different failures used to print the same red line, so "the module is not installed" and
+  "there is nothing here" looked alike; they now read differently (`EInteract: the server has no
+  mod-e-interact` against `Nothing to interact with nearby`), and `/ei` reports the server state, the
+  bound key and the rest of the settings while `/ei debug` prints the module's actual answer
+  (`loot`, `gather`, `talk`, `use`, `none`) in chat. That distinction was checked against a stubbed
+  client API: the no-answer path shows the first line and sends no request, the ready path sends
+  `near` and shows the second only when the module answers `none`.
 - The add-on was run against a stubbed client API: the first login binds `E`, `/ei key F` moves the
   binding, a rebind asked for in combat is deferred and applied on `PLAYER_REGEN_ENABLED`, a relogin
   after the player unbound the key does not re-add it, `/cp` gets the named row, the bound action
