@@ -93,16 +93,33 @@ Three things follow from that:
 ### What that means for `/cp`
 
 `PhysicalControllerHandler.onKeyEvent` consumes a button that has a profile binding and sends its
-binding instead, so the game never receives those buttons as controller input. ConsolePort's
-controller bindings - including its `["CP_T_L3"] = "BUTTON1"` and `["CP_T_R3"] = "BUTTON2"` stick-click
-mouse defaults (`ConsolePort/Config/Binds.lua:104-105`) - therefore only act on inputs the profile
-leaves alone; R3 is one of them, because the profile does not bind it.
+binding instead, so the game never receives those buttons as controller input. A `/cp` row therefore
+cannot make a pad button do anything - the key does.
 
-A `/cp` row assigned to L3 cannot fire for that reason: pressing L3 sends the `E` key, and the add-on's
-own binding is what answers. Play testing confirmed it - assigning the row to L3 changed nothing,
-while the same button kept firing the add-on. The row is still worth having for a player who edits the
-profile (it is theirs after the first launch) or plays on a pad that does reach the game as a
-controller; on the Thor the key is the whole mechanism, and `/ei key <key>` moves it.
+Worse, ConsolePort's L3 and R3 are **aliases for the real mouse buttons**. `Config/Binds.lua:103-106`
+has `mouseBindings = { ["CP_T_L3"] = "BUTTON1", ["CP_T_R3"] = "BUTTON2" }`, the shipped controller sets
+give those two buttons empty binding tables (`Controllers/XBOX/Xbox.lua:188-189`), and `SetTempBinding`
+(`Config/Binds.lua:441`) resolves a logical button through `GetBindingKey(name) or
+config.mouseBindings[name]` and calls `SetOverrideBinding(handler, false, modifier .. "BUTTON1", action)`.
+Assigning an action to L3 in `/cp` is therefore assigning it to the left mouse button, and R3 to the
+right one. Play testing proved it twice: the row assigned to L3 made the launcher trackpad's
+*Left click* run the action, moving the same row to R3 moved it to *Right click*, and neither stick
+click did anything, because their presses are consumed by the profile and never reach ConsolePort.
+
+So: leave ConsolePort's L3 and R3 rows empty. The pad's own click buttons are the mouse.
+
+### What the two stick clicks do
+
+| Button | The launcher sends | The game does |
+|---|---|---|
+| L3 (left stick click) | the `E` key (`ensureLocalControllerProfile`) | EInteract's binding: loot, gather, talk, open |
+| R3 (right stick click) | the right mouse button | a right click - the client's `TURNORACTION`, which is what ConsolePort's R3 means by default |
+
+R3's right click only applies where this launcher's own R3 cursor toggle is off, which is the local
+realm's default (`R3ToggleDefaultTest`: ConsolePort drives the right stick there); `onKeyEvent` handles
+that toggle before any profile binding, so the other flavours keep their cursor switch. The profile is
+the player's after the first launch: moving either stick click is an edit to it, and `/ei key <key>`
+moves the interact key without touching the profile.
 
 ConsolePort's own interact bindings (right-click simulation, "Interact With Mouseover") need the
 cursor on the target or a mouseover unit, and its "smart interaction" setting only caches friendly
@@ -165,6 +182,10 @@ tree, so the DB updater never sees it, and `src/modules/mod-e-interact` is not i
   (`Frames/Atlas.lua:691`). Its own interact bindings need the cursor or a mouseover target, and its
   "smart interaction" setting (`Config/Lookup.lua:801-802`, off by default) only caches
   friendly-nameplate GUIDs to retarget in range.
+- The ConsolePort alias behaviour above was read in the shipped 1.5.0-rc2 sources (`mouseBindings`,
+  the empty `CP_T_L3`/`CP_T_R3` binding tables, `SetTempBinding`, `SetMouseBindings`) and then
+  reproduced on the device: the action followed the row from L3 to R3 and landed on the trackpad's
+  left and right click in the same order.
 - Play testing on the Thor: the key fires from the pad, and the add-on's answer is what the player
   sees. Two different failures used to print the same red line, so "the module is not installed" and
   "there is nothing here" looked alike; they now read differently (`EInteract: the server has no
