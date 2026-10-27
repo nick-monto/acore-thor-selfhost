@@ -3,7 +3,7 @@
  *
  * Three hooks do the work the playerbots pool cannot do for itself:
  *
- *   * PlayerScript::OnLogin marks a pawn so its archetype is applied once it is
+ *   * PlayerScript::OnPlayerLogin marks a pawn so its archetype is applied once it is
  *     actually in the world, and marks a real player so their party is restored
  *     from the roster. The drain runs in WorldScript::OnUpdate, on the world
  *     thread, after playerbots' own login pass - which is what lets a pawn's
@@ -34,7 +34,7 @@ class PawnPlayerScript : public PlayerScript
 public:
     PawnPlayerScript() : PlayerScript("PawnPlayerScript") { }
 
-    void OnLogin(Player* player) override
+    void OnPlayerLogin(Player* player) override
     {
         sPawnMgr.OnPlayerLogin(player);
     }

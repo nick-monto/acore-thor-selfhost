@@ -96,7 +96,7 @@ private:
 
     PawnConfig                                _config;
     std::vector<PawnPoolChar>                 _pool;           // type-2 characters, offline at refresh
-    uint32                                    _poolRefreshDue = 0;  // GetMSTime() when the pool is re-read
+    uint32                                    _poolRefreshDue = 0;  // getMSTime() when the pool is re-read
     uint64                                    _drawCounter    = 0;  // makes every picker instance differ
     std::unordered_map<uint32, PawnRosterRow> _rows;           // bot counter -> row
     std::unordered_set<uint32>                _pendingPawns;   // bot counters

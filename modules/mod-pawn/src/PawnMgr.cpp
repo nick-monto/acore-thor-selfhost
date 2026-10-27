@@ -198,7 +198,7 @@ void PawnMgr::RefreshPool()
     // Playerbots.AddClassCommand = 0 - the chat command is a way around the
     // party cap, so the installer turns it off - and gives the picker a fresh
     // level and online flag on every roll instead of once per boot.
-    uint32 const now = GetMSTime();
+    uint32 const now = getMSTime();
     uint32 const minutes = urand(_config.PoolRefreshMinMinutes, _config.PoolRefreshMaxMinutes);
     _poolRefreshDue = now + minutes * 60 * 1000;
     _pool.clear();
@@ -627,7 +627,7 @@ void PawnMgr::OnPlayerLogin(Player* player)
 
 void PawnMgr::Update(uint32 /*diff*/)
 {
-    if (_config.Enabled && GetMSTime() >= _poolRefreshDue)
+    if (_config.Enabled && getMSTime() >= _poolRefreshDue)
         RefreshPool();
 
     if (_pendingOwners.empty() && _pendingPawns.empty())

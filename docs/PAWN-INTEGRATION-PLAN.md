@@ -42,7 +42,7 @@ exist:
 
 | Need | Hook | Evidence |
 |---|---|---|
-| Know when a pawn logs in | `PlayerScript::OnLogin` — bots log in through the normal path | `botSession->HandlePlayerLoginFromDB(holder)` at `PlayerbotMgr.cpp:256` → `sScriptMgr->OnPlayerLogin(pCurrChar)` at `CharacterHandler.cpp:1126` |
+| Know when a pawn logs in | `PlayerScript::OnPlayerLogin` — bots log in through the normal path | `botSession->HandlePlayerLoginFromDB(holder)` at `PlayerbotMgr.cpp:256` → `sScriptMgr->OnPlayerLogin(pCurrChar)` at `CharacterHandler.cpp:1126` |
 | Defer work until the bot is in the world | `PlayerbotWorldThreadProcessor::QueueOperation(std::unique_ptr<PlayerbotOperation>)`, a public API over an abstract `PlayerOperation::Execute()` | `PlayerbotWorldThreadProcessor.h:62`, `PlayerbotOperation.h:26-39` |
 | Refuse a spell | `PlayerScript::OnPlayerCanLearnSpell` is checked at the top of `Player::learnSpell` and returns bool | `Player.cpp:3428-3431` |
 | Recruit and dismiss | `PlayerbotHolder::AddPlayerBot(guid, masterAccountId)` / `LogoutPlayerBot(guid)` | `PlayerbotMgr.cpp:88-150`, `:394` |
@@ -166,7 +166,7 @@ name is `Playerbots.PremadeSpecName.<class>.<spec_no>`.
 
 ### Login
 
-`OnLogin` only *marks* a pawn pending; a `WorldScript::OnUpdate` drains the mark once
+`OnPlayerLogin` only *marks* a pawn pending; a `WorldScript::OnUpdate` drains the mark once
 `ObjectAccessor::FindConnectedPlayer(guid)->IsInWorld()`. Two reasons: the factory wants a player in
 the world, and this way the pawn's own level is applied **after** playerbots' re-level pass, which
 fires on login when the pawn is more than three levels from its master

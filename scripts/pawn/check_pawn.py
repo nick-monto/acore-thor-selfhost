@@ -43,6 +43,12 @@ INSTALLER = ROOT / "scripts" / "thor-install.sh"
 # Sibling checkout, present on a developer host but not in CI's arm64 job, which builds only this
 # repository. The vocabulary check degrades to a note when it is absent rather than failing.
 PLAYERBOTS = ROOT.parent / "mod-playerbots"
+# The core is the other sibling; its script headers are what an override has to match.
+CORE = ROOT.parent / "azerothcore-wotlk"
+SCRIPT_HOOKS = CORE / "src" / "server" / "game" / "Scripting" / "ScriptDefines"
+# A hook declaration in the core, and a hook the module claims to override.
+DECLARED_HOOK = re.compile(r"\bvirtual\s+[\w:<>&*\s]+?\b(\w+)\s*\(")
+OVERRIDE = re.compile(r"\b(\w+)\s*\([^()]*\)\s*(?:const\s*)?override\b")
 
 PLAYABLE_CLASSES = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
 MAX_SPECS = 8
@@ -502,6 +508,33 @@ def check_wiring() -> None:
     notes.append("wiring: pins, workflow and installer mention the module")
 
 
+def check_core_hooks() -> None:
+    """Every hook the module overrides must be one the core declares.
+
+    A misspelt hook is not an override: the compiler says so, and the arm64 job is the only
+    compiler this repository has, so the names are checked here instead. `OnLogin` for
+    `OnPlayerLogin` compiled nowhere and failed the build a day after it was written.
+    """
+    if not SCRIPT_HOOKS.is_dir():
+        notes.append("hooks: no core checkout beside this repository, so the override names "
+                     "are unchecked")
+        return
+
+    declared: set[str] = set()
+    for header in SCRIPT_HOOKS.glob("*.h"):
+        declared.update(DECLARED_HOOK.findall(header.read_text()))
+
+    overridden: set[str] = set()
+    for source in sorted(SRC.glob("*.cpp")):
+        overridden.update(OVERRIDE.findall(source.read_text()))
+
+    for name in sorted(overridden - declared):
+        fail(f"hooks: {name} is marked override, but the core declares no such hook; the "
+             f"script would compile nowhere and the arm64 build would stop")
+
+    notes.append(f"hooks: {len(overridden)} overrides, all declared by the core")
+
+
 def main() -> int:
     check_files()
     keys = check_config_keys()
@@ -511,6 +544,7 @@ def main() -> int:
     check_roster()
     check_loader()
     check_wiring()
+    check_core_hooks()
 
     for note in notes:
         print(f"ok   {note}")

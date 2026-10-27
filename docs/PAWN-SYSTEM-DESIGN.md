@@ -214,7 +214,7 @@ verified, and the work is a module (`modules/mod-pawn`) instead:
 - Every module's `src` is added to one shared include list and static modules compile into a single
   library (`modules/CMakeLists.txt:270-300`, `-DMODULES=static` in `server-aarch64.yml:132`), so
   `#include "Bot/PlayerbotMgr.h"` resolves from another module.
-- Nothing needs to be *inside* a playerbots function: `PlayerScript::OnLogin` fires for bot sessions
+- Nothing needs to be *inside* a playerbots function: `PlayerScript::OnPlayerLogin` fires for bot sessions
   (`CharacterHandler.cpp:1126`), `PlayerScript::OnPlayerCanLearnSpell` refuses a spell at the top of
   `Player::learnSpell` (`Player.cpp:3428-3431`), and `PlayerbotWorldThreadProcessor::QueueOperation`
   is a public API for deferred world-thread work.

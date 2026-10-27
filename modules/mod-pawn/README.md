@@ -235,7 +235,7 @@ PASS), `Playerbots.LootGreedRollLevel = 0` (GREED becomes PASS) and `Playerbots.
 
 Two hooks carry the behaviour. `PlayerScript::OnPlayerCanLearnSpell` refuses a blacklisted spell at
 the top of `Player::learnSpell`, so no learn path — factory, trainer, level-up maintenance, quest —
-can undo a restriction. `PlayerScript::OnLogin` only *marks* a pawn; `WorldScript::OnUpdate` applies
+can undo a restriction. `PlayerScript::OnPlayerLogin` only *marks* a pawn; `WorldScript::OnUpdate` applies
 its level and archetype once it is in the world, which is what puts that work after playerbots' own
 login pass — the pass that would otherwise rebuild the pawn at its owner's level.
 
