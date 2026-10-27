@@ -137,21 +137,74 @@ namespace
         return false;
     }
 
+    std::string Fold(std::string name)
+    {
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return char(std::tolower(c)); });
+        return name;
+    }
+
     // Spell names are the only reviewable key the configuration can carry: the
     // server keeps no name -> id table, so build one once. SpellName[0] is enUS
     // and is what the .dist comments are written against.
-    std::unordered_map<std::string, std::vector<uint32>> BuildNameIndex()
+    //
+    // The folded index is the second chance for a hand-typed name: the table's own
+    // spelling is title case ("Hunger For Blood"), and a name that differs only in
+    // case is a misspelling of a spell that exists, not a different spell.
+    struct NameIndex
     {
-        std::unordered_map<std::string, std::vector<uint32>> index;
+        std::unordered_map<std::string, std::vector<uint32>> exact;
+        std::unordered_map<std::string, std::vector<std::string>> folded;
+    };
+
+    NameIndex BuildNameIndex()
+    {
+        NameIndex index;
         uint32 const count = sSpellMgr->GetSpellInfoStoreSize();
         for (uint32 id = 1; id < count; ++id)
         {
             SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
             if (!info || !info->SpellName[0] || !info->SpellName[0][0])
                 continue;
-            index[info->SpellName[0]].push_back(id);
+            index.exact[info->SpellName[0]].push_back(id);
         }
+
+        for (auto const& entry : index.exact)
+            index.folded[Fold(entry.first)].push_back(entry.first);
         return index;
+    }
+
+    // The ids a configured name resolves to, or nullptr with the reason logged. `kind`,
+    // `cls` and `spec` are the block the name came from, for the log line.
+    std::vector<uint32> const* ResolveName(NameIndex const& index, std::string const& name,
+                                           char const* kind, uint32 cls, uint32 spec)
+    {
+        auto const exact = index.exact.find(name);
+        if (exact != index.exact.end())
+            return &exact->second;
+
+        auto const folded = index.folded.find(Fold(name));
+        if (folded == index.folded.end())
+        {
+            LOG_ERROR("module", "Pawn: {} {}.{}: no spell is named '{}'; that restriction does nothing",
+                      kind, cls, spec, name);
+            return nullptr;
+        }
+
+        if (folded->second.size() > 1)
+        {
+            std::string candidates;
+            for (std::string const& candidate : folded->second)
+                candidates += (candidates.empty() ? "'" : ", '") + candidate + "'";
+            LOG_ERROR("module", "Pawn: {} {}.{}: '{}' is not a spell name, and {} spells differ only in case ({}); spell one of them exactly",
+                      kind, cls, spec, name, uint32(folded->second.size()), candidates);
+            return nullptr;
+        }
+
+        std::string const& real = folded->second.front();
+        LOG_WARN("module", "Pawn: {} {}.{}: '{}' is spelled '{}' in the spell table; using that",
+                 kind, cls, spec, name, real);
+        return &index.exact.find(real)->second;
     }
 }
 
@@ -223,16 +276,14 @@ void PawnArchetype::Load()
         std::vector<uint32>& ids = _forbidden[Key(uint8(cls), uint8(spec))];
         for (std::string const& name : SplitNames(list))
         {
-            auto it = nameIndex.find(name);
-            if (it == nameIndex.end())
+            std::vector<uint32> const* spells = ResolveName(nameIndex, name, "blacklist", cls, spec);
+            if (!spells)
             {
                 ++missing;
-                LOG_ERROR("module", "Pawn: blacklist {}.{}: no spell is named '{}'; that restriction does nothing",
-                          cls, spec, name);
                 continue;
             }
 
-            ids.insert(ids.end(), it->second.begin(), it->second.end());
+            ids.insert(ids.end(), spells->begin(), spells->end());
         }
 
         std::sort(ids.begin(), ids.end());
@@ -259,16 +310,14 @@ void PawnArchetype::Load()
         std::vector<PawnVariantSpell>& pool = _variants[Key(uint8(cls), uint8(spec))];
         for (std::string const& name : SplitNames(list))
         {
-            auto it = nameIndex.find(name);
-            if (it == nameIndex.end())
+            std::vector<uint32> const* spells = ResolveName(nameIndex, name, "variant", cls, spec);
+            if (!spells)
             {
                 ++missing;
-                LOG_ERROR("module", "Pawn: variant {}.{}: no spell is named '{}'; that pawn variation does nothing",
-                          cls, spec, name);
                 continue;
             }
 
-            pool.push_back(PawnVariantSpell{name, it->second});
+            pool.push_back(PawnVariantSpell{name, *spells});
             ++variantNames;
         }
     }

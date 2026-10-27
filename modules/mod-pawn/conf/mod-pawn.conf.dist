@@ -205,6 +205,11 @@ Pawn.Debug = 0
 # Every name in this section and in the variant pools below was checked against
 # the 3.3.5 spell table on 2026-10-26: 152 distinct names over 293 entries, all
 # of them resolve, and none names an ability that only another class can learn.
+# One of them did not: the rogue talent is "Hunger For Blood" in the client's own
+# data (the core's smart_scripts.sql spells it the same way), so the lowercase
+# "for" resolved to nothing and was corrected on 2026-10-27. A name that differs
+# from the spell table only in case now resolves anyway and is logged as a warning,
+# so a slip like that costs a log line instead of a silently missing restriction.
 # That check is a one-off and not part of the build, so a name added later is
 # only proven by the `archetypes:` line in Server.log at the next startup.
 
@@ -225,8 +230,8 @@ Pawn.Blacklist.3.2 = Aimed Shot, Chimera Shot, Bestial Wrath, Kill Command
 
 # Rogue: assassination, combat, subtlety. Subtlety keeps the crowd control.
 Pawn.Blacklist.4.0 = Blade Flurry, Adrenaline Rush, Shadowstep, Premeditation, Hemorrhage, Sap, Blind, Vanish
-Pawn.Blacklist.4.1 = Mutilate, Hunger for Blood, Shadowstep, Premeditation, Hemorrhage, Sap, Blind, Vanish
-Pawn.Blacklist.4.2 = Mutilate, Hunger for Blood, Blade Flurry, Adrenaline Rush
+Pawn.Blacklist.4.1 = Mutilate, Hunger For Blood, Shadowstep, Premeditation, Hemorrhage, Sap, Blind, Vanish
+Pawn.Blacklist.4.2 = Mutilate, Hunger For Blood, Blade Flurry, Adrenaline Rush
 
 # Priest: discipline, holy, shadow. Shadow keeps no resurrection and no group heal.
 Pawn.Blacklist.5.0 = Shadowform, Mind Flay, Vampiric Touch, Devouring Plague, Mind Blast
