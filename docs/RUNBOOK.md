@@ -47,7 +47,7 @@ Parts 1–9 below are exactly what the install does, in order — read them to k
 
 ## Part 0a — Check the sources before pushing
 
-Two checks run on a development host in under a minute and cover what the arm64 build used to be the first to see. Run both before committing anything under `modules/`:
+Two checks run on a development host in under a minute and cover what the arm64 build used to be the first to see. They also run on every push (`.github/workflows/module-checks.yml`, about two minutes, nothing linked or published), so a slip is caught even when nobody runs them locally — but run both before committing anything under `modules/` anyway:
 
 ```sh
 python3 scripts/pawn/check_pawn.py     # the module's invariants, no build needed
@@ -56,7 +56,7 @@ bash scripts/syntax-check.sh           # -fsyntax-only over every module TU, wit
 
 `check_pawn.py` reads the conf, the installer, the workflow and the module sources, and fails on the faults that only appeared at boot or at the next build: a conf key the code reads that the conf does not define, a hook that is not a hook the core declares, a class deriving from a database-bound script type (dropped at boot when `script_name` has no row for it), a table built during the first config pass — before `sSpellMgr->LoadSpellInfoStore` — a temperament key probed instead of enumerated, and traits applied before the last `ResetStrategies`.
 
-`syntax-check.sh` compiles each `modules/*/src/*.cpp` with `-fsyntax-only`, lifting the include set, defines and C++ standard from one recorded command in the core's `compile_commands.json`. It proves every core symbol the module names exists, which is the class of error that stopped the build twice: `GetMSTime` for `getMSTime` and `OnLogin` for `OnPlayerLogin`. It needs a configured core checkout beside this repository and the core's dependency headers; without either it prints why and exits 0 rather than failing. The headers need no root:
+`syntax-check.sh` compiles each `modules/*/src/*.cpp` with `-fsyntax-only`, taking the include set, the defines and the C++ standard from one recorded command in a configured core's `compile_commands.json` — or, when there is no configured build (CI), from the checked-in `scripts/module-flags.txt`, which `scripts/syntax-check.sh --dump-flags` generates from such a build with the checkout paths left as placeholders. It proves every core symbol the module names exists, which is the class of error that stopped the build twice: `GetMSTime` for `getMSTime` and `OnLogin` for `OnPlayerLogin`. It needs a configured core checkout beside this repository and the core's dependency headers; without either it prints why and exits 0 rather than failing. The headers need no root:
 
 ```sh
 mkdir -p /tmp/acore-debs && cd /tmp/acore-debs
@@ -64,6 +64,8 @@ apt-get download libboost1.83-dev libmysqlclient-dev libargon2-dev
 mkdir -p ~/.cache/acore-deps/root
 for d in *.deb; do dpkg-deb -x "$d" ~/.cache/acore-deps/root; done
 ```
+
+`check_pawn.py` also fails when `scripts/module-flags.txt` was taken from a different core commit than `pins.toml` pins, so moving the pin means regenerating the flags — which is the one manual step this gate has.
 
 Neither check proves the module links or behaves — the arm64 build and a client session still do that. They only keep the next hour-long build from being spent on a typo or a boot-time assumption.
 

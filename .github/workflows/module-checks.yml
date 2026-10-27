@@ -1,0 +1,94 @@
+name: module-checks
+
+# The fast gate. Compile-checks every module's translation units and runs the offline
+# checks on each push, in about two minutes.
+#
+# Nothing is linked, packaged or published here: server-aarch64.yml does that on a
+# manual dispatch and takes most of an hour, which is far too late to learn that a
+# module names a core function that does not exist. Both errors it caught in mod-pawn
+# were exactly that - GetMSTime for getMSTime, OnLogin for OnPlayerLogin.
+#
+# The compile flags come from scripts/module-flags.txt, not from a configured build:
+# configuring the core would mean downloading and building its dependencies, which is
+# the expensive half of the real build. The file is generated from a configured build
+# by scripts/syntax-check.sh --dump-flags and carries placeholders for the checkouts,
+# so it works here as well as on a development host. scripts/pawn/check_pawn.py fails
+# when it no longer matches the core commit in pins.toml.
+
+on:
+  push:
+    paths:
+      - "modules/**"
+      - "scripts/**"
+      - "patches/**"
+      - "pins.toml"
+      - ".github/workflows/module-checks.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: module-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read the pins
+        run: |
+          python3 - >> "$GITHUB_ENV" <<'PY'
+          import tomllib
+
+          pins = tomllib.load(open("pins.toml", "rb"))
+          print(f"CORE_REPO={pins['core']['repo']}")
+          print(f"CORE_COMMIT={pins['core']['commit']}")
+          print(f"PB_REPO={pins['module']['playerbots']['repo']}")
+          print(f"PB_COMMIT={pins['module']['playerbots']['commit']}")
+          PY
+
+      - name: Dependency headers
+        # Headers only. Nothing is compiled to an object file and nothing is linked, so
+        # no library and no -dev package beyond the headers is needed.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libboost-dev libmysqlclient-dev libssl-dev libbz2-dev liblzma-dev \
+            zlib1g-dev libzstd-dev libicu-dev libreadline-dev
+
+      - name: Fetch the pinned core and playerbots
+        run: |
+          # Both are needed: the modules include playerbots headers, and check_pawn.py
+          # reads the core's script headers and playerbots' strategy vocabulary.
+          git init -q core && cd core
+          git remote add origin "$CORE_REPO"
+          git fetch -q --depth 1 origin "$CORE_COMMIT"
+          git checkout -q FETCH_HEAD
+          cd ..
+          git init -q playerbots && cd playerbots
+          git remote add origin "$PB_REPO"
+          git fetch -q --depth 1 origin "$PB_COMMIT"
+          git checkout -q FETCH_HEAD
+
+      - name: Compile-check the modules
+        env:
+          AC_CORE: ${{ github.workspace }}/core
+          AC_PLAYERBOTS: ${{ github.workspace }}/playerbots
+          # The dependency headers are installed system-wide by the step above.
+          AC_DEPS_ROOT: /
+        run: bash scripts/syntax-check.sh
+
+      - name: Check the module files agree
+        env:
+          AC_CORE: ${{ github.workspace }}/core
+          AC_PLAYERBOTS: ${{ github.workspace }}/playerbots
+        run: python3 scripts/pawn/check_pawn.py

@@ -29,6 +29,7 @@ Exit code 0 means every check passed. Run it from anywhere:
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -40,11 +41,12 @@ SRC = MODULE / "src"
 PINS = ROOT / "pins.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "server-aarch64.yml"
 INSTALLER = ROOT / "scripts" / "thor-install.sh"
-# Sibling checkout, present on a developer host but not in CI's arm64 job, which builds only this
-# repository. The vocabulary check degrades to a note when it is absent rather than failing.
-PLAYERBOTS = ROOT.parent / "mod-playerbots"
-# The core is the other sibling; its script headers are what an override has to match.
-CORE = ROOT.parent / "azerothcore-wotlk"
+# Sibling checkouts on a developer host, present in CI as the workflow clones them. Both can be
+# pointed anywhere with AC_PLAYERBOTS and AC_CORE, which is what .github/workflows/module-checks.yml
+# does. The checks that need them degrade to a note when they are absent rather than failing.
+PLAYERBOTS = Path(os.environ.get("AC_PLAYERBOTS") or ROOT.parent / "mod-playerbots")
+# The core is the other checkout; its script headers are what an override has to match.
+CORE = Path(os.environ.get("AC_CORE") or ROOT.parent / "azerothcore-wotlk")
 SCRIPT_HOOKS = CORE / "src" / "server" / "game" / "Scripting" / "ScriptDefines"
 # An AI override is checked the same way as a script override, and its hooks are declared here:
 # sGossipHello and sGossipSelect are UnitAI members (UnitAI.h:421-423), not ScriptDefines ones.
@@ -539,7 +541,64 @@ def check_wiring() -> None:
     if "modules/mod-pawn/data/sql" in installer:
         fail("installer: still lists modules/mod-pawn/data/sql, which no longer exists")
 
-    notes.append("wiring: pins, workflow and installer mention the module")
+    # The fast gate is only a gate if it is wired: a workflow that runs the compile check on push
+    # is what keeps a misspelt core symbol from waiting for the arm64 build.
+    checks_workflow = ROOT / ".github" / "workflows" / "module-checks.yml"
+    if not checks_workflow.is_file():
+        fail("wiring: no .github/workflows/module-checks.yml; the compile check would only run "
+             "when someone remembers to run it")
+    else:
+        text = read(checks_workflow)
+        for needle in ("push:", "scripts/syntax-check.sh", "scripts/pawn/check_pawn.py",
+                       "scripts/module-flags.txt"):
+            if needle not in text:
+                fail(f"wiring: module-checks.yml does not mention {needle}")
+
+    notes.append("wiring: pins, the arm64 workflow, the module-checks workflow and the installer "
+                 "mention the module")
+
+
+def check_flags_file() -> None:
+    """The checked-in compile flags must belong to the core the build pins.
+
+    scripts/module-flags.txt is what CI compiles the modules against when it has no configured
+    build, so flags taken from a different core commit would check the wrong headers - or, worse,
+    compile cleanly against an include set the real build no longer has.
+    """
+    flags = ROOT / "scripts" / "module-flags.txt"
+    if not flags.is_file():
+        fail("flags: no scripts/module-flags.txt; the module-checks workflow has nothing to "
+             "compile against, so it would skip every translation unit")
+        return
+
+    text = read(flags)
+    recorded = re.search(r"^# core: ([0-9a-f]{40})$", text, re.M)
+    if not recorded:
+        fail("flags: scripts/module-flags.txt has no `# core: <commit>` line; regenerate it with "
+             "scripts/syntax-check.sh --dump-flags")
+        return
+
+    pins = read(PINS)
+    section = re.search(r"^\[core\]$(.*?)(?=^\[)", pins, re.M | re.S)
+    pinned = re.search(r'^commit = "([0-9a-f]{40})"', section.group(1), re.M) if section else None
+    if not pinned:
+        fail("pins: [core] has no 40-character commit to compare the flags against")
+        return
+    if pinned.group(1) != recorded.group(1):
+        fail(f"flags: scripts/module-flags.txt was taken from core {recorded.group(1)[:7]}, but "
+             f"pins.toml builds {pinned.group(1)[:7]}; regenerate it with "
+             f"scripts/syntax-check.sh --dump-flags")
+
+    for needle in ("-std=gnu++20", "@CORE@", "@PLAYERBOTS@"):
+        if needle not in text:
+            fail(f"flags: scripts/module-flags.txt has no {needle}; it is not a module compile "
+                 f"line any more")
+    if "/home/" in text:
+        fail("flags: scripts/module-flags.txt carries an absolute home path; the checkout roots "
+             "must stay as placeholders so another machine can use the file")
+
+    notes.append(f"flags: the compile flags belong to the pinned core {pinned.group(1)[:7]} and "
+                 f"carry placeholders, not paths")
 
 
 def check_core_hooks() -> None:
@@ -724,6 +783,7 @@ def main() -> int:
     check_loader()
     check_wiring()
     check_core_hooks()
+    check_flags_file()
     check_database_bound_scripts()
     check_startup_tables()
     check_temperament_keys()

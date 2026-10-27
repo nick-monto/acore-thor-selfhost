@@ -45,6 +45,7 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 | [`scripts/pawn/check_pawn.py`](scripts/pawn/check_pawn.py) | Offline checks on `mod-pawn`: conf keys against the code and the installer, dials against playerbots' strategy vocabulary, hooks against the core's headers, no database-bound script, the tables built after the spell store, temperament keys enumerated |
 | [`pins.toml`](pins.toml) | Exact commits, artifact hashes and ports every document refers to |
 | [`.github/workflows/server-aarch64.yml`](.github/workflows/server-aarch64.yml) | Builds the linux/arm64 server + SQL sources on a native arm64 runner and attaches them to a release (the client data is fetched on the device: a single release asset stops at 2 GiB) |
+| [`.github/workflows/module-checks.yml`](.github/workflows/module-checks.yml) | Runs on every push that touches a module: compile-checks the module sources against the pinned core's own flags, then runs the offline checks. Nothing is linked or published, so it takes about two minutes instead of the arm64 job's hour |
 
 ## Install on the Thor
 
