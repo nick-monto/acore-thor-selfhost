@@ -324,6 +324,42 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
     esac
 }
 
+pawn_append_missing_conf() {   # pawn_append_missing_conf LIVE DIST - append the shipped keys LIVE lacks
+    # The pool keys are lists, not scalars, so they stay out of PAWN_CONF_DEFAULTS: the checker
+    # asserts that array and the conf agree key for key, and set_conf would overwrite a pool the
+    # admin had trimmed. But conf_pair() only copies the .dist when the live conf is missing, so an
+    # install made before the pools shipped keeps a conf with no Pawn.Temperament.* block at all,
+    # and PawnPersonality::Load then has nothing to roll from. Appending the missing keys is the
+    # only repair that leaves every existing value alone. The module looks keys up by name, so the
+    # additions can go at the end of a hand-edited file without disturbing it.
+    local live="$1" dist="$2" line key added=0 pending
+    [ -f "$live" ] && [ -f "$dist" ] || return 0
+    pending="$(mktemp)"
+    while IFS= read -r line || [ -n "$line" ]; do
+        key="${line%%=*}"
+        key="${key#"${key%%[![:space:]]*}"}"        # trim leading whitespace
+        key="${key%"${key##*[![:space:]]}"}"        # and trailing
+        case "$key" in
+            Pawn.Voice) ;;
+            Pawn.Blacklist.[0-9]*.[0-9]*|Pawn.Variant.[0-9]*.[0-9]*|Pawn.Temperament.[0-9]*.[0-9]*) ;;
+            *) continue ;;                          # comments, blanks and every scalar key
+        esac
+        # An empty value counts as absent here, unlike for a scalar: a pool is never legitimately
+        # empty (the module drops an empty one), and conf_get() prints nothing for it.
+        [ -z "$(conf_get "$live" "$key")" ] || continue
+        printf '%s\n' "$line" >> "$pending"
+        added=$((added + 1))
+    done < "$dist"
+    if [ "$added" -gt 0 ]; then
+        {
+            printf '\n# Pool keys this file did not have: appended by the installer, values as shipped.\n'
+            cat "$pending"
+        } >> "$live"
+        ok "mod-pawn.conf: appended $added shipped pool keys (voice/temperament/blacklist/variant)"
+    fi
+    rm -f "$pending"
+}
+
 survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one the module accepts
     # The ranges are the ones mod-survivor's own conf comments state: the 0|1 switches, a minimum
     # flag level inside the level cap, a container lifetime in days, and a positive template entry.
@@ -1461,6 +1497,7 @@ write_configs() {
                 set_conf "$pw" "$pw_key" "${pw_default#*=}"
             fi
         done
+        pawn_append_missing_conf "$pw" "$CONF_DIR/modules/mod-pawn.conf.dist"
         log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min Fee=$(conf_get "$pw" Pawn.HireFeePercent)%+$(conf_get "$pw" Pawn.HireFeeHeldPercent)% Gear=$(conf_get "$pw" Pawn.GearFloorPercent)-$(conf_get "$pw" Pawn.GearCapPercent)%"
     else
         warn "no $CONF_DIR/modules/mod-pawn.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
@@ -1827,6 +1864,11 @@ run_checks() {   # run_checks FIX(0|1)
             pw_val="$(conf_get "$pw" "$pw_key")"
             if ! pawn_value_ok "$pw_key" "$pw_val"; then pw_bad="$pw_bad $pw_key=$pw_val"; fi
         done
+        # Outside the `$pw_bad` branch on purpose: a conf whose scalars are all fine is exactly the
+        # one an older install has, and it still has no temperament block to append.
+        if [ "$fix" = 1 ]; then
+            pawn_append_missing_conf "$pw" "$CONF_DIR/modules/mod-pawn.conf.dist"
+        fi
         if [ -z "$pw_bad" ]; then
             ok "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min"
         else

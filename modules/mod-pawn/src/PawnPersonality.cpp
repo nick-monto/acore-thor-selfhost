@@ -178,6 +178,66 @@ namespace
                           kind, name, bot->GetName());
         }
     }
+
+    // The tokens of one profile, already validated by ParseProfile: "+name" or
+    // "-name", no spaces.
+    std::vector<std::string> Tokens(PawnProfile const& profile)
+    {
+        std::vector<std::string> out;
+        for (std::string const& token : Split(profile.Changes, ','))
+            if (token.size() > 1)
+                out.push_back(token);
+        return out;
+    }
+
+    // Applies one trait and undoes the rest of its pool first.
+    //
+    // A pool describes the whole dial space of one engine, but playerbots replays
+    // the strategy list it saved at the learner's last logout, so the engine the
+    // trait lands on still carries the dials of whatever profile was applied
+    // before the pool was edited. Setting only the chosen tokens would leave those
+    // stale dials in place: the pawn would keep last session's temperament. So
+    // every token another profile of the pool names - and the chosen one does not
+    // - is inverted, then the chosen tokens are applied on top.
+    void ApplyPool(PlayerbotAI* ai, Player* bot, std::vector<PawnProfile> const& pool,
+                   PawnProfile const* chosen, BotState state, char const* kind)
+    {
+        // A spec with no pool keeps whatever it already has: nothing to undo,
+        // nothing to set.
+        if (!chosen)
+            return;
+
+        std::vector<std::string> const wanted = Tokens(*chosen);
+
+        // Does the chosen profile already decide this dial? Then its own pass
+        // below puts it where it belongs and the inverse must not run.
+        auto const decidedByChosen = [&wanted](std::string const& name)
+        {
+            for (std::string const& token : wanted)
+                if (token.substr(1) == name)
+                    return true;
+            return false;
+        };
+
+        for (PawnProfile const& other : pool)
+        {
+            if (&other == chosen)
+                continue;
+
+            for (std::string const& token : Tokens(other))
+            {
+                std::string const name = token.substr(1);
+                if (decidedByChosen(name))
+                    continue;
+
+                std::string inverse = token;
+                inverse[0] = (token[0] == '+') ? '-' : '+';
+                ai->ChangeStrategy(inverse, state);
+            }
+        }
+
+        ApplyProfile(ai, bot, chosen, state, kind);
+    }
 }
 
 PawnPersonality& PawnPersonality::instance()
@@ -237,7 +297,7 @@ PawnProfile const* PawnPersonality::Voice(ObjectGuid owner, ObjectGuid bot) cons
     return Draw(_voices, owner, bot, 0xC2B2AE3D27D4EB4Full);
 }
 
-void PawnPersonality::Apply(Player* bot, PawnProfile const* temperament, PawnProfile const* voice) const
+void PawnPersonality::Apply(Player* bot, ObjectGuid owner, uint8 cls, uint8 spec) const
 {
     if (!bot)
         return;
@@ -249,8 +309,15 @@ void PawnPersonality::Apply(Player* bot, PawnProfile const* temperament, PawnPro
     // The split is the point: how a pawn fights is a combat-engine decision, how
     // it behaves in town is a non-combat one, and mixing them would let a voice
     // change win a fight.
-    ApplyProfile(ai, bot, temperament, BOT_STATE_COMBAT, "combat");
-    ApplyProfile(ai, bot, voice, BOT_STATE_NON_COMBAT, "non-combat");
+    if (PawnProfile const* temperament = Temperament(owner, bot->GetGUID(), cls, spec))
+    {
+        auto const it = _temperaments.find(Key(cls, spec));
+        if (it != _temperaments.end())
+            ApplyPool(ai, bot, it->second, temperament, BOT_STATE_COMBAT, "combat");
+    }
+
+    if (PawnProfile const* voice = Voice(owner, bot->GetGUID()))
+        ApplyPool(ai, bot, _voices, voice, BOT_STATE_NON_COMBAT, "non-combat");
 }
 
 uint32 PawnPersonality::TemperamentPools() const

@@ -72,12 +72,49 @@ namespace
         return state;
     }
 
+    // The speed one mount grants: the largest value on any of the four auras that
+    // raise mounted movement. Flight and the always-on variants are separate auras
+    // from the ground one, so a single mount may carry several.
+    int32 MountSpeed(SpellInfo const* info)
+    {
+        int32 best = 0;
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+        {
+            SpellEffectInfo const& effect = info->Effects[i];
+            if (effect.Effect != SPELL_EFFECT_APPLY_AURA)
+                continue;
+
+            switch (effect.ApplyAuraName)
+            {
+                case SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED:
+                case SPELL_AURA_MOD_MOUNTED_SPEED_ALWAYS:
+                case SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED:
+                case SPELL_AURA_MOD_MOUNTED_FLIGHT_SPEED_ALWAYS:
+                    best = std::max(best, effect.CalcValue());
+                    break;
+                default:
+                    break;
+            }
+        }
+        return best;
+    }
+
     // The mount spell the pawn knows, if any. Playerbots rolls the mount once and
     // the character keeps it (spells are saved), so it is read back rather than
     // chosen: the only reliable answer to "what does this pawn ride" is the spell
     // that is actually on it. A summon spell carries the mount as an applied aura.
+    //
+    // InitMounts learns one mount per type, so a bot that qualifies for ground,
+    // flying and the always-on variants owns several, and the spell map has no
+    // order: taking the first hit would name whichever the hash table happened to
+    // yield, which changes when the table rehashes and rewrites the row on every
+    // login. The row should name the mount the pawn actually rides, so the fastest
+    // wins and the lowest id breaks a tie.
     uint32 FindMountSpell(Player* bot)
     {
+        uint32 bestId = 0;
+        int32 bestSpeed = -1;
+
         for (auto const& [id, playerSpell] : bot->GetSpellMap())
         {
             if (!playerSpell || !bot->HasSpell(id))
@@ -87,13 +124,27 @@ namespace
             if (!info)
                 continue;
 
+            bool mounted = false;
             for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
                 if (info->Effects[i].Effect == SPELL_EFFECT_APPLY_AURA &&
                     info->Effects[i].ApplyAuraName == SPELL_AURA_MOUNTED)
-                    return id;
+                {
+                    mounted = true;
+                    break;
+                }
+
+            if (!mounted)
+                continue;
+
+            int32 const speed = MountSpeed(info);
+            if (speed > bestSpeed || (speed == bestSpeed && id < bestId))
+            {
+                bestSpeed = speed;
+                bestId = id;
+            }
         }
 
-        return 0;
+        return bestId;
     }
 }
 
@@ -194,6 +245,17 @@ void PawnMgr::RefreshPool()
     } while (characters->NextRow());
 
     LOG_INFO("module", "Pawn: pool: {} offline characters, next roll in {} min", uint32(_pool.size()), minutes);
+}
+
+// Execute's variadic overload runs the statement through fmt, which writes a
+// std::string argument out verbatim: unquoted and unescaped. A text column bound
+// that way is therefore escaped here and single-quoted by the statement itself
+// ('{}'), or a value like O'Brien ends the literal early and a value like 0 is
+// read as a number, an empty one as nothing at all.
+static std::string EscapeSqlText(std::string value)
+{
+    CharacterDatabase.EscapeString(value);
+    return value;
 }
 
 // The roster table is created by this module, so a column added in a later build
@@ -757,10 +819,12 @@ void PawnMgr::ApplyPawn(Player* bot)
 
     // The trait has to be applied after every ResetStrategies, because that call
     // rebuilds the role defaults (tank face, behind, save mana for healers) and
-    // would otherwise wipe it on the first login.
-    sPawnPersonality.Apply(bot,
-                           sPawnPersonality.Temperament(row->Owner, row->Bot, bot->getClass(), row->SpecNo),
-                           sPawnPersonality.Voice(row->Owner, row->Bot));
+    // would otherwise wipe it on the first login. The engine it lands on is also
+    // the list playerbots replayed from the last logout, not the role defaults:
+    // that saved list still carries the trait this pawn had before its pool was
+    // edited, which is why the personality pass undoes the pool's other dials
+    // before it sets the chosen ones.
+    sPawnPersonality.Apply(bot, row->Owner, bot->getClass(), row->SpecNo);
 
     // Vanity is what the pawn *has*, not what it is promised, so it is read back
     // after the build instead of chosen: a pawn below the mount level simply
@@ -993,10 +1057,14 @@ bool PawnMgr::IsSpellForbidden(Player* bot, uint32 spellId) const
 
 void PawnMgr::Upsert(PawnRosterRow const& row)
 {
+    // fmt writes a std::string unquoted, so the pet name is escaped before it is
+    // bound and the statement supplies the quotes.
+    std::string const petName = EscapeSqlText(row.PetName);
+
     CharacterDatabase.Execute(
         "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built, paid, mount_spell, pet_name) "
-        "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, '{}')",
         row.Owner.GetCounter(), row.Bot.GetCounter(), uint32(row.SpecNo), uint32(row.Role),
         row.Recruited ? 1 : 0, uint32(row.TargetLevel), row.Built ? 1 : 0, row.Paid ? 1 : 0,
-        row.MountSpell, row.PetName);
+        row.MountSpell, petName);
 }

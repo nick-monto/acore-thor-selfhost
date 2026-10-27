@@ -44,9 +44,14 @@ public:
     [[nodiscard]] PawnProfile const* Temperament(ObjectGuid owner, ObjectGuid bot, uint8 cls, uint8 spec) const;
     [[nodiscard]] PawnProfile const* Voice(ObjectGuid owner, ObjectGuid bot) const;
 
-    // Applies the two profiles to the bot's engines: temperament to combat,
-    // voice to non-combat. Null profiles are skipped.
-    void Apply(Player* bot, PawnProfile const* temperament, PawnProfile const* voice) const;
+    // Applies the pawn's temperament to the combat engine and its voice to the
+    // non-combat engine, drawn from the same (owner, bot) seed as everything else.
+    // Authoritative over the dials its own pool names: playerbots replays the
+    // strategy list it saved at the last logout, which still carries the trait the
+    // pawn had before the pool was edited, so a dial another profile of the pool
+    // sets and the chosen one does not is undone before the chosen dials are
+    // applied.
+    void Apply(Player* bot, ObjectGuid owner, uint8 cls, uint8 spec) const;
 
     [[nodiscard]] uint32 TemperamentPools() const;
     [[nodiscard]] uint32 VoiceCount() const;

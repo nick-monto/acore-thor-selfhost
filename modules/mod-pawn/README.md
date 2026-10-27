@@ -95,20 +95,35 @@ talk at all, so `Talkative` on a server with speech switched off changes nothing
 Names are checked twice, for the reason `Engine::addStrategy` gives: it ignores an unknown one without
 a word, so a typo would be a silent no-op. A malformed profile is dropped with an error when the
 pools load, and a `+name` the bot does not actually have is reported once, the first time a pawn
-draws it — one mistake shared by every pawn, not one line per login.
+draws it — one mistake shared by every pawn, not one line per login. The offline check
+(`scripts/pawn/check_pawn.py`) reads the Strategy contexts only — the base, class, raid and dungeon
+`Strategy` contexts of the playerbots tree — because a name is a dial only if `GetStrategy` resolves
+it: a trigger, action or value of the same name fails that check, and would have been dropped without
+a word at runtime.
 
 The picker row names the pair it is offering. Vanity below does not, because it does not exist yet at
 that point.
 
 ### Where the traits land
 
-playerbots rebuilds the role defaults every time it rebuilds strategies: `ResetStrategies` puts
-`tank face` back on a tank, `behind` back on melee dps and `save mana` back on a healer. The pawn's
-own build calls it too, to score gear against the pinned spec, so a trait applied earlier in the
-build — or at recruit — would be gone before the pawn ever fought. The profiles are therefore applied
-at the *end* of `PawnMgr::ApplyPawn`, the one path every pawn login passes through: after the build
-and after the last strategy rebuild. A trait added anywhere else would evaporate on the first login
-and the pawn would arrive plain.
+On a pawn's first build the traits land on the role defaults: `ResetStrategies` puts
+`tank face` back on a tank, `behind` back on melee dps and `save mana` back on a healer, and the
+pawn's own build calls it too, to score gear against the pinned spec. The profiles are therefore
+applied at the *end* of `PawnMgr::ApplyPawn`, the one path every pawn login passes through: after the
+build and after the last strategy rebuild. A trait applied earlier in the build would be gone before
+the pawn ever fought.
+
+From the second login that engine is no longer the role defaults. playerbots saves the strategy
+list at logout and replays it on login (`PlayerbotMgr.cpp:572-574` → `PlayerbotRepository::Load`,
+which clears the combat state and re-applies the saved string), so the trait lands on last session's
+list carrying last session's trait. `PawnPersonality::Apply` therefore draws both profiles itself
+and, through `ApplyPool`, undoes every dial that another profile of the *same pool* names and the
+chosen one does not, before applying the chosen dials. Without that inverse pass, editing a pool
+would never reach an already-hired pawn: its stored list would keep the old trait for good.
+
+The limit is worth knowing: a dial that is deleted from *every* profile of a pool is no longer named
+by the pool, so nothing undoes it. It survives until the pawn is re-hired or its stored strategy list
+is cleared.
 
 ## What they ride
 
@@ -118,6 +133,13 @@ back after the build and records them on the roster row, `mount_spell` and `pet_
 row draws them from there (`rides Black Stallion, with Wolf`): a pawn in that list may be offline, so
 there is no object to ask. A pawn too low for a mount records 0, and an empty `pet_name` means no pet
 — the row then says nothing rather than inventing one.
+
+The recorded mount is the *fastest* one the pawn owns, ranked by the largest mount-speed aura value
+on the spell and tie-broken by the lowest spell id (`PawnMgr::FindMountSpell` with `MountSpeed`).
+`PlayerbotFactory::InitMounts` learns one mount per type — slow, fast, flying slow, flying fast — so
+a pawn owns several, and the spell map has no order: taking the first hit would name whichever mount
+the hash table happened to yield, which can change when the table rehashes and would rewrite the row
+on every login.
 
 They are deliberately not on the offer row. Before hiring there is nothing to promise, and a row
 that promised a mount would be guessing at what the build will roll.
@@ -226,6 +248,15 @@ login pass — the pass that would otherwise rebuild the pawn at its owner's lev
 `Pawn.Blacklist.<class>.<spec_no>` list and one `Pawn.Variant.<class>.<spec_no>` pool and one
 `Pawn.Temperament.<class>.<spec_no>` pool per archetype. Spell names in the blacklist are
 resolved once at startup; an unresolved name is logged as an error rather than ignored.
+
+The pool keys are where an upgrade shows. `scripts/thor-install.sh` copies the `.dist` only when the
+live conf is missing, so an install made before a pool shipped would keep a conf with no
+`Pawn.Temperament.*` block at all and `PawnPersonality::Load` would have nothing to roll from. The
+installer therefore back-fills them (`pawn_append_missing_conf`): every shipped `Pawn.Voice`,
+`Pawn.Blacklist.<cls>.<spec>`, `Pawn.Variant.<cls>.<spec>` and `Pawn.Temperament.<cls>.<spec>` line
+the live conf does not define is appended with its shipped value, under a comment saying so. It is
+append-only — no existing value is rewritten, and a pool the admin trimmed is left alone — and
+idempotent: the second run appends nothing.
 
 ## The pool and the featured draw
 

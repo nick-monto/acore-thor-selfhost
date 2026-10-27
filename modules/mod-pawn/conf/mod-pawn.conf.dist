@@ -390,6 +390,11 @@ Pawn.Voice = Talkative: +emote | Quiet: -emote
 #
 # Same class ids and spec numbers as the blacklist and variant blocks. A spec
 # with no block, or an empty one, keeps the untouched defaults.
+#
+# The profile is applied on top of the strategy list playerbots replayed from the
+# pawn's last logout, not on the role defaults, so the module first undoes the
+# dials the pool's other profiles name. A dial removed from every profile of a
+# pool is named by nothing and lingers until the pawn is re-hired.
 
 # Warrior: arms, fury, prot
 Pawn.Temperament.1.0 = Relentless: +aggressive,+close | Patient: +wait for attack | Wary: +avoid aoe

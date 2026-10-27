@@ -8,10 +8,13 @@ the agreement between the files, which is where a module of this shape actually 
   * every Pawn.* key the C++ reads is defined, uncommented, in conf/mod-pawn.conf.dist;
   * the installer's PAWN_CONF_DEFAULTS and the shipped conf agree, both ways: the repair path
     restores exactly what the conf ships, and no key can be added to one without the other;
-  * every column the roster code writes exists in the table it creates, and the vanity columns
-    survive a save;
-  * every personality pool parses, names a strategy playerbots registers, never drags in
-    `chat` for speech, and puts a dial only where it does something: `save mana` on a healer,
+  * every column the roster code writes exists in the table it creates, the vanity columns
+    survive a save, and the one text column is quoted by the statement and escaped by the
+    caller, because Execute's variadic overload formats a std::string raw;
+  * every personality pool parses to at least one profile and every dial names a strategy
+    playerbots registers *as a strategy* - a trigger, an action or a value of the same name is
+    not one, and the engine drops it - never drags in `chat` for speech, and puts a dial only
+    where it does something: `save mana` on a healer,
     `close`/`ranged` off the classes whose strategy already inherits it, and a pool on every
     PvE premade spec;
   * the loader symbol is the one the build derives from the directory name;
@@ -207,17 +210,48 @@ def check_picker(keys: dict[str, str]) -> None:
     notes.append("picker: creature hook on innkeepers, actions clear of the core's option range")
 
 
+# Every kind of playerbots AI object registers the same way, `creators["name"] = &Class::factory;`,
+# and a class file declares its strategy, trigger, action and value contexts side by side. The
+# name is a strategy only when the class around it derives from NamedObjectContext<Strategy>, so
+# the scan tracks the enclosing class instead of taking every creator in the file. All three
+# shapes here - base, class and the raid/dungeon strategy contexts - use that one form.
+CONTEXT_CLASS = re.compile(r"^class\s+\w+[^\n{;]*\bNamedObjectContext<(\w+)>")
+CREATOR = re.compile(r'creators\["([^"]+)"\]')
+
+
 def strategy_vocabulary() -> set[str] | None:
-    """Every strategy name playerbots registers, or None when the sibling tree is absent."""
+    """Every strategy name playerbots registers, or None when the sibling tree is absent.
+
+    Engine::addStrategy resolves the name through GetStrategy, which returns null for a trigger,
+    an action or a value; the dial is then dropped without a word. That is why the vocabulary is
+    the Strategy contexts only.
+    """
     if not PLAYERBOTS.is_dir():
         return None
 
     sources = [PLAYERBOTS / "src" / "Ai" / "Base" / "StrategyContext.h"]
     sources += sorted(PLAYERBOTS.glob("src/Ai/Class/*/*AiObjectContext.cpp"))
+    sources += [
+        PLAYERBOTS / "src" / "Ai" / "Raid" / "RaidStrategyContext.h",
+        PLAYERBOTS / "src" / "Ai" / "Dungeon" / "DungeonStrategyContext.h",
+    ]
     names: set[str] = set()
     for path in sources:
-        if path.is_file():
-            names.update(re.findall(r'creators\["([^"]+)"\]', path.read_text(encoding="utf-8")))
+        if not path.is_file():
+            # A fork that renames or moves a context would otherwise shrink the vocabulary to
+            # whatever is left, which is a weaker check that still passes.
+            fail(f"vocabulary: {path.relative_to(PLAYERBOTS.parent)} is missing from the "
+                 f"mod-playerbots checkout")
+            continue
+        kind: str | None = None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            declared = CONTEXT_CLASS.match(line)
+            if declared:
+                kind = declared.group(1)
+            elif line.startswith("};"):
+                kind = None  # end of the class body; its context no longer applies
+            elif kind == "Strategy":
+                names.update(CREATOR.findall(line))
     return names or None
 
 
@@ -303,15 +337,22 @@ def check_personality(keys: dict[str, str]) -> None:
     voice_profiles = 0
     dials: set[str] = set()
     dead: set[tuple[str, str]] = set()
+    covered: set[tuple[int, int]] = set()
     for key, value in pools:
         profiles = parse_pool(value, key)
+        if not profiles:
+            # PawnPersonality::Load keeps a block only `if (!pool.empty())`, so an empty one does
+            # not survive as an empty temperament: it is dropped and the spec falls back to
+            # whatever the class default is, silently.
+            fail(f"conf: {key} defines no profiles; the loader drops an empty pool, so this "
+                 f"block adds nothing")
         if key == "Pawn.Voice":
             voice_profiles = len(profiles)
-            if not profiles:
-                fail(f"conf: {key} defines no profiles")
         spec_key = TEMPERAMENT_KEY.fullmatch(key)
         cls = int(spec_key.group(1)) if spec_key else None
         spec = int(spec_key.group(2)) if spec_key else None
+        if profiles and spec_key:
+            covered.add((cls, spec))
         spec_name = specs.get((cls, spec)) if specs is not None and cls is not None else None
         for label, tokens in profiles:
             for token in tokens:
@@ -324,7 +365,8 @@ def check_personality(keys: dict[str, str]) -> None:
                          f"handling, not speech - use emote for a voice")
                 elif vocabulary is not None and name not in vocabulary:
                     fail(f"conf: {key}: profile {label} names {token!r}, which playerbots does "
-                         f"not register; the engine would silently ignore it")
+                         f"not register as a strategy; addStrategy looks the name up with "
+                         f"GetStrategy and silently ignores a trigger, an action or a value")
                 if (key, name) in dead:
                     continue  # one report per block and dial; the second profile adds nothing
                 # HealerAutoSaveManaStrategy multiplies only CastHealingSpellAction, so on a
@@ -346,7 +388,9 @@ def check_personality(keys: dict[str, str]) -> None:
     if vocabulary is None:
         notes.append("personality: strategy vocabulary check skipped (no mod-playerbots checkout)")
     else:
-        notes.append(f"personality: every dial is one of {len(vocabulary)} playerbots strategies")
+        notes.append(f"personality: every dial is one of {len(vocabulary)} playerbots strategies "
+                     f"(the Strategy contexts only, not the triggers, actions and values that "
+                     f"register the same way)")
 
     if specs is None:
         notes.append("personality: spec applicability and coverage checks skipped "
@@ -356,11 +400,9 @@ def check_personality(keys: dict[str, str]) -> None:
     # Every PvE spec the module offers must have a pool, because an offer with no temperament
     # rolls a pawn that behaves like every other pawn of its class. Blacklist and variant blocks
     # are not held to this: 6.3 and 8.3 never had one, and that gap is not this check's to close.
+    # `covered` only holds blocks that parsed to at least one profile: a block that is present
+    # but empty is dropped by the loader and would leave the spec with no temperament at all.
     pve = {pair: name for pair, name in specs.items() if name.endswith("pve")}
-    covered = {
-        (int(match.group(1)), int(match.group(2)))
-        for match in (TEMPERAMENT_KEY.fullmatch(k) for k in temperament_keys) if match
-    }
     for pair, name in sorted(pve.items()):
         if pair not in covered:
             fail(f"conf: no Pawn.Temperament.{pair[0]}.{pair[1]} for the PvE premade spec "
@@ -394,6 +436,24 @@ def check_roster() -> None:
             if column not in written:
                 fail(f"code: the REPLACE INTO column list does not name {column}; the "
                      f"vanity read back after the build would be dropped on the next save")
+        # CharacterDatabase.Execute's variadic overload formats its arguments with fmt, and the
+        # core has no formatter for std::string, so a text argument is written out raw: unquoted
+        # and unescaped. An empty name then leaves a trailing comma and any name makes the next
+        # word look like a column, so the statement has to supply the quotes itself. The literal
+        # is a run of adjacent strings, so look at everything up to the end of the call.
+        end = cpp.find(";", statement.end())
+        bound = cpp[statement.end():] if end < 0 else cpp[statement.end():end]
+        if "'{}'" not in bound:
+            fail("code: the REPLACE INTO statement binds its text column without quotes; "
+                 "Execute's variadic overload formats a std::string unquoted and unescaped, so "
+                 "the statement must spell the placeholder '{}' and the value must be escaped "
+                 "before it is bound")
+
+    # The other half of that: the statement quotes, the caller escapes.
+    if "EscapeString" not in cpp:
+        fail("code: PawnMgr.cpp never calls EscapeString; a pet name bound through Execute's "
+             "variadic overload is written raw, so a quote in it ends the literal early and an "
+             "empty one leaves a trailing comma in the statement")
 
     # Vanity is read back after the build because the mount and pet are the outcome, not an
     # input: the row has to carry them or the party menu can only say "a mount".
