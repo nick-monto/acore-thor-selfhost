@@ -84,7 +84,11 @@ def templatise(token):
     token = token.replace(core, '@CORE@')
     for recorded in RECORDED_DEPS:
         token = token.replace(recorded, '@DEPS@')
-    token = token.replace(deps, '@DEPS@')
+    # An empty root is the system case (AC_DEPS_ROOT=/, so the dependency headers are
+    # installed): replacing '' would insert @DEPS@ between every character of every
+    # token and shred the other placeholders before they are resolved.
+    if deps:
+        token = token.replace(deps, '@DEPS@')
     return token
 
 
@@ -130,6 +134,19 @@ else:
 out = [templatise(token) for token in out]
 if mode != 'keep-placeholders':
     out = [resolve(token) for token in out]
+    # A dependency root of / is the system case: the packages installed the headers in
+    # /usr/include, which the compiler already searches. Passing it again as -isystem
+    # puts it ahead of libstdc++'s own directory in the search order, and then
+    # #include_next <stdlib.h> in <cstdlib> has nothing left to find: every translation
+    # unit dies on its first standard header.
+    cleaned, i = [], 0
+    while i < len(out):
+        if out[i] == '-isystem' and i + 1 < len(out) and out[i + 1].rstrip('/') == '/usr/include':
+            i += 2
+            continue
+        cleaned.append(out[i])
+        i += 1
+    out = cleaned
 if '-fsyntax-only' not in out:
     out.append('-fsyntax-only')
 sys.stdout.write('\0'.join(out))
@@ -172,6 +189,14 @@ fi
 
 mapfile -d '' -t FLAGS < <(templated_flags "$FLAGS_SOURCE") || fail "could not read the flags from $FLAGS_SOURCE"
 [ "${#FLAGS[@]}" -gt 0 ] || fail "no compile flags came out of $FLAGS_SOURCE"
+# A placeholder that survives resolution would reach the compiler as a literal
+# include path, and every translation unit would fail on the first core header.
+for token in "${FLAGS[@]}"; do
+    case "$token" in
+        *@CORE@*|*@PLAYERBOTS@*|*@DEPS@*)
+            fail "unresolved placeholder in the flags from $FLAGS_SOURCE: $token" ;;
+    esac
+done
 
 # Named files, or every module source in the repository.
 if [ "$#" -gt 0 ]; then
