@@ -14,8 +14,9 @@ at (see "A pawn is what you hired" below). This module adds the six things the p
    restart. A dismissed row is kept, so re-recruiting the same pawn gives the same pawn. The table
    is created in code rather than by module SQL because a failing module SQL file aborts the boot
    on this fork (`docs/SERVER-STACK.md` §13).
-2. **A doorway**: one extra gossip line on every innkeeper, with a paged picker. Recruit,
-   dismiss, and the party cap all live there. The picker shows a random 10-15 of the pool per
+2. **A doorway**: one extra gossip line on every innkeeper, with a paged picker. Recruiting and the
+   party cap live there; a party row opens that pawn's own page, where its orders and its dismissal
+   now live (see "The pawn page" below). The picker shows a random 10-15 of the pool per
    visit, not the whole pool — see below.
 3. **A level window** (`Pawn.LevelWindow`, default ±2). Each pool pawn gets a stable level inside
    the window, derived from the player and pawn guids, so offers vary instead of all snapping to the
@@ -39,6 +40,11 @@ at (see "A pawn is what you hired" below). This module adds the six things the p
    differ in what they carry; they now differ in how they fight and how they talk, and the mount and
    pet each one ends up with are read back onto the roster. See "How they fight, and how they talk"
    and "What they ride" below.
+
+Those six are the model. What a player does with a pawn afterwards — the page behind a party row and
+the orders on it, the repair and restock, the retraining, and the affinity and voice lines a pawn
+keeps by being kept — is the rest of this document: "The pawn page", "Upkeep: repair and restock",
+"Retraining", "Affinity" and "What they say".
 
 ## Two pawns of one spec
 
@@ -127,6 +133,42 @@ The limit is worth knowing: a dial that is deleted from *every* profile of a poo
 by the pool, so nothing undoes it. It survives until the pawn is re-hired or its stored strategy list
 is cleared.
 
+### What they say
+
+`Pawn.Voice` decides how a pawn behaves between fights. `Pawn.VoiceLine.<label>` decides what it
+actually says, and the label is the voice it drew, so a line block belongs to a voice rather than to
+a spec or a class.
+
+A value is `event: text` chunks separated by `|`, and the events are `kill`, `death` and `dismiss` —
+the three moments the module sees for itself. `PawnPersonality::Load` enumerates the keys the conf
+defines with `GetKeysByString` rather than probing a fixed set, so a voice with no line block is
+silent rather than an error. A block whose label is not in `Pawn.Voice`, an event outside those three,
+and an empty text are each logged and dropped at load. Text may not contain a `|`: the conf format
+splits on it, so a line that needs one is not expressible.
+
+The line is drawn from the `(owner, pawn)` seed salted with the event — the same seed as the pawn's
+level, spec and temperament. A pawn therefore says the same thing at the same moment every time, and
+its death line is not its kill line again. The global RNG is never consulted: a hundred other things
+move it, and the draw has to be reproducible from the two guids alone.
+
+`PawnPersonality::SayLine` resolves the pawn's voice and speaks through `bot->Say`, in the pawn's own
+faction language (`LANG_COMMON` for Alliance, `LANG_ORCISH` for Horde) — the same choice playerbots'
+own say action makes (`SayAction.cpp:139`), so the other faction does not read a pawn's line as
+universal speech. Two scalars pace it:
+
+- `Pawn.VoiceKillChancePercent` (default 10) applies to kill lines only: `urand(1, 100)` above the
+  chance and the pawn says nothing, so `0` never speaks and `100` always does. A death or a farewell
+  is rare enough to be said every time a line exists.
+- `Pawn.VoiceCooldownSeconds` (default 120) is per pawn and per event, so a pawn pulled into a fast
+  fight cannot repeat one line and its kill line does not silence its farewell. The elapsed time is an
+  unsigned subtraction, so the cooldown survives the millisecond counter wrapping.
+
+The three call sites are `OnPlayerCreatureKill` (a pawn landed the kill, event `kill`),
+`OnPlayerJustDied` (event `death`, said before the pawn is released — the last moment it is a player
+in the world) and `PawnMgr::Dismiss` (event `dismiss`, before `LogoutPlayerBot` deletes the Player
+object). Only a pawn speaks: a real player's kills are the player's to narrate. The dial and the lines
+are independent, so `Quiet` keeps its `death` line and says nothing on kills.
+
 ## What they ride
 
 playerbots rolls a pawn's mount and pet during the build, so neither is known before the pawn exists
@@ -209,6 +251,134 @@ at the level it is standing at is free to call back (the roster's `paid` column)
 re-hiring to rearrange a party costs nothing. A hire at a *new* level is a new fee: the fee buys a
 companion at that level, and a pawn you have outgrown is a different companion.
 
+## The pawn page
+
+A party row opens that pawn's page, and dismissal lives there with everything else a pawn can be
+told to do, because the offers page has no rows to spare: the gossip packet carries at most sixteen
+rows (`src/server/game/Entities/Creature/GossipDef.cpp:199-201`) and the server aborts on a 33rd
+(`:43`), while the offers page is already at twelve offers plus two party rows plus two navigation
+rows with two pawns. One page per pawn has seven rows and does not grow with the party.
+
+The page names the pawn on every row that acts on it, because the gossip title does not: a page of
+bare "follow me" rows would be indistinguishable from the same page for the other companion. The
+rows are retrain (with the level it would reach and its fee), follow me, hold here, attack my
+target, restock and repair (with the fee), dismiss and back. Back returns to the offers page the
+player came from at the same page index — the page keeps the offers page's cursor untouched while it
+is open — and a dismissal lands there too, because the pawn the page was about is no longer in the
+party. A menu that outlived the party it was drawn for is re-checked against the live roster on the
+click, so a stale row goes back to the offers page instead of acting on a guid it no longer knows.
+
+The action code carries both the pawn and the verb, `1300 + party_row * 10 + verb`, because the page
+is one pawn rather than a position on a list; `Pawn.MaxPawns` is clamped to four, so the whole range
+is `1300..1339`. The two rows that spend money (retrain and restock) and the one that ends the
+contract (dismiss) carry a confirmation box, and every box carries zero money: the charge happens
+inside `PawnMgr` after its own checks, for the reason "The hire fee" gives. An order can be given
+again, so the order rows ask nothing.
+
+**Orders.** `PawnMgr::Order` forwards one verb through
+`PlayerbotAI::HandleCommand(CHAT_MSG_WHISPER, verb, *player)` (`PlayerbotAI.h:638`) — the same entry
+point a whisper from the owner reaches, with the owner as the sender, so playerbots' own
+sender-is-owner check passes exactly as it does for a whisper. The verbs are playerbots' own whisper
+vocabulary (`ChatCommandHandlerStrategy.cpp`): `follow`, `stay`, `attack` and `flee`. The page has
+rows for `follow`, `stay` and `attack`; `Order` accepts all four, and refuses anything else rather
+than passing it on — the string would otherwise be a second way into playerbots' command parser, and
+one nobody reviewed.
+
+Each order answers with the pawn's name and what it did — "<name> falls in behind you.", "<name>
+holds here.", "<name> takes your target.", "<name> breaks off." Every verb is legal in combat:
+`stay` and `follow` are wanted exactly when a fight starts. A pawn that is not in the world is told
+so and nothing is queued, because an order is a moment, not a state.
+
+## Upkeep: repair and restock
+
+Repair and restock is one row and one price: the pawn's gear comes back at full durability and the
+supplies the factory would have given it are replaced. The order matters.
+
+1. `DurabilityRepairAll(false, 1.0f, false)` puts every equipped item at full durability.
+2. Every carried item in the item categories the factory replenishes is destroyed:
+   `ITEM_CLASS_CONSUMABLE` with subclass potion, elixir, flask or food, plus `ITEM_CLASS_REAGENT`
+   and `ITEM_CLASS_PROJECTILE`, over the backpack (`INVENTORY_SLOT_ITEM_START..END`) and every
+   equipped bag (`INVENTORY_SLOT_BAG_START..END`, `Bag::GetBagSize`).
+3. `PlayerbotFactory` at the pawn's level runs `InitFood`, `InitPotions`, `InitReagents` and
+   `InitAmmo`.
+
+The purge is what makes the action idempotent. `InitFood` stores two stacks per food category per
+call and `InitPotions` does the same, and both append; run on a pawn that still carries its
+supplies, the init alone would hand it a second copy of everything and slowly fill its bags. Purging
+first means restocking twice in a row leaves the same food count, not double. Only the categories the
+factory replenishes are cleared — containers, gear, quest items, glyphs and trade goods are untouched
+— so a bag full of gear the player handed over keeps the gear and simply gets less back.
+
+The fee is `Pawn.ResupplyFeePercent` (default 100) of `player_level^2 * 10` copper: 40s at 20,
+6g 40s at 80. It is charged to the player, checked before anything is touched, and refused when
+unaffordable. A square rather than the hire's cube, because upkeep is paid many times over a level
+and has to stay a small fraction of what the player earns at that level; `0` makes every restock
+free. The action is allowed in combat — a wipe is when a restock is needed — and refused when the
+module is off, when the pawn is not this player's recruited pawn, when it is not in the world, and
+when it is dead.
+
+## Retraining
+
+A pawn is pinned to the level it was hired at, and the deck deals only part of the pool per cycle,
+so a companion the player has outgrown may not come round again for hours while its party slot stays
+spent. Retraining keeps the *same character* — name, spec, temperament, voice, affinity — and
+rebuilds it at the level it would be offered at now.
+
+`PawnMgr::OfferFor` builds the offer the roster row would get at the player's current level: the same
+bot, the level re-derived through `DeriveLevel`, the row's spec pinned back over the seed's draw
+(with the name, the role, the withheld variants and the temperament re-derived from the pinned spec,
+so the offer describes one character rather than a blend of two), and the gear ratio from the
+roster's base ratio. `Retrain` charges `HireFee` for that offer — the fee of hiring this pawn at the
+new level, gear ratio and held-party multiplier included — and refuses when the player cannot afford
+it. It also refuses while the player is in combat.
+
+Then it sets `target_level`, clears `built`, records `paid` when money moved, writes the row and
+calls `ApplyPawn` inline: the pawn is in the world, so the build does not go through the login queue.
+What the build replaces is what a re-hire at that level replaces — the equipped gear is destroyed and
+built again for the new level. What the pawn carries in its bags is not touched, so gear handed over
+in a trade and never equipped survives, and the result message says so: "What it carries in its bags
+is untouched; what it wears is replaced for the new level."
+
+A pawn already at the level the offer names is refused — "<name> is already trained for level N." —
+and the row is drawn anyway: a row that appeared and disappeared under a menu sent a moment earlier
+is worse than an honest refusal.
+
+## Affinity
+
+Everything else about a pawn is fixed at hire time. Affinity is the one counter that moves with
+play: a per-(owner, pawn) point total in the roster's `affinity` column, credited on every kill and
+every completed quest to **every recruited pawn of that owner** — the pawns are the party, so they
+bond together. A kill counts whether the owner or a pawn landed it: `OnPlayerCreatureKill` resolves a
+pawn killer back to its owner, and `OnPlayerCreatureKillCredit` fires for the credited player of a
+group kill, so a killing blow by a grouped pawn credits the owner twice. That is deliberate —
+affinity is a participation counter, not a score, and the bookkeeping to recognise the duplicate
+would cost more than the step it saves. Quest completion comes from `OnPlayerCompleteQuest`, which
+only ever fires for a real player's own turn-in.
+
+Points are counted in whole steps of `Pawn.AffinityStep` (default 100), and a step has exactly two
+effects, both on draws the module already makes:
+
+- **It learns what it was missing.** `WithheldVariants` subtracts the step count from the withheld
+  draw, clamped to the pool, so enough steps and a pawn is missing nothing it was not dealt.
+  `IsSpellForbidden` reads the same function, so the spell gate lets an ability through on the same
+  build that grants it.
+- **It arrives better geared at its next build.** `ApplyPawn` adds one `Pawn.AffinityGearPercent`
+  (default 5) per step to the gear-score ceiling, capped at `Pawn.GearCapPercent`. The hire fee keeps
+  the base ratio, so a veteran pawn is geared better than its price suggests — the reward for
+  keeping it, not a tax on the player who does.
+
+The step count is clamped to `Pawn.VariantWithholdMax`, because a step exists to hand back one
+withheld ability and a bond that ran past its own denominator would be buying nothing. That clamp is
+also the `M` in `bonded N/M` on the party row and on the retrain row: the most any pawn could learn.
+A pawn that has earned nothing keeps a bare row, since the suffix is a reward rather than a
+baseline.
+
+The write is the one thing affinity is careful about. Rows move in memory on every award and the
+database is written only when the step count changes, because this runs once per kill on the world
+thread and a kill must not cost a write. Points inside the current step are lost on a crash and
+persisted by the next build, login or step. `Pawn.AffinityEnabled = 0` freezes the counters and
+makes the feature inert; nothing is deleted.
+
 ## The party cap
 
 `Pawn.MaxPawns` (default 2) counts **pawns**, not group members. The installer sets
@@ -228,11 +398,11 @@ PASS), `Playerbots.LootGreedRollLevel = 0` (GREED becomes PASS) and `Playerbots.
 
 | Piece | Where |
 |---|---|
-| Roster schema, I/O, offers, recruit/dismiss, the gear pass | `src/PawnMgr.cpp` |
+| Roster schema, I/O, offers, recruit/dismiss, orders, restock, retrain, affinity, the gear pass | `src/PawnMgr.cpp` |
 | Spec pinning and the spellbook blacklist | `src/PawnArchetype.cpp` |
-| Temperament and voice pools, and applying them | `src/PawnPersonality.cpp` |
-| The innkeeper line and the gossip menu | `src/PawnInnkeeper.cpp` |
-| Login queue and the learn-spell gate | `src/PawnScripts.cpp` |
+| Temperament and voice pools, their lines, and applying them | `src/PawnPersonality.cpp` |
+| The innkeeper line, the offers page and the pawn page | `src/PawnInnkeeper.cpp` |
+| Login queue, the learn-spell gate, the affinity hooks and the kill and death lines | `src/PawnScripts.cpp` |
 | Loader symbol `Addmod_pawnScripts` | `src/pawn_loader.cpp` |
 
 Two hooks carry the behaviour. `PlayerScript::OnPlayerCanLearnSpell` refuses a blacklisted spell at
@@ -245,12 +415,21 @@ login pass — the pass that would otherwise rebuild the pawn at its owner's lev
 
 `conf/mod-pawn.conf.dist`: `Pawn.Enable`, `Pawn.MaxPawns`, `Pawn.LevelWindow`, `Pawn.GainXP`,
 `Pawn.HireFeePercent`, `Pawn.HireFeeHeldPercent`, `Pawn.GearFloorPercent`, `Pawn.GearCapPercent`,
-`Pawn.OfferedPerPage`, `Pawn.FeaturedMin`/`FeaturedMax`,
-`Pawn.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Pawn.Debug`, one `Pawn.Voice` pool, and one
-`Pawn.Blacklist.<class>.<spec_no>` list and one `Pawn.Variant.<class>.<spec_no>` pool and one
-`Pawn.Temperament.<class>.<spec_no>` pool per archetype. Spell names in the blacklist are
-resolved once at startup; an unresolved name is logged as an error rather than ignored. That
-resolution happens in `OnStartup`, not at the first config load: `OnAfterConfigLoad` runs at
+`Pawn.ResupplyFeePercent`, `Pawn.OfferedPerPage`, `Pawn.FeaturedMin`/`FeaturedMax`,
+`Pawn.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Pawn.Debug`, the affinity scalars
+`Pawn.AffinityEnabled`, `Pawn.AffinityKillPoints`, `Pawn.AffinityQuestPoints`, `Pawn.AffinityStep`
+and `Pawn.AffinityGearPercent`, the voice scalars `Pawn.VoiceKillChancePercent` and
+`Pawn.VoiceCooldownSeconds`, one `Pawn.Voice` pool and one `Pawn.VoiceLine.<label>` pool per voice,
+and one `Pawn.Blacklist.<class>.<spec_no>` list and one `Pawn.Variant.<class>.<spec_no>` pool and one
+`Pawn.Temperament.<class>.<spec_no>` pool per archetype. The shipped values are
+`Pawn.ResupplyFeePercent = 100`, `Pawn.AffinityEnabled = 1`, `Pawn.AffinityKillPoints = 10`,
+`Pawn.AffinityQuestPoints = 25`, `Pawn.AffinityStep = 100`, `Pawn.AffinityGearPercent = 5`,
+`Pawn.VoiceKillChancePercent = 10` and `Pawn.VoiceCooldownSeconds = 120`. The two shipped line pools
+match the two shipped voice labels:
+`Pawn.VoiceLine.Talkative = kill: Well fought! | kill: Next one, then. | kill: That is how it is done. | death: Avenge me, friend. | dismiss: Until next time.`
+and `Pawn.VoiceLine.Quiet = death: ... | dismiss: *nods*`. Spell names in the blacklist are resolved
+once at startup; an unresolved name is logged as an error rather than ignored. That resolution
+happens in `OnStartup`, not at the first config load: `OnAfterConfigLoad` runs at
 `World.cpp:302` and `sSpellMgr->LoadSpellInfoStore` at `World.cpp:407`, so a build there finds an
 empty spell store and every blacklist and variant name fails to resolve. A reload rebuilds both
 tables, on a running server where the store is already loaded.
@@ -259,7 +438,8 @@ The pool keys are where an upgrade shows. `scripts/thor-install.sh` copies the `
 live conf is missing, so an install made before a pool shipped would keep a conf with no
 `Pawn.Temperament.*` block at all and `PawnPersonality::Load` would have nothing to roll from. The
 installer therefore back-fills them (`pawn_append_missing_conf`): every shipped `Pawn.Voice`,
-`Pawn.Blacklist.<cls>.<spec>`, `Pawn.Variant.<cls>.<spec>` and `Pawn.Temperament.<cls>.<spec>` line
+`Pawn.VoiceLine.<label>`, `Pawn.Blacklist.<cls>.<spec>`, `Pawn.Variant.<cls>.<spec>` and
+`Pawn.Temperament.<cls>.<spec>` line
 the live conf does not define is appended with its shipped value, under a comment saying so. It is
 append-only — no existing value is rewritten, and a pool the admin trimmed is left alone — and
 idempotent: the second run appends nothing.

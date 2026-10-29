@@ -180,13 +180,16 @@ jobs:
           test -f "$PREFIX/etc/modules/mod-survivor.conf.dist"
           grep -q '^Survivor.Enable = 1$' "$PREFIX/etc/modules/mod-survivor.conf.dist"
           # And for the pawn module: its conf is installed and carries a switch, an archetype
-          # blacklist and the picker's pool keys, so a build that dropped the module or its
-          # conf fails here.
+          # blacklist, the picker's pool keys and the expansion's three headline defaults, so a
+          # build that dropped the module, its conf or one of the new keys fails here.
           test -f "$PREFIX/etc/modules/mod-pawn.conf.dist"
           grep -q '^Pawn.Enable = 1$' "$PREFIX/etc/modules/mod-pawn.conf.dist"
           grep -q '^Pawn.Blacklist.1.2 = ' "$PREFIX/etc/modules/mod-pawn.conf.dist"
           grep -q '^Pawn.Variant.1.1 = ' "$PREFIX/etc/modules/mod-pawn.conf.dist"
           grep -q '^Pawn.FeaturedMin = 10$' "$PREFIX/etc/modules/mod-pawn.conf.dist"
+          grep -q '^Pawn.ResupplyFeePercent = 100$' "$PREFIX/etc/modules/mod-pawn.conf.dist"
+          grep -q '^Pawn.AffinityStep = 100$' "$PREFIX/etc/modules/mod-pawn.conf.dist"
+          grep -q '^Pawn.VoiceLine.Talkative = ' "$PREFIX/etc/modules/mod-pawn.conf.dist"
 
       - name: Bundle the libraries whose soname is tied to this release
         run: |

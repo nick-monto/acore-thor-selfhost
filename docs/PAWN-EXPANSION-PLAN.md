@@ -141,8 +141,12 @@ with `HireFee(player, offer)`; refuse when unaffordable. Charge. Set `TargetLeve
 the world, so the build runs inline rather than through the login queue.
 
 **Gear.** The build pass re-equips the pawn (`DestroyEquippedGear` + `InitEquipment`), which is the
-same behaviour a re-hire at a new level has. What the pawn carries in its **bags** is untouched, so
-gear handed over in a trade and not equipped survives. The confirmation box says so.
+same behaviour a re-hire at a new level has. The rebuild is a full inventory reset in playerbots
+(`PlayerbotFactory::Randomize` calls `ClearInventory`, which destroys the backpack, the keyring and
+every equipped bag), so `ApplyPawn` snapshots what the pawn carries before the build and stores each
+stack back into the fresh bags afterwards. The items the player handed over survive; their
+enchantments and durability do not, because a carried item's state is not what was handed over. The
+confirmation box and the success message say the bags are kept.
 
 **Acceptance.** Outlevel a pawn by more than `Pawn.LevelWindow`, retrain it: it comes back at the new
 level with the same spec and name, the fee is charged once, and clicking retrain again refuses
@@ -168,16 +172,20 @@ effects, both on draws the module already makes:
    better than its price suggests, which is the reward, not a tax.
 
 **Points.** A kill credits `Pawn.AffinityKillPoints`, a completed quest `Pawn.AffinityQuestPoints`,
-to **every recruited pawn of the owner** — the pawns are the party. A kill counts whether the owner
-or one of its pawns landed it, resolved through `PlayerScript::OnPlayerCreatureKill` (the killer) and
-`OnPlayerCreatureKillCredit` (the credited player): a bot killer maps to its owner through the
-roster. Quest completion comes from `OnPlayerCompleteQuest`, which only ever fires for a real
-player's own turn-in.
+to **every recruited pawn of the owner** — the pawns are the party. The award happens in exactly one
+place, `PlayerScript::OnPlayerCreatureKillCredit`: the core calls it once per creature death with the
+responsible player (`killer->GetCharmerOrOwnerPlayerOrPlayerItself()`, `Unit.cpp:13858`), so an
+owner's kill, a pawn's kill, a pet's kill and a totem's kill all credit the owner exactly once. The
+killer hook (`Unit.cpp:13916`) fires only when the killer is itself a player, which would
+double-count every ordinary kill and miss every pet kill, so it carries the voice line and no award.
+Quest completion comes from `OnPlayerCompleteQuest`, which only ever fires for a real player's own
+turn-in.
 
 **Persistence.** The row is updated in memory on every award; the database is written when the
-**step count** changes (a step is 100 points by default), so a kill does not cost a DB write. Points
-inside the current step are lost on a crash and persisted by the next build, login or step — the
-trade is deliberate.
+**step count** changes (a step is 100 points by default), so a kill does not cost a DB write, and
+`ApplyPawn` writes the row unconditionally at the end of a login, so the points inside the current
+step are flushed there too. A crash between awards loses at most the points since the last step or
+login; the trade is deliberate.
 
 **Schema.** `affinity INT UNSIGNED NOT NULL DEFAULT 0` in `pawn_roster`, through `EnsureSchema`,
 `AddMissingColumn`, `LoadRoster` and the `REPLACE INTO` list.
@@ -281,9 +289,9 @@ acceptance section, on the device.
 
 | Risk | Why it matters | Mitigation |
 |---|---|---|
-| the pawn page grows past 16 rows | a 17th row is invisible, a 33rd aborts the server | one page per pawn, 7 rows, fixed verbs |
+| the pawn page grows past 16 rows | a 17th row is invisible, a 33rd aborts the server | one page per pawn, 8 rows, fixed verbs |
 | restock fills bags | `InitFood`/`InitPotions` append per call | purge the four consumable classes first, then init |
-| retrain destroys gifted gear | the build pass re-equips from scratch | bags are untouched, the confirmation box says it |
+| retrain destroys gifted gear | `PlayerbotFactory::Randomize` calls `ClearInventory`, which wipes the backpack, the keyring and every equipped bag (`PlayerbotFactory.cpp:857`, `:3917-3921`) | `ApplyPawn` snapshots every carried stack before the build and stores it back into the bags afterwards — bags only, never an equipment slot (`Player.cpp:759-790`) — so a gift survives; its enchantments and durability do not, and the log names anything that did not fit |
 | affinity writes per kill | a DB write per kill on a busy world thread | write only when the step count moves |
 | a voice line with a `|` or a newline | the conf format splits on `|` | the parser takes `event: text` chunks and trims; a text containing `|` is not expressible, and is documented as such |
 | a label rename loses its lines | lines are keyed by the voice label | an unknown label is logged at load, and the shipped conf keeps the two labels |

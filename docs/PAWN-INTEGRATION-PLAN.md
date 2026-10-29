@@ -4,6 +4,11 @@ The feasibility study is [PAWN-SYSTEM-DESIGN.md](PAWN-SYSTEM-DESIGN.md). This is
 replaces its "what has to be written" section: the design decisions taken since, the route change
 that removes the patch from the pawn work, the exact components, and the order to build them in.
 
+The five later features — the innkeeper's per-pawn page and its orders, repair and restock,
+retraining, affinity and voice lines — are specified and shipped per
+[PAWN-EXPANSION-PLAN.md](PAWN-EXPANSION-PLAN.md). This document remains the record of the original
+integration and of the decisions that route it.
+
 Every claim about existing behaviour carries a `path:line` reference against
 `mod-playerbots@d750b4b` and `azerothcore-wotlk@8a4e76e`.
 

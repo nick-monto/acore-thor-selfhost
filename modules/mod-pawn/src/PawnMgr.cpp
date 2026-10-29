@@ -912,6 +912,30 @@ void PawnMgr::ApplyPawn(Player* bot)
 
         uint32 const guildBefore = bot->GetGuildId();
 
+        // That build is a full inventory reset: Randomize calls ClearInventory, which
+        // destroys every item in the backpack, the keyring and every equipped bag.
+        // A pawn's bags are the player's to fill - the gear they traded it, the food
+        // and potions they bought for it - so the stacks are taken down before the
+        // reset and put back after the gear pass. Only the entry and the count are
+        // kept: the item is what the player handed over, not the enchantment or the
+        // durability it happened to carry. The keyring is skipped because those keys
+        // are the factory's own, re-issued by InitKeyring rather than given.
+        std::vector<std::pair<uint32, uint32>> carried;
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                carried.emplace_back(item->GetEntry(), item->GetCount());
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag* bag = bot->GetBagByPos(bagSlot);
+            if (!bag)
+                continue;
+
+            for (uint8 slot = 0; slot < bag->GetBagSize(); ++slot)
+                if (Item* item = bot->GetItemByPos(bagSlot, slot))
+                    carried.emplace_back(item->GetEntry(), item->GetCount());
+        }
+
         // A full playerbots build, at the level the pawn is meant to have: level,
         // stats, spells, a random spec, gear, bags, food and reagents. Its gear is
         // thrown away two steps down, because it was chosen for the random spec.
@@ -970,6 +994,28 @@ void PawnMgr::ApplyPawn(Player* bot)
                  sPawnArchetype.SpecName(bot->getClass(), row->SpecNo), uint32(gearScoreLimit),
                  buildRatio);
 
+        // Hand the carried stacks back now that the pawn is geared, into the bags
+        // and only the bags. StoreNewItemInBestSlots would be the shorter call, but
+        // it first tries to equip whatever will fit into an empty equipment slot and
+        // then auto-unequips an offhand (Player.cpp:759-790): a gift the player handed
+        // over must not end up worn on top of the choices the gear pass just made, so
+        // the destination is resolved against the backpack explicitly and nothing is
+        // equipped. A stack with no room left is counted rather than retried: nothing
+        // can be done for it here, so one line names the pawn and the tally whenever
+        // anything was carried at all - it must not be silently lost either.
+        uint32 restoreFailed = 0;
+        for (auto const& [entry, count] : carried)
+        {
+            ItemPosCountVec dest;
+            if (bot->CanStoreNewItem(INVENTORY_SLOT_BAG_0, NULL_SLOT, dest, entry, count) != EQUIP_ERR_OK ||
+                !bot->StoreNewItem(dest, entry, true))
+                ++restoreFailed;
+        }
+
+        if (!carried.empty())
+            LOG_INFO("module", "Pawn: pawn {}: kept {} carried stacks, {} did not fit",
+                     bot->GetName(), uint32(carried.size() - restoreFailed), restoreFailed);
+
         if (!row->Built)
         {
             row->Built = true;
@@ -1017,6 +1063,13 @@ void PawnMgr::ApplyPawn(Player* bot)
         row->TargetLevel = bot->GetLevel();
         Upsert(*row);
     }
+
+    // The writes above are conditional because ApplyPawn runs on every login and a
+    // write per login would be churn for values that almost never move; this is the
+    // flush that lets them stay conditional. AwardAffinity only writes when a step
+    // count moves, so the points banked inside the current step are carried to the
+    // database here, before the character is saved, or a restart would drop them.
+    Upsert(*row);
 
     bot->SaveToDB(false, false);
 }
@@ -1167,6 +1220,11 @@ bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& messa
         bool const sameHire = it->second.TargetLevel == offer.Level;
         row.Built = it->second.Built && it->second.SpecNo == offer.SpecNo && sameHire;
         row.Paid = it->second.Paid && sameHire;
+
+        // The bond belongs to the pair, not to the hire: a dismissal that keeps the
+        // gear and skips the fee keeps the affinity the pawn earned with this player
+        // as well, so it is carried whatever the spec or the level did.
+        row.Affinity = it->second.Affinity;
     }
 
     if (fee)

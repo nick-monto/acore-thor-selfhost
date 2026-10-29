@@ -89,7 +89,7 @@ namespace
     // (PawnMgr.cpp:160), which is ten verbs for each of four pawns - 1300..1339 -
     // and the base sits above the recruit span so no party row can be read as a
     // hire. Every verb below has a row on the pawn page: 0 retrain, 1 restock,
-    // 2 follow, 3 stay, 4 attack, 5 dismiss and 6 back.
+    // 2 follow, 3 stay, 4 attack, 5 dismiss, 6 back and 7 break off.
     constexpr uint32 PAWN_ACTION_PAWN      = 1300;
     constexpr uint32 PAWN_ACTION_PAWN_SPAN = 40;
 
@@ -100,6 +100,7 @@ namespace
     constexpr uint32 PAWN_VERB_ATTACK   = 4;
     constexpr uint32 PAWN_VERB_DISMISS  = 5;
     constexpr uint32 PAWN_VERB_BACK     = 6;
+    constexpr uint32 PAWN_VERB_FLEE     = 7;
 
     // The options this AI answers. Everything else belongs to the innkeeper - its
     // bind, its quests, its vendor rows - and is left alone: the core dispatches
@@ -504,17 +505,22 @@ private:
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, retrainLabel,
                          GOSSIP_SENDER_MAIN, base + PAWN_VERB_RETRAIN, retrainPopup, 0, false);
 
-        // The three orders are playerbots' own whisper words
+        // The four orders are playerbots' own whisper words
         // (ChatCommandHandlerStrategy.cpp); the picker only spares the player the
         // syntax. None of them needs a confirmation box - an order can be given
         // again - so only the rows that spend something (the retrain above, the
-        // upkeep below and the dismissal) ask before they act.
+        // restock below and the dismissal) ask before they act.
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": follow me", GOSSIP_SENDER_MAIN,
                          base + PAWN_VERB_FOLLOW);
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": hold here", GOSSIP_SENDER_MAIN,
                          base + PAWN_VERB_STAY);
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": attack my target", GOSSIP_SENDER_MAIN,
                          base + PAWN_VERB_ATTACK);
+        // Breaking off sits next to the attack row because it is the same order
+        // pointed the other way: the player sends the pawn in, and this is how it
+        // is called back out without a dismiss in between.
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": break off", GOSSIP_SENDER_MAIN,
+                         base + PAWN_VERB_FLEE);
 
         // Repair and restock cost real money, so the fee is in the row and the
         // click is confirmed. The box money stays 0 for the same reason the hire
@@ -570,13 +576,15 @@ private:
             case PAWN_VERB_FOLLOW:
             case PAWN_VERB_STAY:
             case PAWN_VERB_ATTACK:
+            case PAWN_VERB_FLEE:
             {
                 // The strings are the whisper words playerbots already
                 // implements; PawnMgr::Order refuses anything else rather than
                 // sending it, so the verb and the row cannot drift apart silently.
                 char const* const order = verb == PAWN_VERB_FOLLOW ? "follow"
                                         : verb == PAWN_VERB_STAY   ? "stay"
-                                                                   : "attack";
+                                        : verb == PAWN_VERB_ATTACK ? "attack"
+                                                                   : "flee";
                 sPawnMgr.Order(player, bot, order, message);
                 Notify(player, message);
                 break;

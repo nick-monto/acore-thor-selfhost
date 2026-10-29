@@ -12,13 +12,14 @@
  *     checks it at the top of Player::learnSpell, so no learn path can bypass
  *     it: factory initialisation, trainer, level-up maintenance or a quest.
  *   * PlayerScript::OnPlayerLogout drops the picker's per-player cache entry.
- *   * PlayerScript::OnPlayerCreatureKill, OnPlayerCreatureKillCredit and
- *     OnPlayerCompleteQuest credit affinity to the owner's pawns. Kills are resolved
- *     back to the owner when a pawn landed them, so the party the player actually
- *     fights beside is the one that bonds with them.
+ *   * PlayerScript::OnPlayerCreatureKillCredit and OnPlayerCompleteQuest credit affinity
+ *     to the owner's pawns. Kills are resolved back to the owner when a pawn landed
+ *     them, so the party the player actually fights beside is the one that bonds with
+ *     them. The credit hook is the only award site because it is the one call the core
+ *     makes for every creature death with a responsible player.
  *   * PlayerScript::OnPlayerCreatureKill and OnPlayerJustDied let a pawn's voice speak
  *     at the two moments the module sees for itself, before anything else about the
- *     pawn has changed.
+ *     pawn has changed. The kill hook carries no credit of its own.
  *
  * The picker itself lives in PawnInnkeeper.cpp: a CreatureAI handed out by an
  * AllCreatureScript, so the line is on every innkeeper without a template row, a
@@ -69,17 +70,17 @@ public:
         if (!killer)
             return;
 
-        // The pawns are the party, so a kill one of them lands bonds it to the player just as
-        // a kill the player lands does. Resolving the pawn back to its owner is what makes
-        // that true: a companion that only earned credit for its own blows would never bond
-        // with the character it follows, because in a pawn's company most blows are its own.
-        // The voice speaks only for a pawn: a real player's own kills are the player's to
-        // narrate, and SayLine is a no-op when the voice has no line, when the kill chance
-        // misses, or while the cooldown holds.
+        // Saying the kill line is this hook's only job. The award lives in the credit
+        // hook, which is the one call the core makes for every creature death with a
+        // responsible player - owner, pawn, pet or totem - so awarding there is what
+        // makes a pet's kill count without counting a player's kill twice. Resolving
+        // the pawn back to its owner is still done here because that is who the line
+        // is said to. The voice speaks only for a pawn: a real player's own kills are
+        // the player's to narrate, and SayLine is a no-op when the voice has no line,
+        // when the kill chance misses, or while the cooldown holds.
         ObjectGuid const owner = sPawnMgr.IsPawn(killer->GetGUID())
             ? sPawnMgr.OwnerOf(killer->GetGUID())
             : killer->GetGUID();
-        sPawnMgr.AwardAffinity(owner, sPawnMgr.Config().AffinityKillPoints);
 
         if (sPawnMgr.IsPawn(killer->GetGUID()))
             sPawnPersonality.SayLine(killer, owner, "kill");
@@ -90,11 +91,12 @@ public:
         if (!player)
             return;
 
-        // This fires for the credited player of a group kill, which is the owner in the common
-        // case and a pawn when it landed the blow; both hooks therefore fire for a killing blow
-        // by a grouped pawn. That double credit is deliberate: affinity is a participation
-        // counter, not a score, and the bookkeeping needed to recognise a duplicate kill would
-        // cost more than the one extra step it would save.
+        // This is the only place affinity is credited for a kill: the core fires it once
+        // per creature death with the responsible player, whether that is the owner, a
+        // pawn, a pet or a totem. OnPlayerCreatureKill fires only when the killer is
+        // itself a player, so awarding there would double-count every ordinary kill and
+        // miss every kill a pet landed. Resolving a pawn back to its owner is what makes
+        // a companion's blows bond with the character it follows.
         ObjectGuid const owner = sPawnMgr.IsPawn(player->GetGUID())
             ? sPawnMgr.OwnerOf(player->GetGUID())
             : player->GetGUID();
