@@ -126,6 +126,11 @@ PAWN_CONF_DEFAULTS=(
     "Pawn.GearFloorPercent=85"
     "Pawn.GearCapPercent=150"
     "Pawn.ResupplyFeePercent=100"
+    "Pawn.AffinityEnabled=1"
+    "Pawn.AffinityKillPoints=10"
+    "Pawn.AffinityQuestPoints=25"
+    "Pawn.AffinityStep=100"
+    "Pawn.AffinityGearPercent=5"
     "Pawn.OfferedPerPage=12"
     "Pawn.FeaturedMin=10"
     "Pawn.FeaturedMax=15"
@@ -324,6 +329,14 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
             [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
         Pawn.VoiceCooldownSeconds)
             [ "$val" -ge 0 ] && [ "$val" -le 3600 ] ;;
+        Pawn.AffinityEnabled)
+            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
+        Pawn.AffinityKillPoints|Pawn.AffinityQuestPoints)
+            [ "$val" -ge 0 ] && [ "$val" -le 1000 ] ;;
+        Pawn.AffinityStep)
+            [ "$val" -ge 1 ] && [ "$val" -le 100000 ] ;;
+        Pawn.AffinityGearPercent)
+            [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
         Pawn.FeaturedMin|Pawn.FeaturedMax)
             [ "$val" -ge 1 ] && [ "$val" -le 50 ] ;;
         Pawn.PoolRefreshMinMinutes|Pawn.PoolRefreshMaxMinutes)

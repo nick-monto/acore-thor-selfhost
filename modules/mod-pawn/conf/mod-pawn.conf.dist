@@ -147,6 +147,28 @@ Pawn.GearCapPercent = 150
 # Default: 100
 Pawn.ResupplyFeePercent = 100
 
+# Affinity: what a pawn earns by fighting beside its owner. It is the one thing
+# about a pawn that is not decided at hire time. Points are credited to every
+# pawn in the party, per kill and per quest completed, and every whole step has
+# two effects, both on draws the module already makes:
+#
+#   * one of the variant abilities the pawn was not dealt comes back - it learns
+#     what it was missing, and the spell gate stops refusing it;
+#   * the gear ceiling of its next build rises by AffinityGearPercent, capped at
+#     Pawn.GearCapPercent. The hire fee does not move: a veteran is geared better
+#     than its price suggests, which is the reward and not a tax.
+#
+# A step is a whole AffinityStep points. Points are kept in memory and written
+# when the step count changes, so a kill does not cost a database write; the
+# points inside the current step are flushed by the next build, login or step.
+# AffinityEnabled = 0 keeps the counters frozen and the feature inert.
+# Defaults: on, 10 a kill, 25 a quest, a step every 100 points, 5% of gear
+Pawn.AffinityEnabled = 1
+Pawn.AffinityKillPoints = 10
+Pawn.AffinityQuestPoints = 25
+Pawn.AffinityStep = 100
+Pawn.AffinityGearPercent = 5
+
 # Offers per gossip page. The gossip packet carries at most 16 rows and the
 # server aborts on a 33rd, so this is clamped to 16 minus the party rows and
 # the two navigation rows.

@@ -7,6 +7,7 @@
 #include "PawnMgr.h"
 
 #include "Bag.h"
+#include "CharacterCache.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Guild.h"
@@ -494,6 +495,60 @@ PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uin
 
     if (PawnProfile const* voice = sPawnPersonality.Voice(owner, poolChar.Bot))
         offer.VoiceLabel = voice->Label;
+
+    return offer;
+}
+
+PawnOffer PawnMgr::OfferFor(Player* player, PawnRosterRow const& row) const
+{
+    if (!player || !row.Bot)
+        return PawnOffer();
+
+    // A recruited pawn may be offline, so the character cache is the primary
+    // source: it outlives the Player object and carries the class the offer needs.
+    // The class is the only field that cannot be guessed - a pawn with no class
+    // has no spec pool to draw from - so it is what the fallback is for. A live
+    // pawn still missing from the cache (a pool character the cache has not seen
+    // yet) is asked directly; the name is left empty rather than invented.
+    PawnPoolChar poolChar;
+    poolChar.Bot = row.Bot;
+    if (CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByGuid(row.Bot))
+    {
+        poolChar.Name = entry->Name;
+        poolChar.Class = entry->Class;
+        poolChar.Level = entry->Level;
+    }
+    else if (Player* online = ObjectAccessor::FindConnectedPlayer(row.Bot))
+    {
+        poolChar.Class = online->getClass();
+        poolChar.Level = online->GetLevel();
+    }
+
+    if (!poolChar.Class)
+        return PawnOffer();
+
+    PawnOffer offer = MakeOffer(poolChar, row.Owner, player->GetLevel());
+
+    // MakeOffer draws the spec from the seed, which is right for a fresh offer and
+    // wrong for a retrain: the player hired this face at a particular spec, and a
+    // retrain is the same companion brought forward, not a new deal of the same
+    // character. So the row's spec is pinned back over whatever the seed rolled,
+    // and everything derived from the spec - the name, the role, the withheld
+    // variants and the temperament - is re-derived from the pinned spec so the
+    // offer describes one character instead of a blend of two.
+    offer.SpecNo = row.SpecNo;
+    offer.SpecName = sPawnArchetype.SpecName(poolChar.Class, row.SpecNo);
+    offer.Role = sPawnArchetype.RoleFor(poolChar.Class, row.SpecNo);
+    offer.Withheld = WithheldVariants(row.Owner, row.Bot, poolChar.Class, row.SpecNo);
+
+    // The temperament is spec-scoped, so the one MakeOffer set belongs to the
+    // seed's spec and cannot be kept. Cleared when this spec has no profile, so
+    // the label never describes a spec the pawn does not have.
+    if (PawnProfile const* temperament =
+            sPawnPersonality.Temperament(row.Owner, row.Bot, poolChar.Class, row.SpecNo))
+        offer.TemperamentLabel = temperament->Label;
+    else
+        offer.TemperamentLabel.clear();
 
     return offer;
 }
@@ -1261,6 +1316,99 @@ bool PawnMgr::Resupply(Player* player, ObjectGuid bot, std::string& message)
         message += " The innkeeper takes " + FormatMoney(fee) + ".";
 
     LOG_INFO("module", "Pawn: {} resupplied {} for {}", player->GetName(), botPlayer->GetName(),
+             fee ? FormatMoney(fee) : std::string("free"));
+    return true;
+}
+
+// Brings a pawn the player has outgrown forward to the level it would be offered
+// at now, keeping the character: the same face, the same spec, the same
+// temperament and voice. It is the one action that lets a spent party slot stay
+// useful without waiting for the face to come round in the deck again.
+bool PawnMgr::Retrain(Player* player, ObjectGuid bot, std::string& message)
+{
+    if (!_config.Enabled)
+    {
+        message = "No innkeeper will vouch for a companion today.";
+        return false;
+    }
+
+    if (!player || !bot)
+    {
+        message = "That pawn is not available.";
+        return false;
+    }
+
+    auto it = _rows.find(bot.GetCounter());
+    if (it == _rows.end() || it->second.Owner != player->GetGUID() || !it->second.Recruited)
+    {
+        message = "That pawn is not in your party.";
+        return false;
+    }
+
+    // The pawn has to be standing here: the build pass runs on the live Player
+    // object, so there is no queue to leave the work in for a pawn that is away.
+    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bot);
+    if (!botPlayer || !botPlayer->IsInWorld())
+    {
+        message = std::string(botPlayer ? botPlayer->GetName() : "Your pawn") +
+                  " is not with you right now.";
+        return false;
+    }
+
+    if (player->IsInCombat())
+    {
+        message = "Not while you are fighting.";
+        return false;
+    }
+
+    PawnOffer const offer = OfferFor(player, it->second);
+    if (!offer.Bot)
+    {
+        message = "That pawn cannot be trained right now.";
+        return false;
+    }
+
+    std::string const name = botPlayer->GetName();
+    if (offer.Level == it->second.TargetLevel)
+    {
+        message = name + " is already trained for level " + std::to_string(offer.Level) + ".";
+        return false;
+    }
+
+    // The fee is the hire fee for the level being moved to, so a retrain costs what
+    // re-hiring this pawn at its new level would; a free retrain only happens when
+    // the hire fee is switched off or this owner has already paid for it there.
+    uint32 const fee = HireFee(player, offer);
+    if (fee && !player->HasEnoughMoney(fee))
+    {
+        message = name + " asks " + FormatMoney(fee) + ", and you cannot afford that.";
+        return false;
+    }
+
+    if (fee)
+        player->ModifyMoney(-int32(fee));
+
+    // Built = false is the whole retrain: ApplyPawn re-equips the pawn for the new
+    // level, exactly as it does for a re-hire. Paid only moves when money moved,
+    // so the flag keeps meaning "this owner has paid for this pawn".
+    uint8 const oldLevel = it->second.TargetLevel;
+    it->second.TargetLevel = offer.Level;
+    it->second.Built = false;
+    if (fee)
+        it->second.Paid = true;
+    Upsert(it->second);
+
+    // The pawn is in the world, so the build runs inline instead of through the
+    // login queue.
+    ApplyPawn(botPlayer);
+
+    message = name + " retrains to level " + std::to_string(offer.Level) + ".";
+    if (fee)
+        message += " The innkeeper takes " + FormatMoney(fee) + ".";
+    message += " What it carries in its bags is untouched; what it wears is replaced for the new level.";
+
+    LOG_INFO("module", "Pawn: {} retrained {} from level {} to level {} for {}", player->GetName(),
+             name, uint32(oldLevel), uint32(offer.Level),
              fee ? FormatMoney(fee) : std::string("free"));
     return true;
 }

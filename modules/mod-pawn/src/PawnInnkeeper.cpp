@@ -88,11 +88,12 @@ namespace
     // than a position on a page. Pawn.MaxPawns is clamped to 4
     // (PawnMgr.cpp:160), which is ten verbs for each of four pawns - 1300..1339 -
     // and the base sits above the recruit span so no party row can be read as a
-    // hire. Verb 1 is the restock and has a row; verb 0 (retrain) is reserved for
-    // a later phase and still has none.
+    // hire. Every verb below has a row on the pawn page: 0 retrain, 1 restock,
+    // 2 follow, 3 stay, 4 attack, 5 dismiss and 6 back.
     constexpr uint32 PAWN_ACTION_PAWN      = 1300;
     constexpr uint32 PAWN_ACTION_PAWN_SPAN = 40;
 
+    constexpr uint32 PAWN_VERB_RETRAIN  = 0;
     constexpr uint32 PAWN_VERB_RESUPPLY = 1;
     constexpr uint32 PAWN_VERB_FOLLOW   = 2;
     constexpr uint32 PAWN_VERB_STAY     = 3;
@@ -449,9 +450,10 @@ private:
         SendGossipMenuFor(player, player->GetGossipTextId(creature), creature->GetGUID());
     }
 
-    // One pawn, its orders, its upkeep and its dismissal. Every row names the pawn
-    // because the gossip title does not: a page of "follow me" rows would otherwise
-    // be indistinguishable from the same page for the other companion.
+    // One pawn, its retraining, its orders, its upkeep and its dismissal. Every
+    // row names the pawn because the gossip title does not: a page of "follow me"
+    // rows would otherwise be indistinguishable from the same page for the other
+    // companion.
     static void ShowPawnPage(Player* player, Creature* creature, PawnMenuState const& state)
     {
         PawnRosterRow const& row = state.Party[state.PawnIndex];
@@ -463,11 +465,29 @@ private:
 
         uint32 const base = PAWN_ACTION_PAWN + uint32(state.PawnIndex) * 10;
 
+        // Retraining changes the pawn itself rather than telling it what to do, so
+        // it is the first row and the orders read as what it is at the moment the
+        // player sees them. The row is drawn even when the pawn already stands at
+        // the level the offer names: a row that appears and disappears under a
+        // menu sent a moment earlier is worse than an honest refusal from
+        // PawnMgr::Retrain, which is also where the fee is charged, so the box
+        // money stays 0 and the click is confirmed like the restock below.
+        PawnOffer const offer = sPawnMgr.OfferFor(player, row);
+        uint32 const retrainFee = sPawnMgr.HireFee(player, offer);
+        std::string const retrainFeeText = retrainFee ? FormatMoney(retrainFee) : std::string("free");
+        std::string const retrainPopup =
+            retrainFee
+                ? "Retrain " + name + " to level " + std::to_string(uint32(offer.Level)) + " for " + FormatMoney(retrainFee) + "?"
+                : "Retrain " + name + " to level " + std::to_string(uint32(offer.Level)) + " for nothing?";
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                         name + ": retrain for level " + std::to_string(uint32(offer.Level)) + " - " + retrainFeeText,
+                         GOSSIP_SENDER_MAIN, base + PAWN_VERB_RETRAIN, retrainPopup, 0, false);
+
         // The three orders are playerbots' own whisper words
         // (ChatCommandHandlerStrategy.cpp); the picker only spares the player the
         // syntax. None of them needs a confirmation box - an order can be given
-        // again - so only the two rows that spend something (the upkeep below and
-        // the dismissal) ask before they act.
+        // again - so only the rows that spend something (the retrain above, the
+        // upkeep below and the dismissal) ask before they act.
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": follow me", GOSSIP_SENDER_MAIN,
                          base + PAWN_VERB_FOLLOW);
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": hold here", GOSSIP_SENDER_MAIN,
@@ -519,6 +539,13 @@ private:
 
         switch (verb)
         {
+            case PAWN_VERB_RETRAIN:
+                // The row is drawn even for a pawn already at that level, so the
+                // refusal is Retrain's to phrase; the page stays because the level
+                // it names is re-derived when the menu is drawn again.
+                sPawnMgr.Retrain(player, bot, message);
+                Notify(player, message);
+                break;
             case PAWN_VERB_FOLLOW:
             case PAWN_VERB_STAY:
             case PAWN_VERB_ATTACK:
@@ -551,9 +578,9 @@ private:
                 state.PawnPage = false;
                 break;
             default:
-                // Zero is the retrain verb of a later phase; no row draws it yet,
-                // but a menu sent before that phase landed could still carry one.
-                // Ignoring it leaves the page where it is.
+                // A menu drawn before a verb was added can still carry a number
+                // this build does not answer; ignoring it leaves the page where
+                // it is rather than guessing what was meant.
                 break;
         }
 

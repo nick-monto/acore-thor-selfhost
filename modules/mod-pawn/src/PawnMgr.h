@@ -85,6 +85,21 @@ public:
     // fee and the gear pass change, which is what a re-hire at a new level does anyway.
     bool Retrain(Player* player, ObjectGuid bot, std::string& message);
 
+    // How many whole steps of affinity this pawn has earned, clamped to the most it can
+    // use: one step returns one withheld variant, and a pawn cannot be handed back more
+    // than the draw could have withheld. The step count is the same function everywhere
+    // it matters - the build, the spell gate and the picker - so they cannot disagree.
+    [[nodiscard]] uint32 AffinitySteps(PawnRosterRow const& row) const;
+
+    // The most steps a pawn can use: the configured withhold maximum, because that is the
+    // largest number of variants a draw can take away. The picker shows the bond against it.
+    [[nodiscard]] uint32 AffinityCap() const;
+
+    // Credits affinity points to every pawn this player has in the party. Called from the
+    // kill and quest hooks, so it runs once per kill: the row is updated in memory every
+    // time and written to the database only when a step count moves.
+    void AwardAffinity(Player* player, uint32 points);
+
     [[nodiscard]] bool IsSpellForbidden(Player* bot, uint32 spellId) const;
 
     // The variant abilities this pawn is missing: a bounded, deterministic

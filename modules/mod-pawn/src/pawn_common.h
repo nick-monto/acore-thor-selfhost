@@ -55,6 +55,17 @@ struct PawnConfig
     // 0 switches the variation off.
     uint8  VariantWithholdMin   = 1;
     uint8  VariantWithholdMax   = 2;
+    // Affinity is what a pawn earns by fighting beside its owner: a point count per
+    // (owner, pawn) that returns the variant abilities the pawn was not dealt and
+    // lifts the gear it is built to at its next build. It is the one axis of a pawn
+    // that is not fixed at hire time.
+    bool   AffinityEnabled      = true;
+    uint32 AffinityKillPoints   = 10;
+    uint32 AffinityQuestPoints  = 25;
+    // Points per step: one withheld variant comes back, and the gear ceiling rises by
+    // AffinityGearPercent, at every whole step.
+    uint32 AffinityStep         = 100;
+    uint32 AffinityGearPercent  = 5;
     uint8  OfferedPerPage       = 12;
     // A picker shows a selection of the pool, not the pool: the count is drawn
     // from [FeaturedMin, FeaturedMax] when the selection is dealt, once per pool
@@ -125,6 +136,11 @@ struct PawnRosterRow
     PawnRole   Role        = PAWN_ROLE_NONE;
     bool       Recruited   = false;
     uint8      TargetLevel = 0;
+    // Affinity points earned while the pawn was in the party. Every whole
+    // AffinityStep returns one of the variant abilities the pawn was not dealt and
+    // lifts the gear ceiling of its next build; the roster is the only place it
+    // lives, so it survives a relog and a restart with everything else.
+    uint32     Affinity    = 0;
     // Set once the pawn has been equipped for its pinned spec at its level. A
     // fresh pool character is level 1 in a start outfit, so "not built yet" is
     // the one case that must always run the gear pass; afterwards the pawn keeps
