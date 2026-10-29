@@ -541,7 +541,8 @@ payload is auditable with plain SQL.
 | a summoned chest that never despawns | `consumable = 1` + non-zero respawn time -> core deletes it on release (`GameObject.cpp:872-876`) |
 | loot lost when the container expires | mail the remaining items at expiry |
 | a non-flagged character opens a container | `OnAllowedToLootContainerCheck` denies every looter that is not Survivor-flagged; inverted boolean handled explicitly (§5.6) |
-| the item row is lost between destroy and insert | both happen in one characters-DB transaction; the snapshot row is written *before* the item is destroyed |
+| the item row is lost between destroy and insert | the snapshot row is written *before* the item is destroyed, from the live item in one `DirectExecute`; a characters transaction cannot be committed synchronously (see below) |
+| a transaction of item statements committed on the sync characters connection | never done: the item statements are `CONNECTION_ASYNC` and the sync connection has none prepared, so a `DirectCommitTransaction` holding `item->SaveToDB()` aborts the worldserver on `ASSERT(m_mStmt)` in `MySQLConnection::Execute` after logging "Could not fetch prepared statement 93 ... synchronous". `module-checks.yml` fails on any `DirectCommitTransaction` under `modules/` |
 | double-flagging | both commands check the other table; both tolerate a missing table |
 | a module SQL failure aborting boot | no module SQL for the tables (programmatic creation), only the gameobject template row |
 

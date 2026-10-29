@@ -309,11 +309,20 @@ namespace
         return result->Fetch()[0].Get<uint32>();
     }
 
-    // Snapshots and removes the given slots. The item_instance row is written
-    // first, the copy into survivor_corpse_items is made from that row, and
-    // only then is the live item destroyed - all three in one characters-DB
-    // transaction, so a crash can neither lose the instance nor destroy an
-    // item that was never saved.
+    // Snapshots and removes the given slots. The copy into survivor_corpse_items
+    // is written from the live item before the item is destroyed, so a crash can
+    // neither lose the instance nor destroy an item that was never saved.
+    //
+    // This must not be a transaction. The item statements are prepared as
+    // CONNECTION_ASYNC and the synchronous characters connection never prepares
+    // them - MySQLConnection::PrepareStatement resets every statement whose flags
+    // do not match the connection - so CharacterDatabase.DirectCommitTransaction
+    // of a transaction holding item->SaveToDB() reaches GetPreparedStatement on
+    // the sync connection, logs "Could not fetch prepared statement 93 on
+    // database 'acore_characters', connection type: synchronous" and aborts the
+    // worldserver on the ASSERT in MySQLConnection::Execute. The values below are
+    // the ones Item::SaveToDB writes, read off the item instead of from
+    // item_instance; RestoreItemInstance() rebuilds the row from them either way.
     std::vector<LootSnapshot> SnapshotAndDestroy(Player* player, std::vector<SlotRef> const& slots, uint32 corpseId)
     {
         std::vector<LootSnapshot> snapshot;
@@ -332,17 +341,40 @@ namespace
             entry.randomPropertyId = item->GetItemRandomPropertyId();
             entry.randomSuffix = item->GetItemSuffixFactor();
 
-            auto trans = CharacterDatabase.BeginTransaction();
-            item->SaveToDB(trans);
-            CharacterDatabase.ExecuteOrAppend(trans, Acore::StringFormat(
+            // Item::SaveToDB's own text format: MAX_ITEM_PROTO_SPELLS charges, then
+            // MAX_ENCHANTMENT_SLOT id/duration/charges triplets, each with a trailing space.
+            std::ostringstream charges;
+            for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+                charges << item->GetSpellCharges(i) << ' ';
+
+            std::ostringstream enchantments;
+            for (uint8 i = 0; i < MAX_ENCHANTMENT_SLOT; ++i)
+            {
+                enchantments << item->GetEnchantmentId(EnchantmentSlot(i)) << ' ';
+                enchantments << item->GetEnchantmentDuration(EnchantmentSlot(i)) << ' ';
+                enchantments << item->GetEnchantmentCharges(EnchantmentSlot(i)) << ' ';
+            }
+
+            std::string text = item->GetText();
+            CharacterDatabase.EscapeString(text);
+
+            CharacterDatabase.DirectExecute(
                 "INSERT INTO `survivor_corpse_items` (`corpse_id`, `slot_index`, `item_guid`, `itemEntry`, "
                 "`creatorGuid`, `giftCreatorGuid`, `count`, `duration`, `charges`, `flags`, `enchantments`, "
                 "`randomPropertyId`, `durability`, `playedTime`, `text`) "
-                "SELECT {}, {}, `guid`, `itemEntry`, `creatorGuid`, `giftCreatorGuid`, `count`, `duration`, "
-                "`charges`, `flags`, `enchantments`, `randomPropertyId`, `durability`, `playedTime`, `text` "
-                "FROM `item_instance` WHERE `guid` = {}",
-                corpseId, slotIndex, item->GetGUID().GetCounter()));
-            CharacterDatabase.DirectCommitTransaction(trans);
+                "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, '{}', {}, '{}', {}, {}, {}, '{}')",
+                corpseId, slotIndex, item->GetGUID().GetCounter(), item->GetEntry(),
+                item->GetGuidValue(ITEM_FIELD_CREATOR).GetCounter(),
+                item->GetGuidValue(ITEM_FIELD_GIFTCREATOR).GetCounter(),
+                item->GetCount(),
+                item->GetUInt32Value(ITEM_FIELD_DURATION),
+                charges.str(),
+                item->GetUInt32Value(ITEM_FIELD_FLAGS),
+                enchantments.str(),
+                item->GetItemRandomPropertyId(),
+                item->GetUInt32Value(ITEM_FIELD_DURABILITY),
+                item->GetUInt32Value(ITEM_FIELD_CREATE_PLAYED_TIME),
+                text);
 
             player->DestroyItem(ref.first, ref.second, true);
 

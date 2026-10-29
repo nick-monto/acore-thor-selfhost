@@ -92,3 +92,19 @@ jobs:
           AC_CORE: ${{ github.workspace }}/core
           AC_PLAYERBOTS: ${{ github.workspace }}/playerbots
         run: python3 scripts/pawn/check_pawn.py
+
+      - name: No module commits a characters transaction synchronously
+        # CharacterDatabase.DirectCommitTransaction runs the transaction on the synchronous
+        # characters connection, which never prepares the CONNECTION_ASYNC statements - and
+        # every item statement is one of those. A transaction holding item->SaveToDB() reaches
+        # GetPreparedStatement on that connection, logs "Could not fetch prepared statement 93
+        # on database 'acore_characters', connection type: synchronous" and aborts the
+        # worldserver on the ASSERT in MySQLConnection::Execute. That is how mod-survivor took
+        # a realm down when a bot died: it snapshotted a corpse's items in one. Raw SQL through
+        # DirectExecute, or CharacterDatabase.CommitTransaction for the async queue, are the
+        # two ways to do it.
+        run: |
+          if grep -rn "DirectCommitTransaction(" modules/; then
+            echo "::error::DirectCommitTransaction cannot carry prepared statements; see this step's comment" >&2
+            exit 1
+          fi
