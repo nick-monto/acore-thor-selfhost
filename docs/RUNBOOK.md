@@ -87,6 +87,11 @@ proot-distro install ubuntu
 proot-distro login ubuntu
 ```
 
+A 429 here is the default mirror (`packages-cf.termux.dev`, behind Cloudflare) rate-limiting the
+device, not a broken install. Run `termux-change-repo`, pick any other mirror, rerun.
+`thor-install.sh` does the same step with four attempts and a growing pause, prints that hint when
+they all fail, and skips the mirror entirely when the four packages are already present.
+
 Inside the rootfs:
 
 ```bash

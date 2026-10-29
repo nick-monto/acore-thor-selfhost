@@ -765,6 +765,78 @@ host_preflight() {
     esac
 }
 
+# The Termux mirrors rate-limit. The default one is fronted by Cloudflare, which answers a burst
+# with HTTP 429 and apt renders that as a bare "Failed to fetch"; one retry after a pause rides it
+# out. A mirror that stays down is the device owner's to change - rewriting someone's sources.list
+# behind their back would be worse than stopping - so the failure names the command that fixes it.
+PKG_TRIES=${THOR_PKG_TRIES:-4}
+
+pkg_try() {
+    local what=$1; shift
+    local attempt=1 delay=5 out
+    while :; do
+        # Captured rather than streamed: the retry needs to see the failure, and apt's progress
+        # bars are not worth a second copy of the output on a phone. The tail is shown per attempt.
+        if out=$("$@" 2>&1); then
+            return 0
+        fi
+        if [ "$attempt" -ge "$PKG_TRIES" ]; then
+            printf '%s\n' "$out" >&2
+            return 1
+        fi
+        warn "$what failed (attempt $attempt/$PKG_TRIES); retrying in ${delay}s"
+        printf '%s\n' "$out" | tail -n 3 | sed 's/^/  /' >&2
+        sleep "$delay"
+        attempt=$((attempt + 1))
+        delay=$((delay * 3))
+    done
+}
+
+pkg_mirror_hint() {
+    cat >&2 <<'HINT'
+  The Termux mirror refused this device - HTTP 429 (rate limit) or no route at all. Pick another
+  mirror and run the installer again; it resumes where it stopped:
+
+      termux-change-repo        # choose any mirror other than the default Cloudflare one
+
+  Or point apt at a mirror directly:
+
+      sed -i 's|packages-cf.termux.dev|grimler.se/termux|' "$PREFIX/etc/apt/sources.list"
+      pkg update
+HINT
+}
+
+# The four host packages the install needs. termux-api is probed by the command the wrappers
+# actually call, because the package name is not the name on PATH.
+host_packages() {
+    local pkgs=(proot-distro termux-api curl zstd) missing=() p cmd
+    for p in "${pkgs[@]}"; do
+        case "$p" in
+            termux-api) cmd=termux-wake-lock ;;
+            *)          cmd=$p ;;
+        esac
+        have "$cmd" || missing+=("$p")
+    done
+    if [ "${#missing[@]}" -eq 0 ]; then
+        log "already installed: ${pkgs[*]}"
+        return 0
+    fi
+    log "missing: ${missing[*]}"
+    if [ "$CHECK" = 1 ]; then
+        printf '  would: %s\n' "pkg update" "pkg install -y ${missing[*]}"
+        return 0
+    fi
+    log "contacting the Termux mirror (this can take a minute)"
+    # The index only has to be fresh enough for the install below. When the refresh fails the cached
+    # one usually still answers, so a failed update is a warning and a failed install is not.
+    pkg_try "pkg update" pkg update || warn "pkg update failed; installing against the cached index"
+    if ! pkg_try "pkg install" pkg install -y "${missing[@]}"; then
+        pkg_mirror_hint
+        die "could not install ${missing[*]} from the Termux mirror"
+    fi
+    ok "installed ${missing[*]}"
+}
+
 host_install() {
     step "Termux preflight"
     host_preflight
@@ -776,8 +848,7 @@ host_install() {
     fi
 
     step "Termux packages"
-    note pkg update
-    note pkg install -y proot-distro termux-api curl zstd
+    host_packages
 
     step "Rootfs"
     if [ -d "$ROOTFS" ]; then
