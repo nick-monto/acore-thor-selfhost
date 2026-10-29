@@ -172,6 +172,15 @@ void PawnMgr::LoadConfig()
         _config.VariantWithholdMin = _config.VariantWithholdMax;
     _config.GearFloorPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearFloorPercent", 85), 25, 100));
     _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearCapPercent", 150), 100, 300));
+    // The affinity keys sit beside the gear band because they move it: a step of
+    // affinity widens the ceiling the gear pass is held to, and the step is what
+    // turns a point count into that widening. The step is clamped away from zero
+    // because it is a divisor, and the gear lift from the band's cap downwards.
+    _config.AffinityEnabled = sConfigMgr->GetOption<bool>("Pawn.AffinityEnabled", true);
+    _config.AffinityKillPoints = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.AffinityKillPoints", 10), 0, 1000));
+    _config.AffinityQuestPoints = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.AffinityQuestPoints", 25), 0, 1000));
+    _config.AffinityStep = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.AffinityStep", 100), 1, 100000));
+    _config.AffinityGearPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.AffinityGearPercent", 5), 0, 100));
     _config.ResupplyFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.ResupplyFeePercent", 100), 0, 10000));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
     _config.FeaturedMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMin", 10), 1, 50));
@@ -185,13 +194,14 @@ void PawnMgr::LoadConfig()
     if (_config.PoolRefreshMaxMinutes < _config.PoolRefreshMinMinutes)
         std::swap(_config.PoolRefreshMaxMinutes, _config.PoolRefreshMinMinutes);
 
-    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/pawn gear={}-{}% resupply={}%",
+    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/pawn gear={}-{}% resupply={}% affinity={}pt/step+{}%",
              _config.Enabled, uint32(_config.MaxPawns), uint32(_config.LevelWindow),
              uint32(_config.OfferedPerPage), uint32(_config.FeaturedMin), uint32(_config.FeaturedMax),
              uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes),
              _config.HireFeePercent, _config.HireFeeHeldPercent,
              _config.GearFloorPercent, _config.GearCapPercent,
-             _config.ResupplyFeePercent);
+             _config.ResupplyFeePercent,
+             _config.AffinityStep, _config.AffinityGearPercent);
 }
 
 void PawnMgr::RefreshPool()
@@ -298,6 +308,7 @@ void PawnMgr::EnsureSchema()
         "`paid` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
         "`mount_spell` INT UNSIGNED NOT NULL DEFAULT 0,"
         "`pet_name` VARCHAR(21) NOT NULL DEFAULT '',"
+        "`affinity` INT UNSIGNED NOT NULL DEFAULT 0,"
         "`updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
         "PRIMARY KEY (`owner_guid`, `bot_guid`),"
         "KEY `bot_guid` (`bot_guid`),"
@@ -311,6 +322,10 @@ void PawnMgr::EnsureSchema()
     AddMissingColumn("paid", "`paid` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `built`");
     AddMissingColumn("mount_spell", "`mount_spell` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `paid`");
     AddMissingColumn("pet_name", "`pet_name` VARCHAR(21) NOT NULL DEFAULT '' AFTER `mount_spell`");
+    // Affinity is additive: a roster written before this column existed keeps every
+    // row, and each of those pawns simply starts with no points. The default is
+    // what makes that safe - an old install's pawns are as they were.
+    AddMissingColumn("affinity", "`affinity` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `pet_name`");
 }
 
 void PawnMgr::LoadRoster()
@@ -319,7 +334,7 @@ void PawnMgr::LoadRoster()
     _rows.clear();
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level, built, paid, mount_spell, pet_name FROM pawn_roster");
+        "SELECT owner_guid, bot_guid, spec_no, role, state, target_level, built, paid, mount_spell, pet_name, affinity FROM pawn_roster");
     if (!result)
     {
         LOG_INFO("module", "Pawn: roster: empty");
@@ -342,6 +357,7 @@ void PawnMgr::LoadRoster()
         row.Paid = fields[7].Get<uint8>() == 1;
         row.MountSpell = fields[8].Get<uint32>();
         row.PetName = fields[9].Get<std::string>();
+        row.Affinity = fields[10].Get<uint32>();
 
         if (row.Recruited)
             ++recruited;
@@ -390,6 +406,34 @@ std::vector<PawnRosterRow> PawnMgr::ListParty(ObjectGuid owner) const
     return party;
 }
 
+void PawnMgr::AwardAffinity(ObjectGuid owner, uint32 points)
+{
+    if (!_config.Enabled || !_config.AffinityEnabled || !owner || !points)
+        return;
+
+    for (auto& entry : _rows)
+    {
+        PawnRosterRow& row = entry.second;
+        if (!row.Recruited || row.Owner != owner)
+            continue;
+
+        // The write is conditional because this runs once per kill on the world
+        // thread: points that do not finish a step change nothing any reader can
+        // see, so they stay in memory until the next build, login or step flushes
+        // the row. A kill must not cost a database write.
+        uint32 const before = AffinitySteps(row);
+        row.Affinity += points;
+        if (AffinitySteps(row) != before)
+            Upsert(row);
+    }
+}
+
+ObjectGuid PawnMgr::OwnerOf(ObjectGuid pawn) const
+{
+    auto it = _rows.find(pawn.GetCounter());
+    return it == _rows.end() ? ObjectGuid() : it->second.Owner;
+}
+
 uint8 PawnMgr::DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLevel, uint8 cls) const
 {
     // The level and the spec are a pure function of the two guids, so the same
@@ -428,7 +472,17 @@ std::vector<PawnVariantSpell> PawnMgr::WithheldVariants(ObjectGuid owner, Object
     uint32 const floor = std::min<uint32>(_config.VariantWithholdMin, uint32(pool.size()));
     uint32 const ceiling = std::min<uint32>(_config.VariantWithholdMax, uint32(pool.size()));
     uint32 const span = ceiling > floor ? ceiling - floor + 1 : 1;
-    uint32 const count = floor + (span > 1 ? uint32(Mix(state) % span) : 0);
+    uint32 count = floor + (span > 1 ? uint32(Mix(state) % span) : 0);
+
+    // Affinity is the only thing that moves this draw after hire: a pawn that has
+    // fought beside its owner for enough steps is handed back what it was not
+    // dealt. IsSpellForbidden reads this same function, so the gate that lets the
+    // ability through and the build that grants it cannot disagree.
+    if (auto it = _rows.find(bot.GetCounter()); it != _rows.end())
+    {
+        uint32 const earned = AffinitySteps(it->second);
+        count = earned >= count ? 0 : count - earned;
+    }
 
     // Which ones: the entries with the lowest hash of their own first id, so the
     // choice is independent per ability rather than "the first N of the list" -
@@ -466,6 +520,23 @@ uint16 PawnMgr::GearRatio(ObjectGuid owner, ObjectGuid bot) const
     if (draw <= 255)
         return uint16(floor + (100 - floor) * draw / 255);
     return uint16(100 + (cap - 100) * (draw - 255) / 255);
+}
+
+uint32 PawnMgr::AffinitySteps(PawnRosterRow const& row) const
+{
+    if (!_config.AffinityEnabled)
+        return 0;
+
+    // Clamped to the cap because a step exists to hand back one withheld variant,
+    // and a pawn cannot be handed back more variants than a draw could withhold:
+    // without the clamp the bond shown to the player would run past its own
+    // denominator and the last steps would buy nothing.
+    return std::min(row.Affinity / std::max(1u, _config.AffinityStep), AffinityCap());
+}
+
+uint32 PawnMgr::AffinityCap() const
+{
+    return _config.VariantWithholdMax;
 }
 
 PawnOffer PawnMgr::MakeOffer(PawnPoolChar const& poolChar, ObjectGuid owner, uint8 ownerLevel) const
@@ -821,9 +892,17 @@ void PawnMgr::ApplyPawn(Player* bot)
         // one pawn stronger - and dearer - than another offered at the same level,
         // and it runs from Pawn.GearFloorPercent to Pawn.GearCapPercent, so a pawn
         // can be geared that far below or above the player.
+        //
+        // Affinity lifts the ceiling only: the build ratio is the hired ratio plus
+        // one AffinityGearPercent for every step, capped at the same gear cap. The
+        // hire fee keeps the plain GearRatio, so a veteran pawn is geared better
+        // than its price suggests, which is the reward for keeping it rather than
+        // a tax on the player who does.
+        uint16 const ratio = GearRatio(row->Owner, row->Bot);
+        uint32 const buildRatio = std::min<uint32>(uint32(ratio) + AffinitySteps(*row) * _config.AffinityGearPercent,
+                                                   _config.GearCapPercent);
         uint32 const gearScoreLimit = owner
-            ? uint32(uint64(PlayerbotAI::GetMixedGearScore(owner, true, false, 12)) *
-                     GearRatio(row->Owner, row->Bot) / 100)
+            ? uint32(uint64(PlayerbotAI::GetMixedGearScore(owner, true, false, 12)) * buildRatio / 100)
             : 0;
 
         if (rePin)
@@ -889,7 +968,7 @@ void PawnMgr::ApplyPawn(Player* bot)
         LOG_INFO("module", "Pawn: pawn {}: {} at level {} for {} (gear score cap {}, ratio {}%)",
                  bot->GetName(), row->Built ? "re-geared" : "geared", uint32(bot->GetLevel()),
                  sPawnArchetype.SpecName(bot->getClass(), row->SpecNo), uint32(gearScoreLimit),
-                 GearRatio(row->Owner, row->Bot));
+                 buildRatio);
 
         if (!row->Built)
         {
@@ -1442,9 +1521,9 @@ void PawnMgr::Upsert(PawnRosterRow const& row)
     std::string const petName = EscapeSqlText(row.PetName);
 
     CharacterDatabase.Execute(
-        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built, paid, mount_spell, pet_name) "
-        "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, '{}')",
+        "REPLACE INTO pawn_roster (owner_guid, bot_guid, spec_no, role, state, target_level, built, paid, mount_spell, pet_name, affinity) "
+        "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {})",
         row.Owner.GetCounter(), row.Bot.GetCounter(), uint32(row.SpecNo), uint32(row.Role),
         row.Recruited ? 1 : 0, uint32(row.TargetLevel), row.Built ? 1 : 0, row.Paid ? 1 : 0,
-        row.MountSpell, petName);
+        row.MountSpell, petName, row.Affinity);
 }

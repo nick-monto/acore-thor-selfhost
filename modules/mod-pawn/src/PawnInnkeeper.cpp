@@ -373,6 +373,17 @@ private:
             if (!row.PetName.empty())
                 text += (rides ? ", with " : " - with ") + row.PetName;
 
+            // The bond belongs on the row because it is the one thing about the
+            // pawn that a fight changes without the player doing anything: the
+            // count is what the pawn has learned, and the cap is the most any pawn
+            // could learn, so "bonded 2/2" reads as complete rather than as a
+            // fraction of something the player was never told. A pawn that has
+            // learned nothing keeps a bare row, because the suffix is a reward the
+            // player has earned and not a baseline to explain.
+            uint32 const steps = sPawnMgr.AffinitySteps(row);
+            if (steps > 0)
+                text += " - bonded " + std::to_string(steps) + "/" + std::to_string(sPawnMgr.AffinityCap());
+
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, text, GOSSIP_SENDER_MAIN, PAWN_ACTION_PARTY + i);
         }
 
@@ -479,8 +490,18 @@ private:
             retrainFee
                 ? "Retrain " + name + " to level " + std::to_string(uint32(offer.Level)) + " for " + FormatMoney(retrainFee) + "?"
                 : "Retrain " + name + " to level " + std::to_string(uint32(offer.Level)) + " for nothing?";
-        AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                         name + ": retrain for level " + std::to_string(uint32(offer.Level)) + " - " + retrainFeeText,
+        // The retrain row rebuilds the pawn from its bond as much as from the
+        // offer, so the bond is repeated here: the steps are what the pawn has
+        // learned and the cap is what it could learn, which is what makes the row
+        // read as the rebuild it is about to perform. A pawn with no affinity
+        // leaves the label exactly as it was.
+        std::string retrainLabel = name + ": retrain for level " + std::to_string(uint32(offer.Level)) +
+                                   " - " + retrainFeeText;
+        uint32 const retrainSteps = sPawnMgr.AffinitySteps(row);
+        if (retrainSteps > 0)
+            retrainLabel += ", bonded " + std::to_string(retrainSteps) + "/" +
+                            std::to_string(sPawnMgr.AffinityCap());
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, retrainLabel,
                          GOSSIP_SENDER_MAIN, base + PAWN_VERB_RETRAIN, retrainPopup, 0, false);
 
         // The three orders are playerbots' own whisper words

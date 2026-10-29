@@ -1,7 +1,7 @@
 /*
  * mod-pawn: the hooks.
  *
- * Three hooks do the work the playerbots pool cannot do for itself:
+ * These hooks do the work the playerbots pool cannot do for itself:
  *
  *   * PlayerScript::OnPlayerLogin marks a pawn so its archetype is applied once it is
  *     actually in the world, and marks a real player so their party is restored
@@ -12,6 +12,10 @@
  *     checks it at the top of Player::learnSpell, so no learn path can bypass
  *     it: factory initialisation, trainer, level-up maintenance or a quest.
  *   * PlayerScript::OnPlayerLogout drops the picker's per-player cache entry.
+ *   * PlayerScript::OnPlayerCreatureKill, OnPlayerCreatureKillCredit and
+ *     OnPlayerCompleteQuest credit affinity to the owner's pawns. Kills are resolved
+ *     back to the owner when a pawn landed them, so the party the player actually
+ *     fights beside is the one that bonds with them.
  *
  * The picker itself lives in PawnInnkeeper.cpp: a CreatureAI handed out by an
  * AllCreatureScript, so the line is on every innkeeper without a template row, a
@@ -55,6 +59,47 @@ public:
     [[nodiscard]] bool OnPlayerCanLearnSpell(Player* player, uint32 spellId) override
     {
         return !sPawnMgr.IsSpellForbidden(player, spellId);
+    }
+
+    void OnPlayerCreatureKill(Player* killer, Creature* /*killed*/) override
+    {
+        if (!killer)
+            return;
+
+        // The pawns are the party, so a kill one of them lands bonds it to the player just as
+        // a kill the player lands does. Resolving the pawn back to its owner is what makes
+        // that true: a companion that only earned credit for its own blows would never bond
+        // with the character it follows, because in a pawn's company most blows are its own.
+        ObjectGuid const owner = sPawnMgr.IsPawn(killer->GetGUID())
+            ? sPawnMgr.OwnerOf(killer->GetGUID())
+            : killer->GetGUID();
+        sPawnMgr.AwardAffinity(owner, sPawnMgr.Config().AffinityKillPoints);
+    }
+
+    void OnPlayerCreatureKillCredit(Player* player, Creature* /*killed*/) override
+    {
+        if (!player)
+            return;
+
+        // This fires for the credited player of a group kill, which is the owner in the common
+        // case and a pawn when it landed the blow; both hooks therefore fire for a killing blow
+        // by a grouped pawn. That double credit is deliberate: affinity is a participation
+        // counter, not a score, and the bookkeeping needed to recognise a duplicate kill would
+        // cost more than the one extra step it would save.
+        ObjectGuid const owner = sPawnMgr.IsPawn(player->GetGUID())
+            ? sPawnMgr.OwnerOf(player->GetGUID())
+            : player->GetGUID();
+        sPawnMgr.AwardAffinity(owner, sPawnMgr.Config().AffinityKillPoints);
+    }
+
+    void OnPlayerCompleteQuest(Player* player, Quest const* /*quest*/) override
+    {
+        if (!player)
+            return;
+
+        // No owner resolution here: a quest is only ever turned in by a real player, so the
+        // hander is the owner by construction.
+        sPawnMgr.AwardAffinity(player->GetGUID(), sPawnMgr.Config().AffinityQuestPoints);
     }
 };
 

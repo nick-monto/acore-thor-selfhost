@@ -95,10 +95,15 @@ public:
     // largest number of variants a draw can take away. The picker shows the bond against it.
     [[nodiscard]] uint32 AffinityCap() const;
 
-    // Credits affinity points to every pawn this player has in the party. Called from the
+    // Credits affinity points to every pawn this owner has in the party. Called from the
     // kill and quest hooks, so it runs once per kill: the row is updated in memory every
-    // time and written to the database only when a step count moves.
-    void AwardAffinity(Player* player, uint32 points);
+    // time and written to the database only when a step count moves. Keyed by owner
+    // rather than by Player* because a pawn can land a kill while its owner is loading.
+    void AwardAffinity(ObjectGuid owner, uint32 points);
+
+    // The owner of this pawn, or an empty guid when the character is not one. The hooks
+    // need it to credit a kill a pawn landed to the player it follows.
+    [[nodiscard]] ObjectGuid OwnerOf(ObjectGuid pawn) const;
 
     [[nodiscard]] bool IsSpellForbidden(Player* bot, uint32 spellId) const;
 

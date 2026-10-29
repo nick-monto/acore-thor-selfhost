@@ -84,6 +84,12 @@ private:
     // read of the pool plus a cooldown bookkeeping step, and the callers hold the manager
     // through its singleton.
     mutable std::unordered_map<uint64, uint32> _spoken;   // (bot counter << 8) | event id
+
+    // How often a pawn speaks, and how long it then stays quiet, in milliseconds. Read in
+    // Load() rather than through PawnMgr's config struct: pacing speech is the personality's
+    // own concern, and the keys reload with the pools.
+    uint32 _killChancePercent = 10;
+    uint32 _cooldownMs = 120000;
 };
 
 #define sPawnPersonality PawnPersonality::instance()
