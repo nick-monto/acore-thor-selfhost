@@ -16,6 +16,9 @@
  *     OnPlayerCompleteQuest credit affinity to the owner's pawns. Kills are resolved
  *     back to the owner when a pawn landed them, so the party the player actually
  *     fights beside is the one that bonds with them.
+ *   * PlayerScript::OnPlayerCreatureKill and OnPlayerJustDied let a pawn's voice speak
+ *     at the two moments the module sees for itself, before anything else about the
+ *     pawn has changed.
  *
  * The picker itself lives in PawnInnkeeper.cpp: a CreatureAI handed out by an
  * AllCreatureScript, so the line is on every innkeeper without a template row, a
@@ -70,10 +73,16 @@ public:
         // a kill the player lands does. Resolving the pawn back to its owner is what makes
         // that true: a companion that only earned credit for its own blows would never bond
         // with the character it follows, because in a pawn's company most blows are its own.
+        // The voice speaks only for a pawn: a real player's own kills are the player's to
+        // narrate, and SayLine is a no-op when the voice has no line, when the kill chance
+        // misses, or while the cooldown holds.
         ObjectGuid const owner = sPawnMgr.IsPawn(killer->GetGUID())
             ? sPawnMgr.OwnerOf(killer->GetGUID())
             : killer->GetGUID();
         sPawnMgr.AwardAffinity(owner, sPawnMgr.Config().AffinityKillPoints);
+
+        if (sPawnMgr.IsPawn(killer->GetGUID()))
+            sPawnPersonality.SayLine(killer, owner, "kill");
     }
 
     void OnPlayerCreatureKillCredit(Player* player, Creature* /*killed*/) override
@@ -100,6 +109,17 @@ public:
         // No owner resolution here: a quest is only ever turned in by a real player, so the
         // hander is the owner by construction.
         sPawnMgr.AwardAffinity(player->GetGUID(), sPawnMgr.Config().AffinityQuestPoints);
+    }
+
+    void OnPlayerJustDied(Player* player) override
+    {
+        if (!player || !sPawnMgr.IsPawn(player->GetGUID()))
+            return;
+
+        // The line is said here, before the pawn is released, because this hook is the last
+        // moment the pawn is still a player in the world: a line said from a ghost would
+        // arrive after the player has already read the death.
+        sPawnPersonality.SayLine(player, sPawnMgr.OwnerOf(player->GetGUID()), "death");
     }
 };
 

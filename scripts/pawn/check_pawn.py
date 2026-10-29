@@ -823,9 +823,13 @@ def check_temperament_keys() -> None:
              "at boot, so the keys must be enumerated instead")
 
     prefix = re.search(r'(\w+)\s*=\s*"Pawn\.Temperament\."', cpp)
-    iterate = re.search(r"GetKeysByString\(\s*([^)]*?)\s*\)", cpp)
-    if not prefix or not iterate or iterate.group(1) not in (prefix.group(1),
-                                                             '"Pawn.Temperament."'):
+    # Every pool is enumerated the same way now (voice lines joined temperament), so the check
+    # looks for a call that takes the temperament prefix rather than for the first call in the
+    # file: which pool is read first is an implementation detail, that this one is enumerated is
+    # the invariant.
+    wanted = {'"Pawn.Temperament."'} | ({prefix.group(1)} if prefix else set())
+    enumerated = re.findall(r"GetKeysByString\(\s*([^)]*?)\s*\)", cpp)
+    if not prefix or not any(argument in wanted for argument in enumerated):
         fail("temperament: PawnPersonality.cpp does not enumerate the keys with "
              "GetKeysByString over the Pawn.Temperament. prefix; a spec the conf leaves out "
              "would then be probed and log `Config: Missing property`")

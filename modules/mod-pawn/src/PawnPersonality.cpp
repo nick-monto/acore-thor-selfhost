@@ -12,12 +12,14 @@
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
 #include "SharedDefines.h"
+#include "Util.h"
 
 #include <algorithm>
 #include <cctype>
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace
@@ -167,6 +169,31 @@ namespace
         return &pool[Mix(state) % pool.size()];
     }
 
+    // The three moments the module speaks for a pawn. Kept as a list so the loader
+    // and the speaker agree on exact spellings rather than on three literals typed
+    // in three places.
+    constexpr char const* kEvents[] = { "kill", "death", "dismiss" };
+
+    // One event's small, stable id: the same integer salts the line draw and keys the
+    // cooldown, so a pawn's kill line cannot collide with its death line in either
+    // place. Masked to eight bits because the cooldown key packs the pawn's counter and
+    // the event into one integer.
+    uint32 PawnEventId(char const* event)
+    {
+        uint32 id = 0;
+        for (char const* c = event; c && *c; ++c)
+            id = id * 131 + uint32(static_cast<unsigned char>(*c));
+        return id & 0xFF;
+    }
+
+    bool IsEvent(std::string const& event)
+    {
+        for (char const* known : kEvents)
+            if (event == known)
+                return true;
+        return false;
+    }
+
     // A trait that names a strategy the bot does not know is a configuration
     // mistake, and the same mistake is shared by every pawn that drew it, so warn
     // once per (engine, name) rather than once per login.
@@ -270,8 +297,82 @@ void PawnPersonality::Load()
 {
     _temperaments.clear();
     _voices.clear();
+    _lines.clear();
+    _spoken.clear();
+
+    // Pacing is reloaded with the pools rather than read from PawnMgr's config struct:
+    // it is the personality's own dial, and the keys travel with the pools. The cooldown
+    // bookkeeping is dropped with them, because a reload may have removed the event a
+    // pawn was last timed on, and a timestamp for a line that no longer exists would
+    // silence a line that does.
+    _killChancePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.VoiceKillChancePercent", 10), 0, 100));
+    _cooldownMs = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.VoiceCooldownSeconds", 120), 0, 3600)) * 1000;
 
     _voices = ParsePool("Pawn.Voice", sConfigMgr->GetOption<std::string>("Pawn.Voice", "Talkative: +emote | Quiet: -emote"));
+
+    // The line pools are read after the voices because a line is keyed by a voice label,
+    // and a label Pawn.Voice no longer defines has to be told apart from one it does.
+    //
+    // Enumerated, never probed: asking for a key the conf does not define is a missing-
+    // option warning at boot, and the set of voices is the admin's, so the lines a
+    // shipped conf mentions are found by reading what is there rather than by asking for
+    // labels this build happens to know.
+    std::string const linePrefix = "Pawn.VoiceLine.";
+    for (std::string const& key : sConfigMgr->GetKeysByString(linePrefix))
+    {
+        std::string const label = Trim(key.substr(linePrefix.size()));
+
+        // A pawn's voice is always one of the pool's labels, so a line keyed by anything
+        // else can never be drawn: it is named and dropped rather than kept as a block no
+        // pawn can reach.
+        bool knownVoice = false;
+        for (PawnProfile const& voice : _voices)
+            if (voice.Label == label)
+                knownVoice = true;
+
+        if (!knownVoice)
+        {
+            LOG_WARN("module", "Pawn: {}: '{}' is not a label Pawn.Voice defines; voice lines skipped", key, label);
+            continue;
+        }
+
+        // The key came out of the option map, so it exists: the default is unreachable
+        // and there is nothing missing to log.
+        std::string const value = sConfigMgr->GetOption<std::string>(key, "", false);
+
+        std::unordered_map<std::string, std::vector<std::string>> events;
+        for (std::string const& raw : Split(value, '|'))
+        {
+            std::string const chunk = Trim(raw);
+            if (chunk.empty())
+                continue;  // a trailing separator is a formatting slip, not a line
+
+            // The event name ends at the first colon: a text keeps any colons of its own,
+            // which is the only way an emote like "*spits:* not you" survives the format.
+            size_t const colon = chunk.find(':');
+            std::string const event = Trim(chunk.substr(0, colon));
+            std::string const text = colon == std::string::npos ? std::string() : Trim(chunk.substr(colon + 1));
+
+            if (!IsEvent(event))
+            {
+                LOG_WARN("module", "Pawn: {}: '{}' is not an event the module speaks; line dropped", key, event);
+                continue;
+            }
+
+            if (text.empty())
+            {
+                LOG_WARN("module", "Pawn: {}: the {} line is empty; dropped", key, event);
+                continue;
+            }
+
+            events[event].push_back(text);
+        }
+
+        // A block that kept no line is not a block: storing it would make the logged
+        // block count read as lines the pawn does not have.
+        if (!events.empty())
+            _lines[label] = std::move(events);
+    }
 
     // The keys the configuration defines, enumerated rather than probed: asking for
     // a key the conf does not define is a missing-option warning, and the class x
@@ -328,10 +429,18 @@ void PawnPersonality::Load()
             _temperaments[Key(uint8(cls), uint8(spec))] = pool;
     }
 
+    // How many lines the pools actually hold, not how many the conf spells: a block
+    // whose every line was dropped is not counted, so this number matches what a pawn
+    // can say.
+    size_t lineTotal = 0;
+    for (auto const& block : _lines)
+        for (auto const& pool : block.second)
+            lineTotal += pool.second.size();
+
     // _temperaments only holds non-empty pools, so the two counts together read
     // as "how much of the enumerated keys is populated".
-    LOG_INFO("module", "Pawn: personality: {} temperament pools over {} temperament keys, {} voices",
-             _temperaments.size(), keysFound, _voices.size());
+    LOG_INFO("module", "Pawn: personality: {} temperament pools over {} temperament keys, {} voices, {} voice-line blocks, {} lines",
+             _temperaments.size(), keysFound, _voices.size(), _lines.size(), lineTotal);
 }
 
 PawnProfile const* PawnPersonality::Temperament(ObjectGuid owner, ObjectGuid bot, uint8 cls, uint8 spec) const
@@ -346,6 +455,69 @@ PawnProfile const* PawnPersonality::Temperament(ObjectGuid owner, ObjectGuid bot
 PawnProfile const* PawnPersonality::Voice(ObjectGuid owner, ObjectGuid bot) const
 {
     return Draw(_voices, owner, bot, 0xC2B2AE3D27D4EB4Full);
+}
+
+std::string const* PawnPersonality::Line(ObjectGuid owner, ObjectGuid bot, char const* event) const
+{
+    if (!event)
+        return nullptr;
+
+    PawnProfile const* voice = Voice(owner, bot);
+    if (!voice)
+        return nullptr;
+
+    auto const voiceIt = _lines.find(voice->Label);
+    if (voiceIt == _lines.end())
+        return nullptr;
+
+    auto const eventIt = voiceIt->second.find(event);
+    if (eventIt == voiceIt->second.end() || eventIt->second.empty())
+        return nullptr;
+
+    // Drawn from the same (owner, bot) seed as the voice itself and salted with the
+    // event, so a pawn says the same thing at the same moment every time and its death
+    // line is not simply its kill line again. The global RNG is never consulted here:
+    // the draw has to be reproducible from the two guids alone, because the same pawn
+    // resolves its line on every call and a hundred other things move the world RNG.
+    uint32 const seed = owner.GetCounter() ^ (bot.GetCounter() * 2654435761u);
+    uint64 state = uint64(seed) ^ uint64(PawnEventId(event));
+
+    std::vector<std::string> const& pool = eventIt->second;
+    return &pool[Mix(state) % pool.size()];
+}
+
+void PawnPersonality::SayLine(Player* bot, ObjectGuid owner, char const* event) const
+{
+    if (!bot)
+        return;
+
+    std::string const* text = Line(owner, bot->GetGUID(), event);
+    if (!text)
+        return;
+
+    // A pawn that comments on every corpse is a nuisance, so the kill line is a chance
+    // rather than a certainty: 0 never speaks, 100 always does, and urand(1, 100) never
+    // exceeds 100. The other events are rare enough to be said every time.
+    if (PawnEventId(event) == PawnEventId("kill") && urand(1, 100) > _killChancePercent)
+        return;
+
+    // Paced per pawn and per event, in the same packed shape the header documents. The
+    // cooldown is why a pawn pulled into a fast fight cannot fill the chat with one line
+    // repeated: the second kill inside the window says nothing.
+    uint64 const key = (uint64(bot->GetGUID().GetCounter()) << 8) | uint64(PawnEventId(event));
+    uint32 const now = getMSTime();
+
+    auto const it = _spoken.find(key);
+    // Unsigned subtraction, so the cooldown survives the millisecond counter wrapping.
+    if (it != _spoken.end() && (now - it->second) < _cooldownMs)
+        return;
+
+    _spoken[key] = now;
+
+    // The same language choice playerbots' own say action makes, so a line reads as the
+    // pawn's own speech rather than as universal babble the other faction is not meant
+    // to understand.
+    bot->Say(*text, bot->GetTeamId() == TEAM_ALLIANCE ? LANG_COMMON : LANG_ORCISH);
 }
 
 void PawnPersonality::Apply(Player* bot, ObjectGuid owner, uint8 cls, uint8 spec) const

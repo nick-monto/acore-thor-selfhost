@@ -1208,10 +1208,17 @@ bool PawnMgr::Dismiss(Player* player, ObjectGuid bot, std::string& message)
         return false;
     }
 
+    // The farewell is said before the logout because this is the last moment
+    // the pawn exists as a player in the world: LogoutPlayerBot deletes the
+    // Player object, and a line said after it would be said by nobody.
+    //
     // LogoutPlayerBot deletes the Player object, so nothing may touch it after
     // the call. The roster row is the only state that matters afterwards.
-    if (ObjectAccessor::FindConnectedPlayer(bot))
+    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bot);
+    if (botPlayer)
     {
+        sPawnPersonality.SayLine(botPlayer, it->second.Owner, "dismiss");
+
         if (PlayerbotHolder* mgr = GET_PLAYERBOT_MGR(player))
             mgr->LogoutPlayerBot(bot);
     }
