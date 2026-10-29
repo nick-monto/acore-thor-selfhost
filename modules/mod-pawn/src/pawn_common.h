@@ -39,6 +39,10 @@ struct PawnConfig
     // player's strength and the extremes are rare.
     uint32 GearFloorPercent     = 85;
     uint32 GearCapPercent       = 150;
+    // What a repair-and-restock costs, as a percentage of player_level^2 * 10 copper.
+    // It follows the player's level rather than the pawn's gear, so the price of
+    // keeping a companion serviceable stays proportional to what the player earns.
+    uint32 ResupplyFeePercent   = 100;
     // Whether a hired pawn keeps the XP it earns in the party. Off by default: a
     // pawn that levels with its owner never needs exchanging, and the roster is
     // meant to be a set of contracts that expire as the player outgrows them.

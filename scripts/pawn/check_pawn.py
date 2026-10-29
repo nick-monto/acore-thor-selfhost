@@ -166,10 +166,11 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
                  f"rewrite a value the conf does not carry")
 
     # The other direction: every key the repair path can restore is in the defaults. The
-    # per-class pools are deliberately absent: they are long, they change with balance, and the
-    # player is meant to edit them, so a repair leaves them alone.
+    # per-class pools and the per-voice lines are deliberately absent: they are long, they change
+    # with balance, and the player is meant to edit them, so a repair leaves them alone.
     for key in sorted(keys):
-        if key.startswith(("Pawn.Blacklist.", "Pawn.Variant.", "Pawn.Temperament.")):
+        if key.startswith(("Pawn.Blacklist.", "Pawn.Variant.", "Pawn.Temperament.",
+                           "Pawn.VoiceLine.")):
             continue
         if key not in defaults:
             fail(f"installer: {key} is in the conf but not in PAWN_CONF_DEFAULTS; a repair "
@@ -460,6 +461,57 @@ def check_personality(keys: dict[str, str]) -> None:
     elif applied < reset:
         fail("personality: sPawnPersonality.Apply comes before the last ResetStrategies in "
              "PawnMgr.cpp; that call rebuilds the role defaults, so the trait is wiped")
+
+
+VOICE_EVENTS = ("kill", "death", "dismiss")
+
+
+def check_voice_lines(keys: dict[str, str]) -> None:
+    """Every Pawn.VoiceLine block names a voice the pool defines, and events the module speaks.
+
+    A block keyed by a label the pool does not have is dead configuration: a pawn's voice is one of
+    Pawn.Voice's labels, so nothing can ever draw it. The loader drops such a key with a warning at
+    boot; this is the same check before the build, where it is cheap to fix.
+    """
+    if "Pawn.Voice" not in keys:
+        return  # check_personality already reports a missing pool
+
+    labels: set[str] = set()
+    for chunk in keys["Pawn.Voice"].split("|"):
+        label = chunk.strip().partition(":")[0].strip()
+        if label:
+            labels.add(label)
+
+    line_keys = sorted(key for key in keys if key.startswith("Pawn.VoiceLine."))
+    if not line_keys:
+        fail("conf: no Pawn.VoiceLine.* blocks; no pawn would ever say anything")
+        return
+
+    for key in line_keys:
+        label = key[len("Pawn.VoiceLine."):]
+        if label not in labels:
+            fail(f"conf: {key} names the voice {label!r}, which Pawn.Voice does not define; "
+                 f"a pawn's voice is one of that pool's labels, so the line can never be drawn")
+
+        spoken: set[str] = set()
+        for chunk in keys[key].split("|"):
+            entry = chunk.strip()
+            if not entry:
+                continue  # a trailing or doubled '|' is a formatting slip, as in the module
+            event, separator, text = entry.partition(":")
+            event, text = event.strip(), text.strip()
+            if not separator or not event:
+                fail(f"conf: {key}: {entry!r} is not `event: text`")
+                continue
+            if event not in VOICE_EVENTS:
+                fail(f"conf: {key}: {entry!r} names the event {event!r}; the module speaks "
+                     f"{', '.join(VOICE_EVENTS)}")
+                continue
+            if not text:
+                fail(f"conf: {key}: the {event} line has no text")
+            spoken.add(event)
+
+        notes.append(f"voice lines: {label} speaks {', '.join(sorted(spoken)) or 'nothing'}")
 
 
 def check_roster() -> None:
@@ -788,6 +840,7 @@ def main() -> int:
     check_installer_defaults(keys)
     check_picker(keys)
     check_personality(keys)
+    check_voice_lines(keys)
     check_roster()
     check_loader()
     check_wiring()

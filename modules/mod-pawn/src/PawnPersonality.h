@@ -53,6 +53,18 @@ public:
     // applied.
     void Apply(Player* bot, ObjectGuid owner, uint8 cls, uint8 spec) const;
 
+    // The line this pawn's voice would say for one of the events the module speaks
+    // ("kill", "death", "dismiss"), or nullptr when its voice has none. Drawn from the
+    // same (owner, bot) seed as its level and its temperament, so a pawn says the same
+    // thing at the same moment every time.
+    [[nodiscard]] std::string const* Line(ObjectGuid owner, ObjectGuid bot, char const* event) const;
+
+    // Says it: resolves the pawn's voice, applies Pawn.VoiceKillChancePercent to a kill and
+    // the per-pawn, per-event Pawn.VoiceCooldownSeconds to every event, and speaks in the
+    // pawn's own faction language. Silent when there is nothing to say, so a call site can
+    // call it unconditionally.
+    void SayLine(Player* bot, ObjectGuid owner, char const* event) const;
+
     [[nodiscard]] uint32 TemperamentPools() const;
     [[nodiscard]] uint32 VoiceCount() const;
 
@@ -61,6 +73,17 @@ private:
 
     std::unordered_map<uint32, std::vector<PawnProfile>> _temperaments;  // Key -> pool
     std::vector<PawnProfile>                             _voices;
+
+    // One voice's lines: voice label -> event -> the texts it may say. Keyed by label
+    // rather than by pool index because the configuration names a voice, and a label the
+    // pool does not define is a line no pawn can ever draw.
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, std::vector<std::string>>> _lines;
+
+    // When each pawn last spoke each event, in getMSTime(). Mutable because speaking is a
+    // read of the pool plus a cooldown bookkeeping step, and the callers hold the manager
+    // through its singleton.
+    mutable std::unordered_map<uint64, uint32> _spoken;   // (bot counter << 8) | event id
 };
 
 #define sPawnPersonality PawnPersonality::instance()

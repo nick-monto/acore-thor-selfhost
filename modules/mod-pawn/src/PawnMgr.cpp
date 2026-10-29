@@ -6,6 +6,7 @@
 
 #include "PawnMgr.h"
 
+#include "Bag.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Guild.h"
@@ -170,6 +171,7 @@ void PawnMgr::LoadConfig()
         _config.VariantWithholdMin = _config.VariantWithholdMax;
     _config.GearFloorPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearFloorPercent", 85), 25, 100));
     _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.GearCapPercent", 150), 100, 300));
+    _config.ResupplyFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Pawn.ResupplyFeePercent", 100), 0, 10000));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.OfferedPerPage", 12), 1, 14));
     _config.FeaturedMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMin", 10), 1, 50));
     _config.FeaturedMax = uint8(std::clamp(sConfigMgr->GetOption<int32>("Pawn.FeaturedMax", 15), 1, 50));
@@ -182,12 +184,13 @@ void PawnMgr::LoadConfig()
     if (_config.PoolRefreshMaxMinutes < _config.PoolRefreshMinMinutes)
         std::swap(_config.PoolRefreshMaxMinutes, _config.PoolRefreshMinMinutes);
 
-    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/pawn gear={}-{}%",
+    LOG_INFO("module", "Pawn: config: enabled={} maxPawns={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/pawn gear={}-{}% resupply={}%",
              _config.Enabled, uint32(_config.MaxPawns), uint32(_config.LevelWindow),
              uint32(_config.OfferedPerPage), uint32(_config.FeaturedMin), uint32(_config.FeaturedMax),
              uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes),
              _config.HireFeePercent, _config.HireFeeHeldPercent,
-             _config.GearFloorPercent, _config.GearCapPercent);
+             _config.GearFloorPercent, _config.GearCapPercent,
+             _config.ResupplyFeePercent);
 }
 
 void PawnMgr::RefreshPool()
@@ -933,6 +936,24 @@ uint32 PawnMgr::HireFee(Player* player, PawnOffer const& offer) const
     return uint32(std::min<uint64>(fee, 2000000000ull));
 }
 
+uint32 PawnMgr::ResupplyFee(Player* player) const
+{
+    if (!player || !_config.ResupplyFeePercent)
+        return 0;
+
+    // A square rather than the hire's cube: restocking is routine upkeep paid many
+    // times over a level, so it should stay a small fraction of what the player
+    // earns at that level instead of growing into a second hire fee. 64-bit
+    // because the percentage multiplies on top of the level.
+    uint64 const level = uint64(player->GetLevel());
+    uint64 fee = level * level * 10;
+    fee = fee * _config.ResupplyFeePercent / 100;
+
+    // Same cap and the same int32 budget as HireFee: the charge is a negative
+    // int32, and the cap only exists so a nonsense percentage cannot overflow.
+    return uint32(std::min<uint64>(fee, 2000000000ull));
+}
+
 bool PawnMgr::Recruit(Player* player, PawnOffer const& offer, std::string& message)
 {
     if (!_config.Enabled)
@@ -1136,6 +1157,111 @@ bool PawnMgr::Order(Player* player, ObjectGuid bot, char const* verb, std::strin
     botAI->HandleCommand(CHAT_MSG_WHISPER, order, player);
 
     message = std::string(botPlayer->GetName()) + reply;
+    return true;
+}
+
+// The upkeep counter behind the hiring counter: the player pays the innkeeper to
+// put a companion back in fighting order instead of buying a new one. It repairs
+// what the pawn has worn out and hands it the supplies a freshly built pawn
+// carries, at a flat price that follows the player's level rather than the pawn's
+// gear - a repair is the same service whether the gear is common or epic.
+bool PawnMgr::Resupply(Player* player, ObjectGuid bot, std::string& message)
+{
+    if (!_config.Enabled)
+    {
+        message = "No innkeeper will vouch for a companion today.";
+        return false;
+    }
+
+    if (!player || !bot)
+    {
+        message = "That pawn is not available.";
+        return false;
+    }
+
+    auto it = _rows.find(bot.GetCounter());
+    if (it == _rows.end() || it->second.Owner != player->GetGUID() || !it->second.Recruited)
+    {
+        message = "That pawn is not in your party.";
+        return false;
+    }
+
+    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bot);
+    if (!botPlayer || !botPlayer->IsInWorld())
+    {
+        message = std::string(botPlayer ? botPlayer->GetName() : "Your pawn") +
+                  " is not with you right now.";
+        return false;
+    }
+
+    if (botPlayer->isDead())
+    {
+        message = std::string(botPlayer->GetName()) + " cannot be tended while it is dead.";
+        return false;
+    }
+
+    uint32 const fee = ResupplyFee(player);
+    if (fee && !player->HasEnoughMoney(fee))
+    {
+        message = "The innkeeper asks " + FormatMoney(fee) + ", and you cannot afford that.";
+        return false;
+    }
+
+    if (fee)
+        player->ModifyMoney(-int32(fee));
+
+    // Nothing is charged here: the player paid the fee above, and the pawn's own
+    // purse is the factory's.
+    botPlayer->DurabilityRepairAll(false, 1.0f, false);
+
+    // The purge is what makes this action idempotent. InitFood stores two stacks
+    // per food category and InitPotions does the same, and both append, so
+    // restocking a pawn that still carries its supplies would hand it a second
+    // copy and slowly fill its bags. Only the categories the factory replenishes
+    // are cleared; containers, gear, quest items, glyphs and trade goods are left
+    // alone.
+    auto const isRestockItem = [](ItemTemplate const* proto)
+    {
+        if (!proto)
+            return false;
+
+        if (proto->Class == ITEM_CLASS_REAGENT || proto->Class == ITEM_CLASS_PROJECTILE)
+            return true;
+
+        if (proto->Class != ITEM_CLASS_CONSUMABLE)
+            return false;
+
+        return proto->SubClass == ITEM_SUBCLASS_POTION || proto->SubClass == ITEM_SUBCLASS_ELIXIR ||
+               proto->SubClass == ITEM_SUBCLASS_FLASK || proto->SubClass == ITEM_SUBCLASS_FOOD;
+    };
+
+    auto const purge = [botPlayer, &isRestockItem](uint8 bag, uint8 slot)
+    {
+        Item* item = botPlayer->GetItemByPos(bag, slot);
+        if (item && isRestockItem(item->GetTemplate()))
+            botPlayer->DestroyItem(bag, slot, true);
+    };
+
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        purge(NULL_BAG, slot);
+
+    for (uint8 slot = INVENTORY_SLOT_BAG_START; slot < INVENTORY_SLOT_BAG_END; ++slot)
+        if (Bag* bag = botPlayer->GetBagByPos(slot))
+            for (uint8 item = 0; item < bag->GetBagSize(); ++item)
+                purge(slot, item);
+
+    PlayerbotFactory factory(botPlayer, botPlayer->GetLevel());
+    factory.InitFood();
+    factory.InitPotions();
+    factory.InitReagents();
+    factory.InitAmmo();
+
+    message = std::string(botPlayer->GetName()) + " is repaired and restocked.";
+    if (fee)
+        message += " The innkeeper takes " + FormatMoney(fee) + ".";
+
+    LOG_INFO("module", "Pawn: {} resupplied {} for {}", player->GetName(), botPlayer->GetName(),
+             fee ? FormatMoney(fee) : std::string("free"));
     return true;
 }
 

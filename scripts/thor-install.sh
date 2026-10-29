@@ -119,6 +119,8 @@ PAWN_CONF_DEFAULTS=(
     "Pawn.VariantWithholdMin=1"
     "Pawn.VariantWithholdMax=2"
     "Pawn.Voice=Talkative: +emote | Quiet: -emote"
+    "Pawn.VoiceKillChancePercent=10"
+    "Pawn.VoiceCooldownSeconds=120"
     "Pawn.HireFeePercent=100"
     "Pawn.HireFeeHeldPercent=100"
     "Pawn.GearFloorPercent=85"
@@ -318,6 +320,10 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
             [ "$val" -ge 100 ] && [ "$val" -le 300 ] ;;
         Pawn.ResupplyFeePercent)
             [ "$val" -ge 0 ] && [ "$val" -le 10000 ] ;;
+        Pawn.VoiceKillChancePercent)
+            [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
+        Pawn.VoiceCooldownSeconds)
+            [ "$val" -ge 0 ] && [ "$val" -le 3600 ] ;;
         Pawn.FeaturedMin|Pawn.FeaturedMax)
             [ "$val" -ge 1 ] && [ "$val" -le 50 ] ;;
         Pawn.PoolRefreshMinMinutes|Pawn.PoolRefreshMaxMinutes)
@@ -344,6 +350,7 @@ pawn_append_missing_conf() {   # pawn_append_missing_conf LIVE DIST - append the
         key="${key%"${key##*[![:space:]]}"}"        # and trailing
         case "$key" in
             Pawn.Voice) ;;
+            Pawn.VoiceLine.*) ;;
             Pawn.Blacklist.[0-9]*.[0-9]*|Pawn.Variant.[0-9]*.[0-9]*|Pawn.Temperament.[0-9]*.[0-9]*) ;;
             *) continue ;;                          # comments, blanks and every scalar key
         esac

@@ -88,16 +88,17 @@ namespace
     // than a position on a page. Pawn.MaxPawns is clamped to 4
     // (PawnMgr.cpp:160), which is ten verbs for each of four pawns - 1300..1339 -
     // and the base sits above the recruit span so no party row can be read as a
-    // hire. Verbs 0 (retrain) and 1 (restock) are reserved for later phases and
-    // have no row yet.
+    // hire. Verb 1 is the restock and has a row; verb 0 (retrain) is reserved for
+    // a later phase and still has none.
     constexpr uint32 PAWN_ACTION_PAWN      = 1300;
     constexpr uint32 PAWN_ACTION_PAWN_SPAN = 40;
 
-    constexpr uint32 PAWN_VERB_FOLLOW  = 2;
-    constexpr uint32 PAWN_VERB_STAY    = 3;
-    constexpr uint32 PAWN_VERB_ATTACK  = 4;
-    constexpr uint32 PAWN_VERB_DISMISS = 5;
-    constexpr uint32 PAWN_VERB_BACK    = 6;
+    constexpr uint32 PAWN_VERB_RESUPPLY = 1;
+    constexpr uint32 PAWN_VERB_FOLLOW   = 2;
+    constexpr uint32 PAWN_VERB_STAY     = 3;
+    constexpr uint32 PAWN_VERB_ATTACK   = 4;
+    constexpr uint32 PAWN_VERB_DISMISS  = 5;
+    constexpr uint32 PAWN_VERB_BACK     = 6;
 
     // The options this AI answers. Everything else belongs to the innkeeper - its
     // bind, its quests, its vendor rows - and is left alone: the core dispatches
@@ -448,9 +449,9 @@ private:
         SendGossipMenuFor(player, player->GetGossipTextId(creature), creature->GetGUID());
     }
 
-    // One pawn, its orders and its dismissal. Every row names the pawn because the
-    // gossip title does not: a page of "follow me" rows would otherwise be
-    // indistinguishable from the same page for the other companion.
+    // One pawn, its orders, its upkeep and its dismissal. Every row names the pawn
+    // because the gossip title does not: a page of "follow me" rows would otherwise
+    // be indistinguishable from the same page for the other companion.
     static void ShowPawnPage(Player* player, Creature* creature, PawnMenuState const& state)
     {
         PawnRosterRow const& row = state.Party[state.PawnIndex];
@@ -465,13 +466,25 @@ private:
         // The three orders are playerbots' own whisper words
         // (ChatCommandHandlerStrategy.cpp); the picker only spares the player the
         // syntax. None of them needs a confirmation box - an order can be given
-        // again - while a dismissal cannot be taken back, so only that row asks.
+        // again - so only the two rows that spend something (the upkeep below and
+        // the dismissal) ask before they act.
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": follow me", GOSSIP_SENDER_MAIN,
                          base + PAWN_VERB_FOLLOW);
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": hold here", GOSSIP_SENDER_MAIN,
                          base + PAWN_VERB_STAY);
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": attack my target", GOSSIP_SENDER_MAIN,
                          base + PAWN_VERB_ATTACK);
+
+        // Repair and restock cost real money, so the fee is in the row and the
+        // click is confirmed. The box money stays 0 for the same reason the hire
+        // box does: PawnMgr::Resupply is the only place that charges, once every
+        // check has passed, and the core would deduct whatever was put here.
+        uint32 const fee = sPawnMgr.ResupplyFee(player);
+        std::string const feeText = fee ? FormatMoney(fee) : std::string("free");
+        std::string const restockPopup = fee ? "Restock " + name + " for " + FormatMoney(fee) + "?"
+                                            : "Restock " + name + " for nothing?";
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": restock and repair - " + feeText,
+                         GOSSIP_SENDER_MAIN, base + PAWN_VERB_RESUPPLY, restockPopup, 0, false);
 
         // The box money stays 0 for the same reason the hire box does: a dismissal
         // charges nothing, and the core would deduct whatever was put here.
@@ -520,6 +533,13 @@ private:
                 Notify(player, message);
                 break;
             }
+            case PAWN_VERB_RESUPPLY:
+                sPawnMgr.Resupply(player, bot, message);
+                Notify(player, message);
+                // The page stays where it is: a restock is repeatable, and the
+                // player wants to read the result before deciding on anything
+                // else on this pawn.
+                break;
             case PAWN_VERB_DISMISS:
                 sPawnMgr.Dismiss(player, bot, message);
                 Notify(player, message);
@@ -531,9 +551,9 @@ private:
                 state.PawnPage = false;
                 break;
             default:
-                // Zero and one are the retrain and restock verbs of later phases;
-                // no row draws them yet, but a menu sent before that phase landed
-                // could still carry one. Ignoring it leaves the page where it is.
+                // Zero is the retrain verb of a later phase; no row draws it yet,
+                // but a menu sent before that phase landed could still carry one.
+                // Ignoring it leaves the page where it is.
                 break;
         }
 

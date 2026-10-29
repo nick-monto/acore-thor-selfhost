@@ -391,6 +391,28 @@ Pawn.Variant.11.3 = Dash, Cower, Survival Instincts
 # Default: Talkative: +emote | Quiet: -emote
 Pawn.Voice = Talkative: +emote | Quiet: -emote
 
+# What a pawn actually says, per voice. The pool above decides how a pawn behaves
+# between fights; these lines are spoken at three moments the module sees for
+# itself - a kill it landed, its own death, and its dismissal - through the same
+# call playerbots' own say action uses.
+#
+# The format is `event: text`, entries separated by `|`, and the events are
+# `kill`, `death` and `dismiss`. The key is the voice label from Pawn.Voice, so a
+# label that is not in that pool has no lines; a line for an event the voice does
+# not list is simply not said. A pawn says the same line at the same moment every
+# time, because the line is drawn from the same (owner, pawn) seed as its level
+# and its temperament. Text may not contain a `|`.
+#
+# The two scalars below decide when a pawn speaks at all. The chance is per kill:
+# a pawn that comments on every corpse is a nuisance, and the cooldown is per pawn
+# and per event, so a quiet voice and a talkative one do not talk over each other.
+#
+# Defaults: 10 percent of kills, 120 seconds between two lines from one pawn
+Pawn.VoiceKillChancePercent = 10
+Pawn.VoiceCooldownSeconds = 120
+Pawn.VoiceLine.Talkative = kill: Well fought! | kill: Next one, then. | kill: That is how it is done. | death: Avenge me, friend. | dismiss: Until next time.
+Pawn.VoiceLine.Quiet = death: ... | dismiss: *nods*
+
 # Temperament drives the combat engine and answers how the pawn fights. Unlike
 # voice it is per spec, because what bold means for a fury warrior is not what
 # it means for a holy priest - a tank that charges in dies, and a healer that
