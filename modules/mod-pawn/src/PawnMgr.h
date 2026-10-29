@@ -58,6 +58,33 @@ public:
 
     bool Recruit(Player* player, PawnOffer const& offer, std::string& message);
     bool Dismiss(Player* player, ObjectGuid bot, std::string& message);
+
+    // Forwards one order to an online pawn of this player. The verb is the whisper
+    // vocabulary playerbots already implements - follow, stay, attack, flee - and is
+    // handed to the same entry point a whisper reaches, so a click at the innkeeper and
+    // a typed whisper cannot diverge. Anything else is refused here rather than sent.
+    bool Order(Player* player, ObjectGuid bot, char const* verb, std::string& message);
+
+    // Copper a repair-and-restock of one pawn costs this player: a percentage of
+    // player_level^2 * 10, so the price follows the player rather than the pawn's gear.
+    // 0 when the fee is switched off.
+    [[nodiscard]] uint32 ResupplyFee(Player* player) const;
+
+    // Repairs an online pawn and replaces the food, potions, reagents and ammunition it
+    // carries. The four consumable classes are purged first: the factory's Init* calls
+    // append, so restocking a pawn that still has its food would fill its bags.
+    bool Resupply(Player* player, ObjectGuid bot, std::string& message);
+
+    // The offer this roster row would be at the player's current level: the same bot and
+    // the same spec, the level re-derived through DeriveLevel, so a pawn the player has
+    // outgrown can be brought forward without being exchanged for another face.
+    [[nodiscard]] PawnOffer OfferFor(Player* player, PawnRosterRow const& row) const;
+
+    // Rebuilds an online pawn of this player at the level it would be offered at now. It
+    // keeps the character, its spec, its temperament and its affinity; only the level, the
+    // fee and the gear pass change, which is what a re-hire at a new level does anyway.
+    bool Retrain(Player* player, ObjectGuid bot, std::string& message);
+
     [[nodiscard]] bool IsSpellForbidden(Player* bot, uint32 spellId) const;
 
     // The variant abilities this pawn is missing: a bounded, deterministic

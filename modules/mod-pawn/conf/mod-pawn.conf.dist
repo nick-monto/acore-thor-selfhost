@@ -135,6 +135,18 @@ Pawn.HireFeeHeldPercent = 100
 Pawn.GearFloorPercent = 85
 Pawn.GearCapPercent = 150
 
+# What the innkeeper charges to repair a pawn and replace the food, potions,
+# reagents and ammunition it carries, in copper, as a percentage of the player's
+# level squared times ten:
+#
+#   fee = player_level^2 * 10 * ResupplyFeePercent / 100
+#
+# which is 64,000 copper (6g 40s) at 80 and 4,000 copper (40s) at 20. The fee is
+# paid by the player, not by the pawn: a pawn's own purse is the factory's, and a
+# cost the player cannot see is not a cost. 0 makes every restock free.
+# Default: 100
+Pawn.ResupplyFeePercent = 100
+
 # Offers per gossip page. The gossip packet carries at most 16 rows and the
 # server aborts on a 33rd, so this is clamped to 16 minus the party rows and
 # the two navigation rows.

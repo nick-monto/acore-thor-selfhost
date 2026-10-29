@@ -1069,6 +1069,76 @@ bool PawnMgr::Dismiss(Player* player, ObjectGuid bot, std::string& message)
     return true;
 }
 
+// The pawn page turns the whisper vocabulary playerbots already implements into
+// buttons, so an order clicked here reaches the pawn through the same doorway a
+// whisper from its owner uses. The verb is whitelisted instead of forwarded as
+// given: whatever arrives here is handed to playerbots' command parser, and a
+// string that came out of a gossip menu would otherwise be a second way into
+// that parser which nobody has reviewed.
+bool PawnMgr::Order(Player* player, ObjectGuid bot, char const* verb, std::string& message)
+{
+    if (!_config.Enabled)
+    {
+        message = "No innkeeper will vouch for a companion today.";
+        return false;
+    }
+
+    if (!player || !bot)
+    {
+        message = "That pawn is not available.";
+        return false;
+    }
+
+    auto it = _rows.find(bot.GetCounter());
+    if (it == _rows.end() || it->second.Owner != player->GetGUID() || !it->second.Recruited)
+    {
+        message = "That pawn is not in your party.";
+        return false;
+    }
+
+    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bot);
+    if (!botPlayer || !botPlayer->IsInWorld())
+    {
+        // An order is a moment, not a state, so nothing is queued for a pawn that
+        // is not standing here to hear it.
+        message = std::string(botPlayer ? botPlayer->GetName() : "Your pawn") +
+                  " is not with you right now.";
+        return false;
+    }
+
+    std::string const order = verb ? verb : "";
+    std::string reply;
+    if (order == "follow")
+        reply = " falls in behind you.";
+    else if (order == "stay")
+        reply = " holds here.";
+    else if (order == "attack")
+        reply = " takes your target.";
+    else if (order == "flee")
+        reply = " breaks off.";
+    else
+    {
+        message = "That is not an order a pawn takes.";
+        return false;
+    }
+
+    PlayerbotAI* botAI = GET_PLAYERBOT_AI(botPlayer);
+    if (!botAI)
+    {
+        message = std::string(botPlayer->GetName()) + " cannot hear you right now.";
+        return false;
+    }
+
+    // The chat type matters: playerbots' handler checks the sender against the
+    // owner, which is exactly the check a whisper from the player passes. This is
+    // the public three-argument overload - the one that takes a Player* and does
+    // the security check itself; the four-argument form is private to the AI.
+    botAI->HandleCommand(CHAT_MSG_WHISPER, order, player);
+
+    message = std::string(botPlayer->GetName()) + reply;
+    return true;
+}
+
 bool PawnMgr::IsSpellForbidden(Player* bot, uint32 spellId) const
 {
     if (!bot)

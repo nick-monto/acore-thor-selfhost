@@ -72,15 +72,43 @@ namespace
     // Action code ranges. The action travels through the gossip menu untouched
     // and comes back as PlayerTalkClass->GetGossipOptionAction(gossipListId) in
     // sGossipSelect, so it is the only state the click needs beyond the
-    // per-player cache below. Both indexes are page-local: a page
-    // holds at most 16 rows, so a page-local index always fits its range however
-    // many candidates a draw has.
+    // per-player cache below. The offer index is page-local: a page holds at most
+    // 16 rows, so it always fits its span however many candidates a draw has. The
+    // party index is not local to anything - it is the roster index, bounded by
+    // Pawn.MaxPawns, which is why its range can be ten wide.
     constexpr uint32 PAWN_ACTION_OPEN    = 1000;
     constexpr uint32 PAWN_ACTION_RECRUIT = 1010;  // 1010..1099 offer on this page
-    constexpr uint32 PAWN_ACTION_DISMISS = 1110;  // 1110..1199 pawn in the party
+    constexpr uint32 PAWN_ACTION_PARTY   = 1110;  // 1110..1119 pawn page for party row n
     constexpr uint32 PAWN_ACTION_NEXT    = 1200;
     constexpr uint32 PAWN_ACTION_PREV    = 1201;
     constexpr uint32 PAWN_ACTION_SPAN    = 90;
+
+    // A pawn action is the one code that is not page-local: the pawn page holds a
+    // single pawn, so its rows carry that pawn's roster index and a verb rather
+    // than a position on a page. Pawn.MaxPawns is clamped to 4
+    // (PawnMgr.cpp:160), which is ten verbs for each of four pawns - 1300..1339 -
+    // and the base sits above the recruit span so no party row can be read as a
+    // hire. Verbs 0 (retrain) and 1 (restock) are reserved for later phases and
+    // have no row yet.
+    constexpr uint32 PAWN_ACTION_PAWN      = 1300;
+    constexpr uint32 PAWN_ACTION_PAWN_SPAN = 40;
+
+    constexpr uint32 PAWN_VERB_FOLLOW  = 2;
+    constexpr uint32 PAWN_VERB_STAY    = 3;
+    constexpr uint32 PAWN_VERB_ATTACK  = 4;
+    constexpr uint32 PAWN_VERB_DISMISS = 5;
+    constexpr uint32 PAWN_VERB_BACK    = 6;
+
+    // The options this AI answers. Everything else belongs to the innkeeper - its
+    // bind, its quests, its vendor rows - and is left alone: the core dispatches
+    // it after sGossipSelect returns (MiscHandler.cpp:199-200), so claiming an
+    // option outside these ranges would swallow it instead.
+    bool IsPickerAction(uint32 option)
+    {
+        return (option >= PAWN_ACTION_OPEN && option <= PAWN_ACTION_PREV)
+            || (option >= PAWN_ACTION_PARTY && option < PAWN_ACTION_PARTY + 10)
+            || (option >= PAWN_ACTION_PAWN && option < PAWN_ACTION_PAWN + PAWN_ACTION_PAWN_SPAN);
+    }
 
     struct PawnMenuState
     {
@@ -88,6 +116,12 @@ namespace
         std::vector<PawnRosterRow> Party;
         uint8                      Page = 0;
         uint32                     First = 0;   // index of the first offer on the page
+        // The pawn page is a view of one party row, not a page of the offers: the
+        // sixteen offer rows are already spoken for, so the orders and the
+        // dismissal live here, and Page is kept untouched while it is open so Back
+        // returns to the offers page the player came from.
+        bool                       PawnPage = false;
+        uint8                      PawnIndex = 0;
     };
 
     // Per-player, rebuilt whenever the picker is opened. A click on a menu from
@@ -169,7 +203,7 @@ public:
         // The AI is handed the gossip list index, not the action, so the action is read back the
         // way the core does it for its own dispatch (MiscHandler.cpp:199).
         uint32 const option = player->PlayerTalkClass->GetGossipOptionAction(action);
-        if (option < PAWN_ACTION_OPEN || option > PAWN_ACTION_PREV)
+        if (!IsPickerAction(option))
             return;   // the innkeeper's own options: bind, quests, vendor - the core runs them
 
         auto it = g_menus.find(player->GetGUID().GetCounter());
@@ -202,8 +236,8 @@ public:
         if (option >= PAWN_ACTION_RECRUIT && option < PAWN_ACTION_RECRUIT + PAWN_ACTION_SPAN)
         {
             // The option carries the index within the page, not within the draw:
-            // a draw of several hundred would otherwise run past the dismissal
-            // range and collide with the page actions.
+            // a draw of several hundred would otherwise run past the party range
+            // and collide with the page actions.
             uint32 const index = state.First + (option - PAWN_ACTION_RECRUIT);
             if (index < state.Offers.size())
             {
@@ -219,13 +253,28 @@ public:
             return;
         }
 
-        uint32 const index = option - PAWN_ACTION_DISMISS;
-        if (index < state.Party.size())
+        if (option >= PAWN_ACTION_PAWN && option < PAWN_ACTION_PAWN + PAWN_ACTION_PAWN_SPAN)
         {
-            std::string message;
-            sPawnMgr.Dismiss(player, state.Party[index].Bot, message);
-            Notify(player, message);
+            HandlePawnAction(player, me, state, option);
+            return;
         }
+
+        // A party row opens that pawn's page. Dismissal moved there with the
+        // orders: the offers page has no row to spare, and a confirmation box on
+        // the row next to the hire rows would put an irreversible click one
+        // mis-tap from a purchase.
+        uint32 const index = option - PAWN_ACTION_PARTY;
+        if (index >= state.Party.size())
+        {
+            // The roster changed under a menu that was already sent: there is no
+            // pawn to page to, so the offers page is what is left.
+            state.PawnPage = false;
+            ShowMenu(player, me, state.Page);
+            return;
+        }
+
+        state.PawnPage = true;
+        state.PawnIndex = uint8(index);
         ShowMenu(player, me, state.Page);
     }
 
@@ -240,6 +289,8 @@ private:
         state.Offers = sPawnMgr.SelectionFor(player);
         state.Page = 0;
         state.First = 0;
+        state.PawnPage = false;
+        state.PawnIndex = 0;
         ShowMenu(player, creature, 0);
     }
 
@@ -249,6 +300,22 @@ private:
 
         PawnMenuState& state = g_menus[player->GetGUID().GetCounter()];
         state.Party = sPawnMgr.ListParty(player->GetGUID());
+
+        // The pawn page is a view of one party row, not a page of the offers. It
+        // is drawn before the offer arithmetic so a click on it neither reads nor
+        // moves the offers page the player came from - Back lands where they left.
+        if (state.PawnPage)
+        {
+            if (uint32(state.PawnIndex) < state.Party.size())
+            {
+                ShowPawnPage(player, creature, state);
+                return;
+            }
+
+            // The pawn left the party since its page was drawn. There is nothing
+            // left to page to, so the offers page is the only honest place to be.
+            state.PawnPage = false;
+        }
 
         // The party rows and the two navigation rows share the 16-option page
         // with the offers, so the page size follows from the party size rather
@@ -268,7 +335,9 @@ private:
             std::string name;
             sCharacterCache->GetCharacterNameByGuid(row.Bot, name);
 
-            std::string text = "Dismiss " + (name.empty() ? std::string("your pawn") : name);
+            // The row describes the pawn and opens its page; the actions are on
+            // that page because this one has no rows to spare.
+            std::string text = name.empty() ? std::string("your pawn") : name;
             text += " (" + std::string(RoleName(row.Role)) + ", level " +
                     std::to_string(uint32(row.TargetLevel)) + ")";
 
@@ -302,7 +371,7 @@ private:
             if (!row.PetName.empty())
                 text += (rides ? ", with " : " - with ") + row.PetName;
 
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, text, GOSSIP_SENDER_MAIN, PAWN_ACTION_DISMISS + i);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, text, GOSSIP_SENDER_MAIN, PAWN_ACTION_PARTY + i);
         }
 
         uint32 const first = uint32(state.Page) * perPage;
@@ -377,6 +446,98 @@ private:
         }
 
         SendGossipMenuFor(player, player->GetGossipTextId(creature), creature->GetGUID());
+    }
+
+    // One pawn, its orders and its dismissal. Every row names the pawn because the
+    // gossip title does not: a page of "follow me" rows would otherwise be
+    // indistinguishable from the same page for the other companion.
+    static void ShowPawnPage(Player* player, Creature* creature, PawnMenuState const& state)
+    {
+        PawnRosterRow const& row = state.Party[state.PawnIndex];
+
+        std::string name;
+        sCharacterCache->GetCharacterNameByGuid(row.Bot, name);
+        if (name.empty())
+            name = "your pawn";
+
+        uint32 const base = PAWN_ACTION_PAWN + uint32(state.PawnIndex) * 10;
+
+        // The three orders are playerbots' own whisper words
+        // (ChatCommandHandlerStrategy.cpp); the picker only spares the player the
+        // syntax. None of them needs a confirmation box - an order can be given
+        // again - while a dismissal cannot be taken back, so only that row asks.
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": follow me", GOSSIP_SENDER_MAIN,
+                         base + PAWN_VERB_FOLLOW);
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": hold here", GOSSIP_SENDER_MAIN,
+                         base + PAWN_VERB_STAY);
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": attack my target", GOSSIP_SENDER_MAIN,
+                         base + PAWN_VERB_ATTACK);
+
+        // The box money stays 0 for the same reason the hire box does: a dismissal
+        // charges nothing, and the core would deduct whatever was put here.
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Dismiss " + name, GOSSIP_SENDER_MAIN,
+                         base + PAWN_VERB_DISMISS, "Dismiss " + name + "?", 0, false);
+
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, base + PAWN_VERB_BACK);
+
+        SendGossipMenuFor(player, player->GetGossipTextId(creature), creature->GetGUID());
+    }
+
+    // One click on the pawn page. The index and the verb both travel in the
+    // option, so a menu that outlived the party it was drawn for is re-checked
+    // here against the live roster rather than trusted.
+    static void HandlePawnAction(Player* player, Creature* creature, PawnMenuState& state, uint32 option)
+    {
+        uint32 const offset = option - PAWN_ACTION_PAWN;
+        uint32 const index = offset / 10;
+        uint32 const verb = offset % 10;
+
+        if (index >= state.Party.size())
+        {
+            // The pawn left the party since its page was drawn. Nothing is left to
+            // act on, so the offers page is the only honest place to go.
+            state.PawnPage = false;
+            ShowMenu(player, creature, state.Page);
+            return;
+        }
+
+        ObjectGuid const bot = state.Party[index].Bot;
+        std::string message;
+
+        switch (verb)
+        {
+            case PAWN_VERB_FOLLOW:
+            case PAWN_VERB_STAY:
+            case PAWN_VERB_ATTACK:
+            {
+                // The strings are the whisper words playerbots already
+                // implements; PawnMgr::Order refuses anything else rather than
+                // sending it, so the verb and the row cannot drift apart silently.
+                char const* const order = verb == PAWN_VERB_FOLLOW ? "follow"
+                                        : verb == PAWN_VERB_STAY   ? "stay"
+                                                                   : "attack";
+                sPawnMgr.Order(player, bot, order, message);
+                Notify(player, message);
+                break;
+            }
+            case PAWN_VERB_DISMISS:
+                sPawnMgr.Dismiss(player, bot, message);
+                Notify(player, message);
+                // The page was about a pawn that is no longer in the party: the
+                // offers page is where the player stands after it.
+                state.PawnPage = false;
+                break;
+            case PAWN_VERB_BACK:
+                state.PawnPage = false;
+                break;
+            default:
+                // Zero and one are the retrain and restock verbs of later phases;
+                // no row draws them yet, but a menu sent before that phase landed
+                // could still carry one. Ignoring it leaves the page where it is.
+                break;
+        }
+
+        ShowMenu(player, creature, state.Page);
     }
 };
 

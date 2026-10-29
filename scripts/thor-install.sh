@@ -123,6 +123,7 @@ PAWN_CONF_DEFAULTS=(
     "Pawn.HireFeeHeldPercent=100"
     "Pawn.GearFloorPercent=85"
     "Pawn.GearCapPercent=150"
+    "Pawn.ResupplyFeePercent=100"
     "Pawn.OfferedPerPage=12"
     "Pawn.FeaturedMin=10"
     "Pawn.FeaturedMax=15"
@@ -315,6 +316,8 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
             [ "$val" -ge 25 ] && [ "$val" -le 100 ] ;;
         Pawn.GearCapPercent)
             [ "$val" -ge 100 ] && [ "$val" -le 300 ] ;;
+        Pawn.ResupplyFeePercent)
+            [ "$val" -ge 0 ] && [ "$val" -le 10000 ] ;;
         Pawn.FeaturedMin|Pawn.FeaturedMax)
             [ "$val" -ge 1 ] && [ "$val" -le 50 ] ;;
         Pawn.PoolRefreshMinMinutes|Pawn.PoolRefreshMaxMinutes)
