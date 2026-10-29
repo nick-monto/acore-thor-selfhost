@@ -383,6 +383,42 @@ pawn_append_missing_conf() {   # pawn_append_missing_conf LIVE DIST - append the
     rm -f "$pending"
 }
 
+# conf_defaults FILE CHECK LABEL DEFAULT... - hold every scalar key this script knows to its shipped
+# value, and keep the repair honest about why it was needed.
+#
+# A key the file does not have at all is not a bad value: the live conf was written by an older
+# install and conf_pair() deliberately never overwrites one, so an upgrade leaves the new keys
+# absent. They are appended with the values the shipped .dist carries - which is what the module
+# would have used anyway - and reported once, as a count, because ten "restoring the shipped
+# default" lines for an upgrade that worked read like ten failures.
+#
+# A key that is present and out of range is a different matter and stays a warning per key: the
+# module silently replaces an unusable value with its own default, so the file and the running
+# server disagree until the file is fixed.
+conf_defaults() {
+    local file=$1 check=$2 label=$3; shift 3
+    local default key val added=0 fixed=0
+    for default in "$@"; do
+        key="${default%%=*}"
+        val="$(conf_get "$file" "$key")"
+        if [ -z "$val" ]; then
+            set_conf "$file" "$key" "${default#*=}"
+            added=$((added + 1))
+        elif ! "$check" "$key" "$val"; then
+            warn "$label: $key is '$val', restoring the shipped default ${default#*=}"
+            set_conf "$file" "$key" "${default#*=}"
+            fixed=$((fixed + 1))
+        fi
+    done
+    if [ "$added" -gt 0 ]; then
+        ok "$label: appended $added key(s) the live file did not have yet, values as shipped"
+    fi
+    if [ "$fixed" -gt 0 ]; then
+        ok "$label: restored $fixed drifted key(s) to their shipped defaults"
+    fi
+    return 0
+}
+
 survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one the module accepts
     # The ranges are the ones mod-survivor's own conf comments state: the 0|1 switches, a minimum
     # flag level inside the level cap, a container lifetime in days, and a positive template entry.
@@ -1561,15 +1597,7 @@ write_configs() {
         # the module cannot use is silently replaced by the module's own default and a container on
         # the wrong gameobject entry simply never appears. Only a value outside its range is
         # rewritten - a deliberate 0 (ruleset off, no map marker, no bot re-roll) is left alone.
-        local sv_default sv_key sv_val
-        for sv_default in "${SURVIVOR_CONF_DEFAULTS[@]}"; do
-            sv_key="${sv_default%%=*}"
-            sv_val="$(conf_get "$sv" "$sv_key")"
-            if ! survivor_value_ok "$sv_key" "$sv_val"; then
-                warn "mod-survivor.conf: $sv_key is '$sv_val', restoring the shipped default ${sv_default#*=}"
-                set_conf "$sv" "$sv_key" "${sv_default#*=}"
-            fi
-        done
+        conf_defaults "$sv" survivor_value_ok mod-survivor.conf "${SURVIVOR_CONF_DEFAULTS[@]}"
         log "mod-survivor.conf: Enable=$(conf_get "$sv" Survivor.Enable) MinLevelToFlag=$(conf_get "$sv" Survivor.MinLevelToFlag) DropEquipped=$(conf_get "$sv" Survivor.DropEquipped) DropBags=$(conf_get "$sv" Survivor.DropBags) ApplyToBots=$(conf_get "$sv" Survivor.ApplyToBots)"
     else
         warn "no $CONF_DIR/modules/mod-survivor.conf.dist - the artifact was built without the module, survivor mode is unavailable"
@@ -1582,15 +1610,7 @@ write_configs() {
         # longer exists is dropped: the obelisk gameobject is gone, and a leftover entry would
         # look like it still selected something.
         sed -i -E '/^[[:space:]]*Pawn\.ObeliskEntry[[:space:]]*=/d' "$pw"
-        local pw_default pw_key pw_val
-        for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
-            pw_key="${pw_default%%=*}"
-            pw_val="$(conf_get "$pw" "$pw_key")"
-            if ! pawn_value_ok "$pw_key" "$pw_val"; then
-                warn "mod-pawn.conf: $pw_key is '$pw_val', restoring the shipped default ${pw_default#*=}"
-                set_conf "$pw" "$pw_key" "${pw_default#*=}"
-            fi
-        done
+        conf_defaults "$pw" pawn_value_ok mod-pawn.conf "${PAWN_CONF_DEFAULTS[@]}"
         pawn_append_missing_conf "$pw" "$CONF_DIR/modules/mod-pawn.conf.dist"
         log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min Fee=$(conf_get "$pw" Pawn.HireFeePercent)%+$(conf_get "$pw" Pawn.HireFeeHeldPercent)% Gear=$(conf_get "$pw" Pawn.GearFloorPercent)-$(conf_get "$pw" Pawn.GearCapPercent)%"
     else
@@ -1928,54 +1948,48 @@ run_checks() {   # run_checks FIX(0|1)
     if [ -f "$sv" ]; then
         # Every key the module reads, with the range it accepts. A missing key is filled with the
         # module's own fallback at load and a bad one is ignored the same way, so a config that
-        # still starts the server can be wrong here without saying so.
-        local sv_default sv_key sv_val sv_bad=""
+        # still starts the server can be wrong here without saying so. The two are reported apart:
+        # an absent key means the live conf is older than the artifact, a bad one means it says
+        # something the module will not take.
+        local sv_default sv_key sv_val sv_bad="" sv_absent=""
         for sv_default in "${SURVIVOR_CONF_DEFAULTS[@]}"; do
             sv_key="${sv_default%%=*}"
             sv_val="$(conf_get "$sv" "$sv_key")"
-            if ! survivor_value_ok "$sv_key" "$sv_val"; then sv_bad="$sv_bad $sv_key=$sv_val"; fi
+            if [ -z "$sv_val" ]; then sv_absent="$sv_absent $sv_key"
+            elif ! survivor_value_ok "$sv_key" "$sv_val"; then sv_bad="$sv_bad $sv_key=$sv_val"; fi
         done
-        if [ -z "$sv_bad" ]; then
+        if [ -z "$sv_bad" ] && [ -z "$sv_absent" ]; then
             ok "mod-survivor.conf: Enable=$(conf_get "$sv" Survivor.Enable) MinLevelToFlag=$(conf_get "$sv" Survivor.MinLevelToFlag) DropEquipped=$(conf_get "$sv" Survivor.DropEquipped) DropBags=$(conf_get "$sv" Survivor.DropBags) ApplyToBots=$(conf_get "$sv" Survivor.ApplyToBots)"
         else
-            bad "mod-survivor.conf: unusable value(s):$sv_bad"
+            if [ -n "$sv_bad" ]; then bad "mod-survivor.conf: unusable value(s):$sv_bad"; fi
+            if [ -n "$sv_absent" ]; then bad "mod-survivor.conf: key(s) the live file predates:$sv_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
             if [ "$fix" = 1 ]; then
                 FIXES=$((FIXES + 1))
-                for sv_default in "${SURVIVOR_CONF_DEFAULTS[@]}"; do
-                    sv_key="${sv_default%%=*}"
-                    if ! survivor_value_ok "$sv_key" "$(conf_get "$sv" "$sv_key")"; then
-                        set_conf "$sv" "$sv_key" "${sv_default#*=}"
-                    fi
-                done
-                ok "survivor keys restored to their shipped defaults"
+                conf_defaults "$sv" survivor_value_ok mod-survivor.conf "${SURVIVOR_CONF_DEFAULTS[@]}"
             fi
         fi
     fi
     if [ -f "$pw" ]; then
-        local pw_default pw_key pw_val pw_bad=""
+        local pw_default pw_key pw_val pw_bad="" pw_absent=""
         for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
             pw_key="${pw_default%%=*}"
             pw_val="$(conf_get "$pw" "$pw_key")"
-            if ! pawn_value_ok "$pw_key" "$pw_val"; then pw_bad="$pw_bad $pw_key=$pw_val"; fi
+            if [ -z "$pw_val" ]; then pw_absent="$pw_absent $pw_key"
+            elif ! pawn_value_ok "$pw_key" "$pw_val"; then pw_bad="$pw_bad $pw_key=$pw_val"; fi
         done
         # Outside the `$pw_bad` branch on purpose: a conf whose scalars are all fine is exactly the
         # one an older install has, and it still has no temperament block to append.
         if [ "$fix" = 1 ]; then
             pawn_append_missing_conf "$pw" "$CONF_DIR/modules/mod-pawn.conf.dist"
         fi
-        if [ -z "$pw_bad" ]; then
+        if [ -z "$pw_bad" ] && [ -z "$pw_absent" ]; then
             ok "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min"
         else
-            bad "mod-pawn.conf: unusable value(s):$pw_bad"
+            if [ -n "$pw_bad" ]; then bad "mod-pawn.conf: unusable value(s):$pw_bad"; fi
+            if [ -n "$pw_absent" ]; then bad "mod-pawn.conf: key(s) the live file predates:$pw_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
             if [ "$fix" = 1 ]; then
                 FIXES=$((FIXES + 1))
-                for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
-                    pw_key="${pw_default%%=*}"
-                    if ! pawn_value_ok "$pw_key" "$(conf_get "$pw" "$pw_key")"; then
-                        set_conf "$pw" "$pw_key" "${pw_default#*=}"
-                    fi
-                done
-                ok "mod-pawn.conf: values restored"
+                conf_defaults "$pw" pawn_value_ok mod-pawn.conf "${PAWN_CONF_DEFAULTS[@]}"
             fi
         fi
     fi
