@@ -62,7 +62,7 @@ The player-centric patch is untouched by this work.
 | `modules/mod-pawn/src/pawn_common.h` | Config struct, role enum, shared types |
 | `modules/mod-pawn/src/PawnArchetype.h/.cpp` | Spec choice, blacklist name→id resolution, apply and prune |
 | `modules/mod-pawn/src/PawnMgr.h/.cpp` | Config load, pool refresh, featured draw, roster I/O, offer derivation, recruit/dismiss, login queue |
-| `modules/mod-pawn/src/PawnInnkeeper.cpp` | `CreatureAI` handed out by an `AllCreatureScript`, with the paged gossip picker on every innkeeper |
+| `modules/mod-pawn/src/PawnInnkeeper.cpp` | the two `AllCreatureScript` gossip hooks, with the paged gossip picker on every innkeeper |
 | `modules/mod-pawn/src/PawnScripts.cpp` | `PlayerScript` login queue, spell gate; `WorldScript` that drains the queue |
 | `modules/mod-pawn/src/pawn_loader.cpp` | `Addmod_pawnScripts()`, the symbol the loader generator looks up |
 | `modules/mod-pawn/README.md` | What it does, how to configure it |
@@ -239,15 +239,19 @@ new level, in which case the gear on it was scored for the old build and the pas
 
 ### Picker
 
-A `CreatureAI` handed out by an `AllCreatureScript`, not a gameobject: `GetCreatureAI` returns the
-picker only for a creature with `UNIT_NPC_FLAG_INNKEEPER` and no `AIName` of its own, so the core
-keeps whatever an innkeeper already had and sends its own menu. The AI's `sGossipHello` appends one
-line to the menu `NPCHandler.cpp:188-193` has already prepared and sent — the bind option and any
-quest rows survive — and re-sends it with `Player::SendPreparedGossip`. That is why the module ships
-no SQL at all: no template row, no spawn, no `ScriptName`, and the line exists wherever an innkeeper
-does. `sGossipSelect` reads the action back with `PlayerTalkClass->GetGossipOptionAction` (the AI is
-handed the list index) and ignores anything outside the module's range, which is how the innkeeper's
-own options keep working (`MiscHandler.cpp:199`).
+Two `AllCreatureScript` gossip hooks, `CanCreatureGossipHello` and `CanCreatureGossipSelect`, not a
+gameobject: both run for every creature and gate themselves on `UNIT_NPC_FLAG_INNKEEPER`, so the core
+keeps whatever AI an innkeeper already had and still gets the line. A `CreatureAI` handed out by
+`GetCreatureAI` was the first shape and could not do it: that hook has to leave a creature's own AI
+alone, so it had to skip every innkeeper whose `AIName` is set, and 65 of the 125 innkeeper-flagged
+templates are `SmartAI` — Razor Hill's Innkeeper Grosk (6928) among them, which is where the line was
+first reported missing. The hello hook builds the menu the core would have built — `PrepareGossipMenu`
+with the creature's own menu id, so the bind option and any quest rows survive — appends one line and
+sends it with `Player::SendPreparedGossip`; returning true is what suppresses the core's own build and
+send (`NPCHandler.cpp:188-193`). That is why the module ships no SQL at all: no template row, no
+spawn, no `ScriptName`, and the line exists wherever an innkeeper does. `CanCreatureGossipSelect` is
+handed the resolved action (`MiscHandler.cpp:200`) and returns false for anything outside the module's
+range, which is how the innkeeper's own options keep working (`MiscHandler.cpp:201`).
 
 A named `CreatureScript` cannot serve this, though it carries the same two hooks: it is database-bound
 (`CreatureScript.h:30`), so `ScriptMgr` looks its name up in `script_name` and registers nothing when
@@ -335,7 +339,7 @@ pool pawns and are not counted, which is exactly the intended second route to a 
 | P3 | Picker: the innkeeper line, gossip pages, recruit and dismiss | the line appears on an innkeeper beside the bind option, pages, recruits and dismisses |
 | P4 | Login queue, level window, spell gate, party restore | a recruited pawn returns after relog and after a restart |
 | P5 | Installer and CI wiring, pins, docs | workflow copies and asserts the module; installer writes the keys |
-| P6 | Offline checks | `scripts/pawn/check_pawn.py` passes: config keys used in code exist in the `.dist`, the installer's defaults and the conf agree both ways, the picker is a `CreatureAI` handed out by an `AllCreatureScript` gated on the innkeeper flag with actions clear of the core's range, no module class derives from a database-bound script type, the spell-derived tables are built in `OnStartup` and only rebuilt under `if (reload)`, the temperament keys are enumerated rather than probed, the pool reads the playerbots account table, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
+| P6 | Offline checks | `scripts/pawn/check_pawn.py` passes: config keys used in code exist in the `.dist`, the installer's defaults and the conf agree both ways, the picker is an `AllCreatureScript` answering the two gossip hooks, gated on the innkeeper flag, with actions clear of the core's range and no `GetCreatureAI` left in it, no module class derives from a database-bound script type, the spell-derived tables are built in `OnStartup` and only rebuilt under `if (reload)`, the temperament keys are enumerated rather than probed, the pool reads the playerbots account table, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
 
 ## Verification
 

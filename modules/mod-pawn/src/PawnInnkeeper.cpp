@@ -1,15 +1,23 @@
 /*
  * mod-pawn: the picker, on the innkeepers.
  *
- * Every innkeeper in the world carries one extra gossip line. The picker is a
- * CreatureAI, handed out by an AllCreatureScript to innkeepers that have no AI
- * of their own. An AllCreatureScript is code-only: it registers through
+ * Every innkeeper in the world carries one extra gossip line. The picker hangs it
+ * on AllCreatureScript::CanCreatureGossipHello and CanCreatureGossipSelect
+ * (src/server/game/Scripting/ScriptDefines/AllCreatureScript.h:67,79), which
+ * ScriptMgr::OnGossipHello and OnGossipSelect walk before any CreatureScript
+ * (src/server/game/Scripting/ScriptDefines/CreatureScript.cpp:24-42,44-62). An
+ * AllCreatureScript is code-only: it registers through
  * ScriptRegistry<AllCreatureScript> without ever being matched against
- * script_name (src/server/game/Scripting/ScriptDefines/AllCreatureScript.cpp:84),
- * and ScriptMgr::GetCreatureAI walks that registry directly
- * (src/server/game/Scripting/ScriptDefines/CreatureScript.cpp:156-168). So no
- * template row, no spawn and no ScriptName is involved: the line exists wherever
- * an innkeeper does, and nowhere else.
+ * script_name, so no template row, no spawn and no ScriptName is involved: the
+ * line exists wherever an innkeeper does, and nowhere else.
+ *
+ * The line was hung on a CreatureAI handed out by GetCreatureAI before, and that
+ * was the bug: the hook has to leave a creature's own AI alone, so it refused
+ * every innkeeper whose creature_template.AIName is set - and 65 of the 125
+ * innkeeper-flagged templates are SmartAI, Razor Hill's Innkeeper Grosk (6928)
+ * among them. The gossip hooks have no such guard: they run for every creature
+ * whatever AI it carries, and the innkeeper's own AI still gets its sGossipHello
+ * and sGossipSelect afterwards (NPCHandler.cpp:194, MiscHandler.cpp:199).
  *
  * A named CreatureScript cannot be used here. CreatureScript::IsDatabaseBound()
  * is true unconditionally
@@ -24,19 +32,18 @@
  *
  * Two details decide the shape of the rest of this file.
  *
- * The menu is the core's, not ours: NPCHandler.cpp:188-193 calls
- * Player::PrepareGossipMenu with the creature's own menu id - so "make this inn
- * your home" and any quest rows survive - and Player::SendPreparedGossip, and
- * only then runs UnitAI::sGossipHello. So the hello below appends its one line to
- * that prepared menu and re-sends it rather than building a menu of its own.
+ * The menu is the core's, not ours: the core builds it with
+ * Player::PrepareGossipMenu and the creature's own menu id - so "make this inn
+ * your home" and any quest rows survive - and sends it with
+ * Player::SendPreparedGossip (NPCHandler.cpp:188-193). A hello hook that returns
+ * true suppresses exactly that, so the hook below makes the same call itself and
+ * appends its one line before sending, rather than building a menu of its own.
  *
- * The gossip select hands the AI the gossip list index, not the action, so the
- * action is read back with
- * Player::PlayerTalkClass->GetGossipOptionAction - the same call the core makes
- * for its own dispatch (MiscHandler.cpp:199). An option outside our range is
- * ignored here, and the core still runs the innkeeper's own script afterwards
- * (MiscHandler.cpp:199-200), which is how bind and quests keep working. The
- * action codes below therefore start at 1000: a database gossip row's action is
+ * The select hook is handed the sender and the action, not the gossip list index
+ * (MiscHandler.cpp:200), so the action codes below are read straight off it. An
+ * option outside our range returns false, which leaves the innkeeper's own rows
+ * to the core (MiscHandler.cpp:201); that is how bind and quests keep working.
+ * The action codes below therefore start at 1000: a database gossip row's action is
  * its OptionType, and GOSSIP_OPTION_MAX is 21
  * (src/server/game/Entities/Creature/GossipDef.h:33-57), so a range based at 1
  * would swallow the bind option.
@@ -54,7 +61,6 @@
 #include "Chat.h"
 #include "CharacterCache.h"
 #include "Creature.h"
-#include "PassiveAI.h"
 #include "Player.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
@@ -181,59 +187,70 @@ namespace
     }
 }
 
-class PawnInnkeeperAI : public NullCreatureAI
+// The picker's menu, hung off the two AllCreatureScript gossip hooks. It is not a
+// CreatureAI any more: GetCreatureAI could only be handed to an innkeeper whose
+// AIName is empty, which is 60 of the 125 innkeeper-flagged templates.
+class PawnInnkeeperMenu
 {
 public:
-    explicit PawnInnkeeperAI(Creature* creature) : NullCreatureAI(creature) { }
-
-    void sGossipHello(Player* player) override
+    // True once the menu is sent, which is how the hook tells the core not to
+    // build one of its own (NPCHandler.cpp:188-193). The menu built here is the
+    // core's own call with the core's own arguments, so "make this inn your home"
+    // and any quest rows are the rows they would have been.
+    static bool Hello(Player* player, Creature* creature)
     {
-        if (!sPawnMgr.Config().Enabled || !me->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER))
-            return;   // not ours: let the core send whatever this creature has
+        if (!sPawnMgr.Config().Enabled || !creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER))
+            return false;   // not ours: let the core send whatever this creature has
 
-        // One line, on the menu the core has already prepared and sent (NPCHandler.cpp:188-193);
-        // building it again here with PrepareGossipMenu would drop that send. A menu that fills the
-        // client's 16 visible rows gets no line: a 17th is not shown anyway, and adding past
-        // GOSSIP_MAX_MENU_ITEMS aborts the server with an ASSERT rather than clamping (GossipDef.cpp:43).
+        player->PrepareGossipMenu(creature, creature->GetGossipMenuId(), true);
+
+        // One line, on top of the menu just prepared. A menu that fills the
+        // client's 16 visible rows gets no line: a 17th is not shown anyway, and
+        // adding past GOSSIP_MAX_MENU_ITEMS aborts the server with an ASSERT rather
+        // than clamping (GossipDef.cpp:43).
         if (player->PlayerTalkClass->GetGossipMenu().GetMenuItemCount() < 15)
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Recruit companions", GOSSIP_SENDER_MAIN, PAWN_ACTION_OPEN);
 
-        player->SendPreparedGossip(me);
+        player->SendPreparedGossip(creature);
+        return true;
     }
 
-    void sGossipSelect(Player* player, uint32 /*sender*/, uint32 action) override
+    // True when the click was ours, which suppresses the core's own
+    // gossip_menu_option dispatch (MiscHandler.cpp:201) for that row and no other:
+    // a row outside our ranges returns false and the innkeeper keeps it.
+    static bool Select(Player* player, Creature* creature, uint32 option)
     {
-        // The AI is handed the gossip list index, not the action, so the action is read back the
-        // way the core does it for its own dispatch (MiscHandler.cpp:199).
-        uint32 const option = player->PlayerTalkClass->GetGossipOptionAction(action);
+        if (!sPawnMgr.Config().Enabled || !creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER))
+            return false;
+
         if (!IsPickerAction(option))
-            return;   // the innkeeper's own options: bind, quests, vendor - the core runs them
+            return false;   // the innkeeper's own options: bind, quests, vendor - the core runs them
 
         auto it = g_menus.find(player->GetGUID().GetCounter());
         if (it == g_menus.end())
         {
-            Open(player, me);
-            return;
+            Open(player, creature);
+            return true;
         }
 
         PawnMenuState& state = it->second;
 
         if (option == PAWN_ACTION_OPEN)
         {
-            Open(player, me);
-            return;
+            Open(player, creature);
+            return true;
         }
 
         if (option == PAWN_ACTION_NEXT)
         {
-            ShowMenu(player, me, uint8(state.Page + 1));
-            return;
+            ShowMenu(player, creature, uint8(state.Page + 1));
+            return true;
         }
 
         if (option == PAWN_ACTION_PREV)
         {
-            ShowMenu(player, me, uint8(state.Page ? state.Page - 1 : 0));
-            return;
+            ShowMenu(player, creature, uint8(state.Page ? state.Page - 1 : 0));
+            return true;
         }
 
         if (option >= PAWN_ACTION_RECRUIT && option < PAWN_ACTION_RECRUIT + PAWN_ACTION_SPAN)
@@ -252,14 +269,14 @@ public:
 
                 Notify(player, message);
             }
-            ShowMenu(player, me, state.Page);
-            return;
+            ShowMenu(player, creature, state.Page);
+            return true;
         }
 
         if (option >= PAWN_ACTION_PAWN && option < PAWN_ACTION_PAWN + PAWN_ACTION_PAWN_SPAN)
         {
-            HandlePawnAction(player, me, state, option);
-            return;
+            HandlePawnAction(player, creature, state, option);
+            return true;
         }
 
         // A party row opens that pawn's page. Dismissal moved there with the
@@ -272,13 +289,14 @@ public:
             // The roster changed under a menu that was already sent: there is no
             // pawn to page to, so the offers page is what is left.
             state.PawnPage = false;
-            ShowMenu(player, me, state.Page);
-            return;
+            ShowMenu(player, creature, state.Page);
+            return true;
         }
 
         state.PawnPage = true;
         state.PawnIndex = uint8(index);
-        ShowMenu(player, me, state.Page);
+        ShowMenu(player, creature, state.Page);
+        return true;
     }
 
 private:
@@ -617,20 +635,23 @@ private:
     }
 };
 
-// Handed the picker only where it belongs: an innkeeper with no AI of its own. A
-// null return leaves the core's own AIName selection alone, so a creature with a
-// real AI keeps it.
+// The two gossip hooks, on every creature. Nothing is matched by name, by
+// script id or by AI: the guard inside each hook is the innkeeper flag, and an
+// innkeeper that carries its own AI keeps it and still receives its own
+// sGossipHello and sGossipSelect (NPCHandler.cpp:194, MiscHandler.cpp:199).
 class PawnAllCreatureScript : public AllCreatureScript
 {
 public:
     PawnAllCreatureScript() : AllCreatureScript("PawnAllCreatureScript") { }
 
-    [[nodiscard]] CreatureAI* GetCreatureAI(Creature* creature) const override
+    [[nodiscard]] bool CanCreatureGossipHello(Player* player, Creature* creature) override
     {
-        if (!creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER) || !creature->GetCreatureTemplate()->AIName.empty())
-            return nullptr;
+        return PawnInnkeeperMenu::Hello(player, creature);
+    }
 
-        return new PawnInnkeeperAI(creature);
+    [[nodiscard]] bool CanCreatureGossipSelect(Player* player, Creature* creature, uint32 /*sender*/, uint32 action) override
+    {
+        return PawnInnkeeperMenu::Select(player, creature, action);
     }
 };
 

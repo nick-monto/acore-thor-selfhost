@@ -184,22 +184,28 @@ def check_picker(keys: dict[str, str]) -> None:
     if not picker:
         return
 
-    # The picker is one line on every innkeeper, not a gameobject: the AllCreatureScript hands a
-    # CreatureAI to innkeepers that have no AI of their own, and the flag check decides which ones
-    # get it. A GameObjectScript here would need a template row and a spawn, and the module ships
-    # no SQL at all. A named CreatureScript cannot serve it either: CreatureScript is
-    # database-bound, and gossip is dispatched by the creature's own script id, which for an
-    # innkeeper is the core's npc_innkeeper.
+    # The picker is one line on every innkeeper, not a gameobject: the AllCreatureScript answers the
+    # two gossip hooks, and the flag check decides which creatures get the line. A GameObjectScript
+    # here would need a template row and a spawn, and the module ships no SQL at all. A named
+    # CreatureScript cannot serve it either: CreatureScript is database-bound, and gossip is
+    # dispatched by the creature's own script id, which for an innkeeper is the core's
+    # npc_innkeeper.
     if not re.search(r"\bclass\s+\w+\s*:\s*public\s+AllCreatureScript\b", picker):
         fail("picker: PawnInnkeeper.cpp declares no AllCreatureScript; the picker has no way "
              "to reach a creature without a template row or a ScriptName")
-    if not re.search(r"\bGetCreatureAI\s*\(\s*Creature\s*\*\s*\w+\s*\)", picker):
-        fail("picker: the AllCreatureScript has no GetCreatureAI; it cannot hand the picker out")
-    if not re.search(r"\bclass\s+\w+\s*:\s*public\s+\w*CreatureAI\b", picker):
-        fail("picker: PawnInnkeeper.cpp declares no CreatureAI subclass; the gossip hook has "
-             "no AI to override it")
-    if not re.search(r"\bsGossipHello\s*\(\s*Player\s*\*\s*\w+\s*\)\s*override", picker):
-        fail("picker: the CreatureAI does not override sGossipHello")
+    for hook in ("CanCreatureGossipHello", "CanCreatureGossipSelect"):
+        if not re.search(rf"\b{hook}\s*\(\s*Player\s*\*\s*\w+\s*,\s*Creature\s*\*\s*\w+", picker):
+            fail(f"picker: the AllCreatureScript does not answer {hook}; the line never reaches "
+                 f"a player")
+    # The hooks must not be traded back for an AI. GetCreatureAI has to leave a creature's own AI
+    # alone, so the only way to hand the picker out from there is to skip every innkeeper whose
+    # creature_template.AIName is set - and 65 of the 125 innkeeper-flagged templates are SmartAI,
+    # Razor Hill's Innkeeper Grosk (6928) among them. That is the bug this hook pair replaced.
+    if re.search(r"\bGetCreatureAI\s*\(", picker):
+        fail("picker: PawnInnkeeper.cpp hands out a CreatureAI again; that path skips every "
+             "innkeeper whose creature_template.AIName is set (65 of 125 are SmartAI)")
+    if re.search(r"GetCreatureTemplate\(\)\s*->\s*AIName", picker):
+        fail("picker: the picker still refuses creatures by AIName")
     if "UNIT_NPC_FLAG_INNKEEPER" not in picker:
         fail("picker: the hello hook does not gate on UNIT_NPC_FLAG_INNKEEPER")
     if "GameObjectScript" in picker:
@@ -246,7 +252,7 @@ def check_picker(keys: dict[str, str]) -> None:
     if "Pawn\\.ObeliskEntry" not in read(INSTALLER):
         fail("installer: does not drop a stale Pawn.ObeliskEntry from an existing conf")
 
-    notes.append("picker: a CreatureAI handed out by an AllCreatureScript on innkeepers, "
+    notes.append("picker: the two AllCreatureScript gossip hooks on every innkeeper, "
                  "actions clear of the core's option range")
 
 
@@ -669,9 +675,10 @@ def check_core_hooks() -> None:
     compiler this repository has, so the names are checked here instead. `OnLogin` for
     `OnPlayerLogin` compiled nowhere and failed the build a day after it was written.
 
-    The AI hooks count as much as the script hooks: `sGossipHello` and `sGossipSelect` are
-    UnitAI members (UnitAI.h:421-423), which no ScriptDefines header declares, and the picker
-    is a CreatureAI now.
+    The AI hooks count as much as the script hooks: the picker used to override `sGossipHello`
+    and `sGossipSelect`, which are UnitAI members (UnitAI.h:421-423) that no ScriptDefines header
+    declares, and it now overrides `CanCreatureGossipHello` and `CanCreatureGossipSelect`, which
+    AllCreatureScript.h does declare (AllCreatureScript.h:67,79).
     """
     if not SCRIPT_HOOKS.is_dir():
         notes.append("hooks: no core checkout beside this repository, so the override names, "

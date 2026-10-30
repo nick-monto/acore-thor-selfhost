@@ -477,7 +477,8 @@ function of the two guids, so a face you have seen keeps them whenever it comes 
 
 ## Why there is no SQL
 
-The line is a `CreatureAI` handed out by an `AllCreatureScript` gated on `UNIT_NPC_FLAG_INNKEEPER`,
+The line is two `AllCreatureScript` gossip hooks (`CanCreatureGossipHello`, `CanCreatureGossipSelect`)
+gated on `UNIT_NPC_FLAG_INNKEEPER`,
 so it needs no template row, no spawn and no `ScriptName`: it exists wherever an innkeeper does, and
 nowhere else. A named `CreatureScript` cannot serve it: those are database-bound, so the manager looks
 the name up in `script_name` and registers nothing when there is no row, and gossip is dispatched by

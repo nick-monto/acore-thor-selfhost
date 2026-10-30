@@ -411,7 +411,10 @@ grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
   conf defines, so that line only appears from a build older than the enumeration. And
   `Script named 'npc_pawn_innkeeper' is not assigned in the database.` means the picker is a
   database-bound `CreatureScript` again, which the core drops — it must be the `AllCreatureScript`
-  plus `CreatureAI` that `scripts/pawn/check_pawn.py` asserts.
+  answering `CanCreatureGossipHello` and `CanCreatureGossipSelect` that `scripts/pawn/check_pawn.py`
+  asserts. An innkeeper that carries its own AI is no obstacle: the gossip hooks run for every
+  creature, which is what an AI handed out by `GetCreatureAI` could not do — 65 of the 125
+  innkeeper-flagged templates are `SmartAI`, Razor Hill's Innkeeper Grosk among them.
 
 Then talk to any innkeeper - the capital inns and the town inns all carry the line - and pick
 "Recruit companions". What needs a client session, and has not been run on the Thor: the line

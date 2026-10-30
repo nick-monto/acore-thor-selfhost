@@ -70,9 +70,10 @@ Three things, and only three:
 2. **A picker.** No surface exists to browse the pool or see a pawn's class, level and role.
 3. **The obelisk.** Nothing in town triggers any of it.
 
-> **Superseded in the built module.** The picker is one extra gossip line on every innkeeper: a
-> `CreatureAI` handed out by an `AllCreatureScript` gated on `UNIT_NPC_FLAG_INNKEEPER`, not a
-> gameobject. It needs no template row, no spawn and no `ScriptName`, so the module ships no SQL at
+> **Superseded in the built module.** The picker is one extra gossip line on every innkeeper: two
+> `AllCreatureScript` gossip hooks (`CanCreatureGossipHello`, `CanCreatureGossipSelect`) gated on
+> `UNIT_NPC_FLAG_INNKEEPER`, not a gameobject. It needs no template row, no spawn and no
+> `ScriptName`, so the module ships no SQL at
 > all. A named `CreatureScript` cannot serve it even though it carries the same
 > `OnGossipHello`/`OnGossipSelect` contract: it is database-bound, so the manager looks its name up
 > in `script_name` and registers nothing without a row, and gossip is dispatched by the creature's
@@ -320,7 +321,7 @@ What was built, against the plan's phases:
 |---|---|---|
 | 1 | Prove the model in game with `.playerbots bot addclass` (no code) | **done in game**: `.playerbots bot addclass warrior` recruits, levels and gears a pool pawn |
 | 2 | Roster: schema, load, recruit/dismiss, relog persistence | **built** in `modules/mod-pawn/src/PawnMgr.cpp` |
-| 3 | Picker: a paged gossip menu on every innkeeper | **built** as a `CreatureAI` handed out by an `AllCreatureScript` in `src/PawnInnkeeper.cpp`; the gameobject route described above was dropped because the line needs no template, spawn or `ScriptName`, and a named `CreatureScript` was dropped in turn because it is database-bound and gossip follows the creature's own script id |
+| 3 | Picker: a paged gossip menu on every innkeeper | **built** as two `AllCreatureScript` gossip hooks in `src/PawnInnkeeper.cpp`; the gameobject route described above was dropped because the line needs no template, spawn or `ScriptName`, a named `CreatureScript` was dropped in turn because it is database-bound and gossip follows the creature's own script id, and a `CreatureAI` handed out by `GetCreatureAI` was dropped because it has to skip every innkeeper that carries an AI of its own (65 of the 125 innkeeper templates are `SmartAI`) |
 | 4 | Level window and archetypes: spec pinning, spellbook blacklist, learn gate | **built** in `src/PawnArchetype.cpp` and `src/PawnScripts.cpp` |
 | 5 | Config keys, installer and workflow wiring, runbook | **built** |
 | 6 | `PAWN` addon channel and a `Pawn` addon for the launcher | **not built**: the gossip picker is the complete doorway, and the addon was never requested |
