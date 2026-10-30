@@ -17,7 +17,8 @@ The fix is the standard one for custom items: add the entries to the client's
 ``Item.dbc`` the installer already put in the server's data directory (it is
 copied from the client), appends one record per bag, and writes both the patched
 ``Item.dbc`` (for the server, so ``sItemStore`` agrees and the attribute checks
-run) and ``patch-4.MPQ`` (for the client's ``Data`` directory).
+run) and a patch archive (for the client's ``Data`` directory), under the highest
+free patch name so it loads after every archive already there.
 
 The records mirror the ``item_template`` rows the loot-bag generator writes, so
 ``enforceDBCAttributes`` has nothing to correct: class 15, subclass 0, material
@@ -34,7 +35,10 @@ from Termux; the client's `Data` directory is on shared storage and reachable
 from both.  Both copies are optional; without them the patched file and the
 archive land in ``--out`` for the operator to place by hand.  ``--check``
 re-derives everything in memory and fails if the files in ``--out`` differ, so
-the outputs can be kept in step with the generator.
+the outputs can be kept in step with the generator.  ``--verify --client-data``
+answers the question a red question mark asks - which archive the client actually
+reads ``Item.dbc`` from, and whether it carries the bags - without changing
+anything.
 """
 
 from __future__ import annotations
@@ -63,10 +67,15 @@ BAG_MATERIAL = 0          # item_template leaves this at 0
 BAG_INVENTORY_TYPE = 0    # not equippable, as in item_template
 BAG_SHEATHE = 0
 
-# Patch archives are loaded after the stock patch.MPQ, patch-2 and patch-3, and
-# the last one that carries a file wins.  Any free name works; the first free one
-# from this list is used so an existing custom patch is never overwritten.
-PATCH_NAMES = [f"patch-{n}.MPQ" for n in range(4, 10)] + [f"patch-{c}.MPQ" for c in "ABCDEFGHIJ"]
+# Patch archives are loaded after the stock patch.MPQ, patch-2 and patch-3, in
+# name order, and the last archive that carries a file wins.  So the archive has
+# to be named *after* every patch already in the directory: a patch-4 that sits
+# under a launcher's patch-5 loses its Item.dbc without a word, which looks
+# exactly like a patch that was never applied.  The highest free name is used.
+# Only the numeric names are used: 4-9 is six archives, and the letter names are
+# not loaded by every 3.3.5a build, so writing one would be a silent no-op on the
+# clients that ignore it.
+PATCH_NAMES = [f"patch-{n}.MPQ" for n in range(9, 3, -1)]
 
 MPQ_MAGIC = b"MPQ\x1a"
 MPQ_FILE_EXISTS = 0x80000000
@@ -121,21 +130,25 @@ def bag_id_range(gen) -> range:
 # ---------------------------------------------------------------------------
 
 def read_dbc(path: Path) -> tuple[list[tuple[int, ...]], bytes]:
-    """Return the records and the string block of an Item.dbc."""
-    data = path.read_bytes()
+    """Return the records and the string block of an Item.dbc on disk."""
+    return parse_dbc(path.read_bytes(), str(path))
+
+
+def parse_dbc(data: bytes, label: str) -> tuple[list[tuple[int, ...]], bytes]:
+    """Return the records and the string block of an Item.dbc held in memory."""
     if len(data) < 20:
-        raise SystemExit(f"{path}: too short to be a DBC")
+        raise SystemExit(f"{label}: too short to be a DBC")
     magic, count, fields, record_size, string_size = struct.unpack_from("<4sIIII", data)
     if magic != ITEM_DBC_MAGIC:
-        raise SystemExit(f"{path}: not a DBC (magic {magic!r})")
+        raise SystemExit(f"{label}: not a DBC (magic {magic!r})")
     if fields != ITEM_DBC_FIELDS or record_size != ITEM_DBC_RECORD_SIZE:
         raise SystemExit(
-            f"{path}: {fields} fields of {record_size} bytes is not the Item.dbc layout "
+            f"{label}: {fields} fields of {record_size} bytes is not the Item.dbc layout "
             f"({ITEM_DBC_FIELDS} fields of {ITEM_DBC_RECORD_SIZE})"
         )
     expected = 20 + count * record_size + string_size
     if len(data) != expected:
-        raise SystemExit(f"{path}: {len(data)} bytes, header implies {expected}")
+        raise SystemExit(f"{label}: {len(data)} bytes, header implies {expected}")
     records = [
         struct.unpack_from(f"<{ITEM_DBC_FIELDS}I", data, 20 + i * record_size)
         for i in range(count)
@@ -321,6 +334,9 @@ def read_mpq_file(archive: bytes, name: str) -> bytes:
     raise SystemExit(f"{name}: not in the archive")
 
 
+STAGED_ARCHIVE = "item-dbc.MPQ"
+
+
 def patch_archive(item_dbc: bytes) -> bytes:
     return build_mpq([
         ("DBFilesClient\\Item.dbc", item_dbc),
@@ -332,12 +348,86 @@ def patch_archive(item_dbc: bytes) -> bytes:
 # Output
 # ---------------------------------------------------------------------------
 
+def patch_rank(name: str) -> tuple[int, int] | None:
+    """Where a Data-directory file sits in the client's archive order, or None when it is not a patch.
+
+    ``patch.MPQ`` and ``patch-2``/``patch-3`` are the stock archives and ``patch-4`` to ``patch-9``
+    follow them. Everything else in Data - ``common.MPQ``, ``lichking.MPQ``, the locale archives and
+    the letter patches, which not every build loads - is ignored: it cannot shadow a numeric patch
+    on the clients that do load it, and counting it could name a file the client never reads.
+    """
+    stem = Path(name).stem.lower()
+    if stem == "patch":
+        return (1, 0)
+    if stem.startswith("patch-") and len(stem) == 7 and stem[6].isdigit():
+        return (int(stem[6]), 0)
+    return None
+
+
+def client_archives(data_dir: Path) -> list[tuple[tuple[int, int], Path]]:
+    """The Data directory's patch archives in load order, last first."""
+    found = []
+    for path in data_dir.iterdir():
+        if not path.is_file() or path.suffix.lower() != ".mpq":
+            continue
+        rank = patch_rank(path.name)
+        if rank is not None:
+            found.append((rank, path))
+    return sorted(found, reverse=True)
+
+
+def verify_client(data_dir: Path, ids: range) -> int:
+    """Report which archive the client reads Item.dbc from, and whether it carries the bags.
+
+    The client reads a file from the last archive in load order that carries it, so a patched
+    archive that sits *under* another patch's Item.dbc is the same as no patch at all. This walks
+    the directory in that order and names the winner, which is the thing a question mark is
+    actually telling the player: either no archive carries the bags, or one that loses does.
+    """
+    archives = client_archives(data_dir)
+    if not archives:
+        print(f"{data_dir}: no patch-*.MPQ - the client reads the stock Item.dbc, so the bags show a question mark")
+        return 1
+
+    winner: tuple[Path, bool] | None = None
+    for _, path in archives:
+        try:
+            item_dbc = read_mpq_file(path.read_bytes(), "DBFilesClient\\Item.dbc")
+            records, _ = parse_dbc(item_dbc, str(path))
+        except (SystemExit, struct.error):
+            # A stock archive is compressed or encrypted past what this reader handles, and it is
+            # not the one being asked about.
+            continue
+        present = set(ids) <= {record[0] for record in records}
+        print(f"  {path.name}: carries Item.dbc ({len(records)} records), bag ids "
+              f"{'present' if present else 'MISSING'}")
+        if winner is None:
+            winner = (path, present)
+
+    if winner is None:
+        print(f"{data_dir}: no patch-*.MPQ carries Item.dbc; the bags show a question mark")
+        return 1
+
+    path, present = winner
+    if present:
+        print(f"{path}: the client reads Item.dbc from here and it has every bag record")
+        return 0
+
+    print(f"{path}: the client reads Item.dbc from here and it has no bag records, so the bags show a")
+    print("question mark. Either this Data directory is not the one the game runs from, or the patch")
+    print("landed under a later archive - name it after every patch already here (patch-9 is the last).")
+    return 1
+
+
 def first_free_patch(data_dir: Path) -> Path:
     for name in PATCH_NAMES:
         candidate = data_dir / name
         if not candidate.exists():
             return candidate
-    raise SystemExit(f"{data_dir}: every patch name from {PATCH_NAMES[0]} to {PATCH_NAMES[-1]} is taken")
+    raise SystemExit(
+        f"{data_dir}: every patch name from {PATCH_NAMES[-1]} to {PATCH_NAMES[0]} is taken; "
+        f"merge or delete one of them, then run this again"
+    )
 
 
 def build(dbc_path: Path) -> tuple[bytes, bytes, int]:
@@ -359,13 +449,25 @@ def build(dbc_path: Path) -> tuple[bytes, bytes, int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dbc", required=True, type=Path, help="the client's Item.dbc, as copied into the server's data/dbc")
+    parser.add_argument("--dbc", type=Path, help="the client's Item.dbc, as copied into the server's data/dbc")
     parser.add_argument("--out", type=Path, default=HERE.parents[1] / "build" / "item-dbc", help="where to write Item.dbc and the patch archive")
     parser.add_argument("--client-data", type=Path, help="the client's Data directory; the patch archive is copied in under the first free name")
     parser.add_argument("--server-dbc", type=Path, help="the server's data/dbc directory; the patched Item.dbc is copied in")
     parser.add_argument("--check", action="store_true", help="fail if the files in --out differ from a fresh run")
+    parser.add_argument("--verify", action="store_true",
+                        help="report whether the client in --client-data reads a patched Item.dbc, and exit")
     args = parser.parse_args()
 
+    if args.verify:
+        if not args.client_data:
+            raise SystemExit("--verify needs --client-data: the Data directory of the client the game runs from")
+        if not args.client_data.is_dir():
+            raise SystemExit(f"{args.client_data} is not a directory; point --client-data at the client's Data folder")
+        gen = load_generator()
+        return verify_client(args.client_data, bag_id_range(gen))
+
+    if args.dbc is None:
+        parser.error("--dbc is required unless --verify is given")
     if not args.dbc.is_file():
         raise SystemExit(f"{args.dbc} does not exist; it is the client's Item.dbc")
 
@@ -375,7 +477,7 @@ def main() -> int:
 
     if args.check:
         stale = []
-        for name, content in (("Item.dbc", patched), ("patch-4.MPQ", archive)):
+        for name, content in (("Item.dbc", patched), (STAGED_ARCHIVE, archive)):
             path = args.out / name
             if not path.is_file() or path.read_bytes() != content:
                 stale.append(str(path))
@@ -386,8 +488,8 @@ def main() -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "Item.dbc").write_bytes(patched)
-    (args.out / "patch-4.MPQ").write_bytes(archive)
-    print(f"wrote {args.out / 'Item.dbc'} and {args.out / 'patch-4.MPQ'}")
+    (args.out / STAGED_ARCHIVE).write_bytes(archive)
+    print(f"wrote {args.out / 'Item.dbc'} and {args.out / STAGED_ARCHIVE}")
 
     if args.server_dbc:
         args.server_dbc.mkdir(parents=True, exist_ok=True)
@@ -403,7 +505,8 @@ def main() -> int:
         print("restart the client so it loads the new archive")
 
     if not args.client_data:
-        print("place patch-4.MPQ in the client's Data directory to finish the fix")
+        print(f"place {STAGED_ARCHIVE} in the client's Data directory, named after every patch already "
+              f"there, to finish the fix")
     return 0
 
 

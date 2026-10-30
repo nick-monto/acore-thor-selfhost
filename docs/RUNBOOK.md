@@ -505,9 +505,18 @@ python3 scripts/item-dbc/patch_item_dbc.py \
     --server-dbc "$RF/opt/acore/data/dbc"
 ```
 
-It appends the 64 records to `Item.dbc`, writes `patch-4.MPQ` into the client's `Data` directory (first free name from `patch-4` to `patch-9`, then `patch-A` up), and puts the patched `Item.dbc` where the server reads it. Restart the client afterwards.
+It appends the 64 records to `Item.dbc`, writes the archive into the client's `Data` directory under the highest free patch name (`patch-9` down to `patch-4`, so it loads after every archive already there), and puts the patched `Item.dbc` where the server reads it. Restart the client afterwards.
 
 Check: bags in the player's bags show the tier icon instead of a question mark, and `Item (Entry: 910xx) does not exist in item.dbc!` no longer appears in the worldserver log at debug level. `docs/LOOT-BAGS-DESIGN.md` § "The bag icon" has the mechanism and the archive layout.
+
+**If a bag still shows a question mark**, ask the client which archive it reads `Item.dbc` from — this changes nothing and exits non-zero when the answer is "the stock one":
+
+```bash
+python3 scripts/item-dbc/patch_item_dbc.py --verify \
+    --client-data "/sdcard/AzerothCore 3.3.5a/Data"
+```
+
+It prints one line per patch archive that carries an `Item.dbc`, then the winner: the last one in load order, which is the only one that matters. `bag ids MISSING` on the winner means one of three things, in order of likelihood: the path is not the `Data` directory the game actually runs from (check where the launcher points the client), a client update or a re-sync replaced the patch (re-run the command above), or the patch landed under a *later* archive than ours (a `patch-9` written under a launcher's `patch-A` loses) — re-run the patch and it picks the highest free name, or delete the older copy.
 
 ## Part 10 — Fallbacks if a gate fails
 

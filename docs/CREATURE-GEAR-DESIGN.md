@@ -48,7 +48,7 @@ The code does not follow this document everywhere. §10 lists the eight divergen
 | Visible armour, static look | **yes** — `CreatureDisplayInfoExtra.dbc` | client patch only | DBC row with 11 `ItemDisplayInfo` ids |
 | Drop what it wears | no | module (or core patch) | `Loot::AddItem` from a loot or death hook |
 | Stats from worn gear | no | module — **new code, nothing implements it** | `SetStatFlatModifier(..., TOTAL_VALUE, ...)` at spawn |
-| Custom item art (new model) | **yes** — client `Data/patch-4.MPQ` *and* server `Data/dbc/Item.dbc` | DBC tooling | `Item.dbc` + `ItemDisplayInfo.dbc` + `.m2`/`.blp` |
+| Custom item art (new model) | **yes** — client `Data/patch-<n>.MPQ` *and* server `Data/dbc/Item.dbc` | DBC tooling | `Item.dbc` + `ItemDisplayInfo.dbc` + `.m2`/`.blp`; `scripts/item-dbc/patch_item_dbc.py` already writes the `Item.dbc` half and the patch archive for the loot bags, so a new display id needs only the `ItemDisplayInfo` row and the model/texture added to it |
 
 Only the last row forces a client data fork, and it is orthogonal to the feature: it applies only if the gear must use artwork the stock 3.3.5a client does not have.
 

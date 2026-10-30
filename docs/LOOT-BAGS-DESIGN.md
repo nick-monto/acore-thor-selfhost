@@ -108,14 +108,25 @@ python3 scripts/item-dbc/patch_item_dbc.py \
 - It appends one record per bag — class 15, subclass 0, material 0, inventory
   type 0, sheath 0, and the tier's borrowed bag `displayid`, mirroring the
   `item_template` rows, so `enforceDBCAttributes` has nothing to correct.
-- It writes `patch-4.MPQ` (the first free name from `patch-4` to `patch-9`, then
-  `patch-A` up) into the client's `Data` directory. The archive holds
+- It writes the archive into the client's `Data` directory under the **highest**
+  free patch name — `patch-9` down to `patch-4`, and it refuses rather than
+  writing a letter name, which not every 3.3.5a build loads. The client loads
+  patches in name order and the last archive that carries a file wins, so a
+  `patch-4` written under a launcher's `patch-5` loses its `Item.dbc` silently and
+  looks exactly like a patch that was never applied. The archive holds
   `DBFilesClient\Item.dbc` stored in 4096-byte sectors, with its hash and block
   tables encrypted the way the client expects.
 - It writes the patched `Item.dbc` back to the server's `data/dbc`, so
   `sItemStore` agrees with the client.
 - Re-running is safe: existing records in 91000-91063 are replaced, and the
   script refuses a stock file that already has ids above 91000.
+
+`--verify --client-data <Data>` reports which archive the client reads `Item.dbc`
+from and whether it carries the bags, and exits non-zero when it does not — that
+is the check to run when a bag still shows a question mark. The three ways that
+happens are a `Data` directory that is not the one the game runs from, a client
+update that replaced the patch, and a patch that landed under a later archive
+than ours.
 
 A `--force` reinstall that re-copies the client's DBCs can put the stock
 `Item.dbc` back in the server's `data/dbc`; the client patch is unaffected and
@@ -209,7 +220,8 @@ economy without editing the SQL.
 | Weight/rank checks in MySQL | every rank table's group sums to 100; every creature row's chance matches the rank encoded in its table id; every loot id exists in `creature_template.lootid` |
 | Roll simulation | 50k rolls per representative bracket/rank reproduced the configured drop chances (10/20/35/50/100%) and tier mixes; bag opens always produced cloth, potions and 1-4 gear items whose required level was inside the bracket or at most four levels above it |
 | Generator `--check` | committed SQL matches a fresh run |
-| Item.dbc patch | run against a synthetic 54,000-record `Item.dbc`: 64 records appended in id order, `patch-4.MPQ` extracts byte-identically through an independent MPQ reader (`mpyq`), re-running on its own output is byte-identical, and a stock file with an id above 91000 or a wrong record layout is refused |
+| Item.dbc patch | run against a synthetic 54,000-record `Item.dbc`: 64 records appended in id order, the archive extracts byte-identically through an independent MPQ reader (`mpyq`), re-running on its own output is byte-identical, and a stock file with an id above 91000 or a wrong record layout is refused |
+| Patch name | against a `Data` directory holding `patch-4.MPQ` and `patch-5.MPQ`, the script writes `patch-9.MPQ`; `--verify` names the last archive in load order as the one the client reads, reports `bag ids MISSING` and exits 1 when a client update has put a stock `Item.dbc` back under that name, and reports `bag ids present` and exits 0 otherwise |
 | Worldserver / client | **not observed**: the regenerated files no longer contain the 24063 row or the 18 unreferenced tables, but no worldserver boot was performed here, and the patched `Item.dbc` has not been loaded by a real client |
 
 ## Limits
