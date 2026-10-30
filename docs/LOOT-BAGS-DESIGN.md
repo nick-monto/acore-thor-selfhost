@@ -96,14 +96,18 @@ which is why the bags drop, open and roll their contents regardless.
 
 `scripts/item-dbc/patch_item_dbc.py` closes the gap the standard way for custom
 items, and `scripts/thor-install.sh` runs it as the last step of every install
-and `--repair` (`--client-data DIR`, or a probe of the usual client locations,
-picks the `Data` directory):
+and `--repair`. The `Data` directory it patches is the one `--client-data DIR`
+names, or else the one chosen when the installer asked at the start of the run:
+it lists every folder under shared storage holding a `Data/common.MPQ` and takes
+a number or a path. No folder name is guessed, and Android's folder picker is
+not usable from Termux - an activity delivers its result to the app that started
+it, and `termux-storage-get` copies a file out but has no folder picker:
 
 ```sh
 RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
 python3 scripts/item-dbc/patch_item_dbc.py \
     --dbc "$RF/opt/acore/data/dbc/Item.dbc" \
-    --client-data "/sdcard/AzerothCore 3.3.5a/Data" \
+    --client-data "/sdcard/WOTLK 3.3.5a/Data" \
     --server-dbc "$RF/opt/acore/data/dbc"
 ```
 

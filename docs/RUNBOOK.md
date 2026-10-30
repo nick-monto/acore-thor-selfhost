@@ -499,7 +499,7 @@ The bag items are custom entries (91000-91063), so the client has no `Item.dbc` 
 `thor-install.sh` closes that on every install and every `--repair`, as its last step: it appends the 64 records to the server's `data/dbc/Item.dbc` and writes the archive into the client's `Data` directory under the highest free patch name (`patch-9` down to `patch-4`, so it loads after every archive already there), replacing its own copy rather than adding another one on a re-run. Two things have to be true for the client half, and the step says which one is missing:
 
 - **Termux needs python** (`pkg install python`). It runs out here rather than inside the rootfs because the guest has none, and because the client's `Data` directory is only visible from Termux.
-- **The client's `Data` directory has to be found.** `--client-data DIR` names it; without the flag the installer probes `/sdcard` and `/storage/emulated/0` for an `AzerothCore 3.3.5a` or `WoW Forever` install and takes the first that holds a `common.MPQ`. `--client-data none` skips the client half. The path is remembered in the install state, so `--repair` and `--status` keep using it.
+- **The client's `Data` directory has to be found.** `--client-data DIR` names it. Without the flag the installer asks, at the start of the install (and again on `--repair` if it was never answered): it lists every folder under shared storage that holds a `Data/common.MPQ`, and takes a number, a path, or an empty line to skip. The answer is remembered in `$HOME/.thor-wow/client-data`, so `--repair` and `--status` keep using it (not in `state.env`, which the inside stage rewrites and would blank). Android's folder picker cannot be used here: an activity hands its result to the app that started it, and nothing in Termux receives one - Termux:API's `termux-storage-get` copies a chosen file out and has no folder picker at all. The prompt reads `/dev/tty`, not stdin, because `curl … | bash` makes stdin the script itself.
 
 Restart the client afterwards. Running it by hand is the same thing, and it is what to do after a client update replaces the archive:
 
@@ -508,7 +508,7 @@ pkg install python          # once, in Termux
 RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
 python3 scripts/item-dbc/patch_item_dbc.py \
     --dbc "$RF/opt/acore/data/dbc/Item.dbc" \
-    --client-data "/sdcard/AzerothCore 3.3.5a/Data" \
+    --client-data "/sdcard/WOTLK 3.3.5a/Data" \
     --server-dbc "$RF/opt/acore/data/dbc"
 ```
 
@@ -518,7 +518,7 @@ Check: bags in the player's bags show the tier icon instead of a question mark, 
 
 ```bash
 python3 scripts/item-dbc/patch_item_dbc.py --verify \
-    --client-data "/sdcard/AzerothCore 3.3.5a/Data"
+    --client-data "/sdcard/WOTLK 3.3.5a/Data"
 ```
 
 It prints one line per patch archive that carries an `Item.dbc`, then the winner: the last one in load order, which is the only one that matters. `bag ids MISSING` on the winner means one of three things, in order of likelihood: the path is not the `Data` directory the game actually runs from (check where the launcher points the client), a client update or a re-sync replaced the patch (re-run the command above), or the patch landed under a *later* archive than ours (a `patch-9` written under a launcher's `patch-A` loses) — re-run the patch and it picks the highest free name, or delete the older copy.

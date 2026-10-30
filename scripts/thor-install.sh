@@ -49,8 +49,8 @@
 #                           to fetch the server artifact and the script itself when private
 #   --data-zip URL|PATH|none  client data (dbc/maps/vmaps/mmaps)
 #   --client-data DIR       the client's Data directory, where the loot-bag Item.dbc patch archive is
-#                           written (default: probe /sdcard and /storage/emulated/0 for an
-#                           "AzerothCore 3.3.5a" or "WoW Forever" install; "none" skips that half)
+#                           written (default: the installer asks for the client folder when it starts;
+#                           "none" skips that half, and the answer is remembered)
 #   --boot-timeout SECS     first-boot wait for "World initialized" (default 1800)
 #   THOR_ROOTFS_DIR DIR     the rootfs directory, if proot-distro stores it somewhere this script
 #                           does not probe - a wrong rootfs puts the script's copy where the guest
@@ -903,8 +903,8 @@ item_dbc_verify_supported() {   # the fetched tools may be older than this scrip
 
 client_data_file() { printf '%s/client-data\n' "$HOST_STATE"; }
 
-client_data_dir() {   # --client-data, the remembered path, or the first probe that is a real client Data directory
-    local candidate saved
+client_data_dir() {   # --client-data, or the folder chosen when the installer asked
+    local saved
     # Not in state.env: the inside stage rewrites that file and never sees this path, so it would be
     # blanked on every --repair. This file is the host stage's alone.
     if [ -z "$CLIENT_DATA" ] && [ -f "$(client_data_file)" ]; then
@@ -916,21 +916,93 @@ client_data_dir() {   # --client-data, the remembered path, or the first probe t
         printf '%s\n' "$CLIENT_DATA"
         return 0
     fi
-    # A client Data directory is the one holding common.MPQ; a bare directory of the right name is
-    # not enough, because a half-copied client looks exactly like it.
-    for candidate in \
-        "/sdcard/AzerothCore 3.3.5a/Data" \
-        "/storage/emulated/0/AzerothCore 3.3.5a/Data" \
-        "/sdcard/WoW Forever/Data" \
-        "/storage/emulated/0/WoW Forever/Data" \
-        "$HOME/AzerothCore 3.3.5a/Data"; do
-        [ -d "$candidate" ] || continue
-        if ls "$candidate" 2>/dev/null | grep -qix 'common\.mpq'; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
+    return 1
+}
+
+# ---------------------------------------------------------------- choosing the client
+#
+# Android's folder picker cannot be opened from Termux in a way that hands a folder back: an activity
+# delivers its result to the app that started it, and nothing in Termux can receive one (Termux:API's
+# termux-storage-get copies a chosen file out and has no folder picker at all). So the installer lists
+# the clients it can see under shared storage and asks in the terminal. That works with the stock
+# Termux, and it reads /dev/tty rather than stdin, because the usual `curl | bash` makes stdin the
+# script itself - a plain `read` would eat the rest of the install.
+
+ask() {   # ask PROMPT -> REPLY, from the terminal
+    printf '%s' "$1"
+    REPLY=""
+    # The redirect fails before read runs when there is no controlling terminal, so the group carries
+    # the stderr redirect, not the read.
+    { read -r REPLY </dev/tty; } 2>/dev/null || true
+}
+
+client_candidates() {   # one line per folder under shared storage that holds Data/common.MPQ
+    local root dir
+    for root in "${EXTERNAL_STORAGE:-/storage/emulated/0}" /storage/emulated/0 /sdcard; do
+        [ -d "$root" ] || continue
+        for dir in "$root"/*/ "$root"/*/*/; do
+            [ -d "${dir}Data" ] || continue
+            ls "${dir}Data" 2>/dev/null | grep -qix 'common\.mpq' || continue
+            printf '%s\n' "${dir%/}"
+        done
+        return 0   # the three names are the same place; one pass is enough
     done
     return 1
+}
+
+choose_client_data() {   # --client-data, or the remembered choice, or ask once
+    [ -n "$CLIENT_DATA" ] && return 0
+    [ "$CHECK" = 1 ] && return 0
+    local remembered="" found=() i answer chosen
+    if [ -f "$(client_data_file)" ]; then
+        remembered="$(head -1 "$(client_data_file)")"
+        # "none" is an explicit --client-data none, and a path that is still there needs no question.
+        # A path that has gone (the client was moved or deleted) is asked about again, not written into.
+        if [ "$remembered" = none ] || [ -d "$remembered" ]; then
+            CLIENT_DATA="$remembered"
+            return 0
+        fi
+    fi
+    if ! { : </dev/tty; } 2>/dev/null; then
+        log "no terminal to ask in, so no client folder was chosen (pass --client-data DIR)"
+        return 0
+    fi
+    step "The 3.3.5a client"
+    mapfile -t found < <(client_candidates)
+    if [ "${#found[@]}" -eq 0 ]; then
+        log "no folder under shared storage holds a Data/common.MPQ"
+    else
+        for i in "${!found[@]}"; do printf '  %d) %s\n' "$((i + 1))" "${found[$i]}"; done
+    fi
+    ask "Which folder holds the client? Number, path, or Enter to skip: "
+    answer="$REPLY"
+    chosen="$answer"
+    case "$chosen" in
+        "") log "skipped: the client half of the Item.dbc patch is left alone (pass --client-data DIR to do it later)"
+            return 0 ;;
+        *[!0-9]*) : ;;
+        *)
+            if [ "$chosen" -ge 1 ] && [ "$chosen" -le "${#found[@]}" ]; then
+                chosen="${found[$((chosen - 1))]}"
+            else
+                chosen=""
+            fi ;;
+    esac
+    if [ -z "$chosen" ]; then
+        warn "no such number; the client half is left alone (pass --client-data DIR next time)"
+        return 0
+    fi
+    # Either the client folder or its Data directory is accepted.
+    chosen="${chosen%/}"
+    if [ "${chosen##*/}" = Data ] && [ -d "$chosen" ]; then chosen="$(dirname "$chosen")"; fi
+    if [ ! -d "$chosen/Data" ] || ! ls "$chosen/Data" 2>/dev/null | grep -qix 'common\.mpq'; then
+        warn "$chosen holds no Data/common.MPQ, so it is not a 3.3.5a client; the client half is left alone (pass --client-data DIR next time)"
+        return 0
+    fi
+    CLIENT_DATA="$chosen/Data"
+    mkdir -p "$HOST_STATE"
+    printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
+    ok "client: $CLIENT_DATA"
 }
 
 fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - the two python files, once
@@ -1015,7 +1087,7 @@ apply_item_dbc_patch() {   # the server's Item.dbc, then the client's, if a clie
     ok "server Item.dbc: the 64 bag records are in $ROOT/data/dbc/Item.dbc"
 
     if [ -z "$data" ]; then
-        warn "no client Data directory found, so the client half was not written: pass --client-data DIR"
+        warn "no client folder was chosen, so the client half was not written: pass --client-data DIR, or re-run --repair to be asked"
         warn "  (or copy $ROOT/.thor-state/item-dbc/item-dbc.MPQ into the client's Data as patch-9.MPQ)"
         return 0
     fi
@@ -1080,6 +1152,8 @@ host_install() {
 
     step "Termux packages"
     host_packages
+
+    choose_client_data
 
     step "Rootfs"
     if [ -d "$ROOTFS" ]; then
@@ -1178,6 +1252,7 @@ host_repair() {
     state_load || true
     state_apply_cli
     [ -d "$ROOTFS" ] || die "rootfs missing: $ROOTFS (install first)"
+    choose_client_data
     # This copy is the one thing the host stage owns. Refresh it even when it exists: --repair may be
     # run from a newer script, and the inside stage is where missing helpers are detected and written.
     if [ ! -f "$ROOTFS$INSIDE_SCRIPT_COPY" ]; then

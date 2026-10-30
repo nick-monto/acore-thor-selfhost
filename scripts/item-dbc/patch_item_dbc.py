@@ -28,7 +28,7 @@ Usage, on the realm host (Termux; `pkg install python` once):
 
     RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
     python3 scripts/item-dbc/patch_item_dbc.py --dbc "$RF/opt/acore/data/dbc/Item.dbc" \\
-        --client-data "/sdcard/AzerothCore 3.3.5a/Data" --server-dbc "$RF/opt/acore/data/dbc"
+        --client-data "/sdcard/WOTLK 3.3.5a/Data" --server-dbc "$RF/opt/acore/data/dbc"
 
 The DBC lives inside the proot rootfs, so it is addressed through the rootfs path
 from Termux; the client's `Data` directory is on shared storage and reachable
