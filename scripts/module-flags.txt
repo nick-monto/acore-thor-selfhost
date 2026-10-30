@@ -6,7 +6,7 @@
 #   @PLAYERBOTS@  the mod-playerbots checkout   (AC_PLAYERBOTS)
 #   @DEPS@        the core dependency headers   (AC_DEPS_ROOT)
 #
-# The commit below is the core these flags were taken from; scripts/pawn/check_pawn.py
+# The commit below is the core these flags were taken from; scripts/mercenaries/check_mercenaries.py
 # fails when pins.toml moves to another core commit without this file being regenerated.
 # core: 8a4e76eac8c4ccebf547113afe7b51d6c3e91641
 /usr/bin/c++

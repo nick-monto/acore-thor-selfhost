@@ -63,7 +63,7 @@ CORE_REPO="https://github.com/mod-playerbots/azerothcore-wotlk"
 CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
 PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
-# mod-creature-gear, mod-hardcore, mod-e-interact, mod-survivor and mod-pawn live in *this*
+# mod-creature-gear, mod-hardcore, mod-e-interact, mod-survivor and mod-mercenaries live in *this*
 # repository
 # (modules/), not in repositories of their own, so --from-source has to fetch this one's tarball as
 # well when the script is installed from a copy of the repo. --github-token (THOR_GH_TOKEN) is what
@@ -108,35 +108,35 @@ SURVIVOR_CONF_DEFAULTS=(
     "Survivor.BotRegenOnDeath=1"
     "Survivor.BotDropContainer=1"
 )
-# mod-pawn's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. Same contract as
+# mod-mercenaries's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. Same contract as
 # the survivor list: a key outside its range is silently replaced by the module's own fallback, so
 # write_configs() restores it from here.
-PAWN_CONF_DEFAULTS=(
-    "Pawn.Enable=1"
-    "Pawn.MaxPawns=2"
-    "Pawn.LevelWindow=2"
-    "Pawn.GainXP=0"
-    "Pawn.VariantWithholdMin=1"
-    "Pawn.VariantWithholdMax=2"
-    "Pawn.Voice=Talkative: +emote | Quiet: -emote"
-    "Pawn.VoiceKillChancePercent=10"
-    "Pawn.VoiceCooldownSeconds=120"
-    "Pawn.HireFeePercent=100"
-    "Pawn.HireFeeHeldPercent=100"
-    "Pawn.GearFloorPercent=85"
-    "Pawn.GearCapPercent=150"
-    "Pawn.ResupplyFeePercent=100"
-    "Pawn.AffinityEnabled=1"
-    "Pawn.AffinityKillPoints=10"
-    "Pawn.AffinityQuestPoints=25"
-    "Pawn.AffinityStep=100"
-    "Pawn.AffinityGearPercent=5"
-    "Pawn.OfferedPerPage=12"
-    "Pawn.FeaturedMin=10"
-    "Pawn.FeaturedMax=15"
-    "Pawn.PoolRefreshMinMinutes=40"
-    "Pawn.PoolRefreshMaxMinutes=60"
-    "Pawn.Debug=0"
+MERCENARY_CONF_DEFAULTS=(
+    "Mercenary.Enable=1"
+    "Mercenary.MaxMercenaries=2"
+    "Mercenary.LevelWindow=2"
+    "Mercenary.GainXP=0"
+    "Mercenary.VariantWithholdMin=1"
+    "Mercenary.VariantWithholdMax=2"
+    "Mercenary.Voice=Talkative: +emote | Quiet: -emote"
+    "Mercenary.VoiceKillChancePercent=10"
+    "Mercenary.VoiceCooldownSeconds=120"
+    "Mercenary.HireFeePercent=100"
+    "Mercenary.HireFeeHeldPercent=100"
+    "Mercenary.GearFloorPercent=85"
+    "Mercenary.GearCapPercent=150"
+    "Mercenary.ResupplyFeePercent=100"
+    "Mercenary.AffinityEnabled=1"
+    "Mercenary.AffinityKillPoints=10"
+    "Mercenary.AffinityQuestPoints=25"
+    "Mercenary.AffinityStep=100"
+    "Mercenary.AffinityGearPercent=5"
+    "Mercenary.OfferedPerPage=12"
+    "Mercenary.FeaturedMin=10"
+    "Mercenary.FeaturedMax=15"
+    "Mercenary.PoolRefreshMinMinutes=40"
+    "Mercenary.PoolRefreshMaxMinutes=60"
+    "Mercenary.Debug=0"
 )
 DB_USER="acore"
 DB_PASS=""
@@ -286,8 +286,8 @@ conf_get() {   # conf_get FILE KEY - print the live value (last uncommented defi
 
 conf_get_unquoted() { conf_get "$1" "$2" | tr -d '"'; }
 
-pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn accepts
-    # Pawn.Enable and Pawn.Debug are 0|1, MaxPawns 0-4 (the gossip page has room for four party
+mercenary_value_ok() {   # mercenary_value_ok KEY VALUE - true when VALUE is one mod-mercenaries accepts
+    # Mercenary.Enable and Mercenary.Debug are 0|1, MaxMercenaries 0-4 (the gossip page has room for four party
     # rows), LevelWindow 0-10, OfferedPerPage 1-14, the featured count 1-50 each, the pool
     # refresh 1-1440 minutes each, the two fee percentages 0-10000 and 0-1000, and the gear
     # band 25-100 for the floor and 100-300 for the cap.
@@ -295,7 +295,7 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
     # A voice pool is a profile list, not a number - labels, strategies and `|` separators -
     # so it is settled here, before the numeric guard below can see it. A pool is any
     # non-empty value carrying a `:`; the module skips the profiles it cannot parse.
-    if [ "$key" = Pawn.Voice ]; then
+    if [ "$key" = Mercenary.Voice ]; then
         case "$val" in
             ?*:*) return 0 ;;
             *) return 1 ;;
@@ -303,55 +303,55 @@ pawn_value_ok() {   # pawn_value_ok KEY VALUE - true when VALUE is one mod-pawn 
     fi
     case "$val" in ''|*[!0-9]*) return 1 ;; esac
     case "$key" in
-        Pawn.Enable|Pawn.Debug)
+        Mercenary.Enable|Mercenary.Debug)
             [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Pawn.MaxPawns)
+        Mercenary.MaxMercenaries)
             [ "$val" -ge 0 ] && [ "$val" -le 4 ] ;;
-        Pawn.LevelWindow)
+        Mercenary.LevelWindow)
             [ "$val" -ge 0 ] && [ "$val" -le 10 ] ;;
-        Pawn.GainXP)
+        Mercenary.GainXP)
             [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Pawn.VariantWithholdMin|Pawn.VariantWithholdMax)
+        Mercenary.VariantWithholdMin|Mercenary.VariantWithholdMax)
             [ "$val" -ge 0 ] && [ "$val" -le 5 ] ;;
-        Pawn.OfferedPerPage)
+        Mercenary.OfferedPerPage)
             [ "$val" -ge 1 ] && [ "$val" -le 14 ] ;;
-        Pawn.HireFeePercent)
+        Mercenary.HireFeePercent)
             [ "$val" -ge 0 ] && [ "$val" -le 10000 ] ;;
-        Pawn.HireFeeHeldPercent)
+        Mercenary.HireFeeHeldPercent)
             [ "$val" -ge 0 ] && [ "$val" -le 1000 ] ;;
-        Pawn.GearFloorPercent)
+        Mercenary.GearFloorPercent)
             [ "$val" -ge 25 ] && [ "$val" -le 100 ] ;;
-        Pawn.GearCapPercent)
+        Mercenary.GearCapPercent)
             [ "$val" -ge 100 ] && [ "$val" -le 300 ] ;;
-        Pawn.ResupplyFeePercent)
+        Mercenary.ResupplyFeePercent)
             [ "$val" -ge 0 ] && [ "$val" -le 10000 ] ;;
-        Pawn.VoiceKillChancePercent)
+        Mercenary.VoiceKillChancePercent)
             [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
-        Pawn.VoiceCooldownSeconds)
+        Mercenary.VoiceCooldownSeconds)
             [ "$val" -ge 0 ] && [ "$val" -le 3600 ] ;;
-        Pawn.AffinityEnabled)
+        Mercenary.AffinityEnabled)
             [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Pawn.AffinityKillPoints|Pawn.AffinityQuestPoints)
+        Mercenary.AffinityKillPoints|Mercenary.AffinityQuestPoints)
             [ "$val" -ge 0 ] && [ "$val" -le 1000 ] ;;
-        Pawn.AffinityStep)
+        Mercenary.AffinityStep)
             [ "$val" -ge 1 ] && [ "$val" -le 100000 ] ;;
-        Pawn.AffinityGearPercent)
+        Mercenary.AffinityGearPercent)
             [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
-        Pawn.FeaturedMin|Pawn.FeaturedMax)
+        Mercenary.FeaturedMin|Mercenary.FeaturedMax)
             [ "$val" -ge 1 ] && [ "$val" -le 50 ] ;;
-        Pawn.PoolRefreshMinMinutes|Pawn.PoolRefreshMaxMinutes)
+        Mercenary.PoolRefreshMinMinutes|Mercenary.PoolRefreshMaxMinutes)
             [ "$val" -ge 1 ] && [ "$val" -le 1440 ] ;;
         *)
             return 1 ;;
     esac
 }
 
-pawn_append_missing_conf() {   # pawn_append_missing_conf LIVE DIST - append the shipped keys LIVE lacks
-    # The pool keys are lists, not scalars, so they stay out of PAWN_CONF_DEFAULTS: the checker
+mercenary_append_missing_conf() {   # mercenary_append_missing_conf LIVE DIST - append the shipped keys LIVE lacks
+    # The pool keys are lists, not scalars, so they stay out of MERCENARY_CONF_DEFAULTS: the checker
     # asserts that array and the conf agree key for key, and set_conf would overwrite a pool the
     # admin had trimmed. But conf_pair() only copies the .dist when the live conf is missing, so an
-    # install made before the pools shipped keeps a conf with no Pawn.Temperament.* block at all,
-    # and PawnPersonality::Load then has nothing to roll from. Appending the missing keys is the
+    # install made before the pools shipped keeps a conf with no Mercenary.Temperament.* block at all,
+    # and MercenaryPersonality::Load then has nothing to roll from. Appending the missing keys is the
     # only repair that leaves every existing value alone. The module looks keys up by name, so the
     # additions can go at the end of a hand-edited file without disturbing it.
     local live="$1" dist="$2" line key added=0 pending
@@ -362,9 +362,9 @@ pawn_append_missing_conf() {   # pawn_append_missing_conf LIVE DIST - append the
         key="${key#"${key%%[![:space:]]*}"}"        # trim leading whitespace
         key="${key%"${key##*[![:space:]]}"}"        # and trailing
         case "$key" in
-            Pawn.Voice) ;;
-            Pawn.VoiceLine.*) ;;
-            Pawn.Blacklist.[0-9]*.[0-9]*|Pawn.Variant.[0-9]*.[0-9]*|Pawn.Temperament.[0-9]*.[0-9]*) ;;
+            Mercenary.Voice) ;;
+            Mercenary.VoiceLine.*) ;;
+            Mercenary.Blacklist.[0-9]*.[0-9]*|Mercenary.Variant.[0-9]*.[0-9]*|Mercenary.Temperament.[0-9]*.[0-9]*) ;;
             *) continue ;;                          # comments, blanks and every scalar key
         esac
         # An empty value counts as absent here, unlike for a scalar: a pool is never legitimately
@@ -378,7 +378,7 @@ pawn_append_missing_conf() {   # pawn_append_missing_conf LIVE DIST - append the
             printf '\n# Pool keys this file did not have: appended by the installer, values as shipped.\n'
             cat "$pending"
         } >> "$live"
-        ok "mod-pawn.conf: appended $added shipped pool keys (voice/temperament/blacklist/variant)"
+        ok "mod-mercenaries.conf: appended $added shipped pool keys (voice/temperament/blacklist/variant)"
     fi
     rm -f "$pending"
 }
@@ -1132,7 +1132,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-pawn, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-mercenaries, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -1234,8 +1234,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     # $parent/<module-name>.
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
         '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' '*/modules/mod-e-interact*' \
-        '*/modules/mod-survivor*' '*/modules/mod-pawn*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor and modules/mod-pawn out of $SELF_REPO@$SELF_REF"; }
+        '*/modules/mod-survivor*' '*/modules/mod-mercenaries*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor and modules/mod-mercenaries out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -1266,9 +1266,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-e-interact (wrong SELF_REF?)"
     [ -d "$parent/mod-survivor" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-survivor (wrong SELF_REF?)"
-    [ -d "$parent/mod-pawn" ] \
-        || die "$SELF_REPO@$SELF_REF carries no modules/mod-pawn (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-e-interact, $parent/mod-survivor and $parent/mod-pawn"
+    [ -d "$parent/mod-mercenaries" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-mercenaries (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-e-interact, $parent/mod-survivor and $parent/mod-mercenaries"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1452,7 +1452,7 @@ conf_pair() {   # print the live config file, creating it from NAME.conf.dist on
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-pawn}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-mercenaries}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -1520,10 +1520,10 @@ write_configs() {
         # rings around the player. Left in an older config they would look like they still do
         # something, so they are dropped here.
         sed -i -E '/^[[:space:]]*Playerbots\.RandomBotNearPlayers(Radius|InnerCount|OuterRadius|ZoneCount)[[:space:]]*=/d' "$pb"
-        # Pawn system (mod-pawn). The innkeeper picker is the only doorway to a pool pawn, so
+        # Mercenary system (mod-mercenaries). The innkeeper picker is the only doorway to a pool mercenary, so
         # addclass stays a GM command; the pool is widened to fifteen accounts (about 150
         # characters across both teams and every class) because the picker shows a random 10-15
-        # of them per visit, so a small pool would repeat; and pawns pass on every roll and leave
+        # of them per visit, so a small pool would repeat; and mercenaries pass on every roll and leave
         # free-for-all corpses alone, so the loot-bag economy stays the player's.
         set_conf "$pb" Playerbots.AddClassCommand         0
         set_conf "$pb" Playerbots.AddClassAccountPoolSize 15
@@ -1602,19 +1602,24 @@ write_configs() {
     else
         warn "no $CONF_DIR/modules/mod-survivor.conf.dist - the artifact was built without the module, survivor mode is unavailable"
     fi
-    if [ -f "$CONF_DIR/modules/mod-pawn.conf.dist" ] || [ -f "$CONF_DIR/modules/mod-pawn.conf" ]; then
-        pw="$(conf_pair modules/mod-pawn)"
+    if [ -f "$CONF_DIR/modules/mod-mercenaries.conf.dist" ] || [ -f "$CONF_DIR/modules/mod-mercenaries.conf" ]; then
+        pw="$(conf_pair modules/mod-mercenaries)"
         # The shipped .dist already holds these values; each is read back because a key the module
         # cannot use is silently replaced by its own default. Only a value outside its range is
-        # rewritten, so a deliberate Pawn.Enable=0 (picker off) survives a repair. A key that no
+        # rewritten, so a deliberate Mercenary.Enable=0 (picker off) survives a repair. A key that no
         # longer exists is dropped: the obelisk gameobject is gone, and a leftover entry would
         # look like it still selected something.
-        sed -i -E '/^[[:space:]]*Pawn\.ObeliskEntry[[:space:]]*=/d' "$pw"
-        conf_defaults "$pw" pawn_value_ok mod-pawn.conf "${PAWN_CONF_DEFAULTS[@]}"
-        pawn_append_missing_conf "$pw" "$CONF_DIR/modules/mod-pawn.conf.dist"
-        log "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min Fee=$(conf_get "$pw" Pawn.HireFeePercent)%+$(conf_get "$pw" Pawn.HireFeeHeldPercent)% Gear=$(conf_get "$pw" Pawn.GearFloorPercent)-$(conf_get "$pw" Pawn.GearCapPercent)%"
+        sed -i -E '/^[[:space:]]*Mercenary\.ObeliskEntry[[:space:]]*=/d' "$pw"
+        conf_defaults "$pw" mercenary_value_ok mod-mercenaries.conf "${MERCENARY_CONF_DEFAULTS[@]}"
+        mercenary_append_missing_conf "$pw" "$CONF_DIR/modules/mod-mercenaries.conf.dist"
+        # The module was mod-pawn before it was mod-mercenaries and its conf file is renamed with it.
+        # The core loads every modules/*.conf, so a leftover mod-pawn.conf keeps being read while
+        # nothing looks at its Pawn.* keys; it goes now that the new file is written. run_checks
+        # reports and fixes the same thing for an install that never reaches this function.
+        rm -f "$CONF_DIR/modules/mod-pawn.conf" "$CONF_DIR/modules/mod-pawn.conf.dist"
+        log "mod-mercenaries.conf: Enable=$(conf_get "$pw" Mercenary.Enable) MaxMercenaries=$(conf_get "$pw" Mercenary.MaxMercenaries) LevelWindow=$(conf_get "$pw" Mercenary.LevelWindow) Featured=$(conf_get "$pw" Mercenary.FeaturedMin)-$(conf_get "$pw" Mercenary.FeaturedMax) Refresh=$(conf_get "$pw" Mercenary.PoolRefreshMinMinutes)-$(conf_get "$pw" Mercenary.PoolRefreshMaxMinutes)min Fee=$(conf_get "$pw" Mercenary.HireFeePercent)%+$(conf_get "$pw" Mercenary.HireFeeHeldPercent)% Gear=$(conf_get "$pw" Mercenary.GearFloorPercent)-$(conf_get "$pw" Mercenary.GearCapPercent)%"
     else
-        warn "no $CONF_DIR/modules/mod-pawn.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
+        warn "no $CONF_DIR/modules/mod-mercenaries.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
     fi
     log "worldserver.conf: DataDir=$(conf_get "$ws" DataDir) BindIP=$(conf_get "$ws" BindIP)"
 }
@@ -1880,11 +1885,11 @@ run_checks() {   # run_checks FIX(0|1)
     local ws="$CONF_DIR/worldserver.conf" as="$CONF_DIR/authserver.conf" pb="$CONF_DIR/modules/playerbots.conf"
     local cg="$CONF_DIR/modules/mod-creature-gear.conf" hc="$CONF_DIR/modules/mod_hardcore.conf"
     local ei="$CONF_DIR/modules/mod_e_interact.conf" sv="$CONF_DIR/modules/mod-survivor.conf"
-    local pw="$CONF_DIR/modules/mod-pawn.conf"
+    local pw="$CONF_DIR/modules/mod-mercenaries.conf"
     if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$ei" ] && [ -f "$sv" ] && [ -f "$pw" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf, modules/mod-survivor.conf, modules/mod-pawn.conf"
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf, modules/mod-survivor.conf, modules/mod-mercenaries.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf/modules/mod-survivor.conf/modules/mod-pawn.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf/modules/mod-survivor.conf/modules/mod-mercenaries.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -1969,27 +1974,39 @@ run_checks() {   # run_checks FIX(0|1)
             fi
         fi
     fi
+    if [ -f "$CONF_DIR/modules/mod-mercenaries.conf" ] &&
+       { [ -f "$CONF_DIR/modules/mod-pawn.conf" ] || [ -f "$CONF_DIR/modules/mod-pawn.conf.dist" ]; }; then
+        # The module was mod-pawn before it was mod-mercenaries. The core loads every modules/*.conf,
+        # so the old file keeps being read while nothing looks at its Pawn.* keys. Only once the new
+        # conf exists: an install without the module keeps whatever it had.
+        bad "mod-mercenaries.conf: the stale mod-pawn.conf from the module's old name is still here"
+        if [ "$fix" = 1 ]; then
+            rm -f "$CONF_DIR/modules/mod-pawn.conf" "$CONF_DIR/modules/mod-pawn.conf.dist"
+            FIXES=$((FIXES + 1))
+            ok "mod-mercenaries.conf: removed the stale mod-pawn.conf"
+        fi
+    fi
     if [ -f "$pw" ]; then
         local pw_default pw_key pw_val pw_bad="" pw_absent=""
-        for pw_default in "${PAWN_CONF_DEFAULTS[@]}"; do
+        for pw_default in "${MERCENARY_CONF_DEFAULTS[@]}"; do
             pw_key="${pw_default%%=*}"
             pw_val="$(conf_get "$pw" "$pw_key")"
             if [ -z "$pw_val" ]; then pw_absent="$pw_absent $pw_key"
-            elif ! pawn_value_ok "$pw_key" "$pw_val"; then pw_bad="$pw_bad $pw_key=$pw_val"; fi
+            elif ! mercenary_value_ok "$pw_key" "$pw_val"; then pw_bad="$pw_bad $pw_key=$pw_val"; fi
         done
         # Outside the `$pw_bad` branch on purpose: a conf whose scalars are all fine is exactly the
         # one an older install has, and it still has no temperament block to append.
         if [ "$fix" = 1 ]; then
-            pawn_append_missing_conf "$pw" "$CONF_DIR/modules/mod-pawn.conf.dist"
+            mercenary_append_missing_conf "$pw" "$CONF_DIR/modules/mod-mercenaries.conf.dist"
         fi
         if [ -z "$pw_bad" ] && [ -z "$pw_absent" ]; then
-            ok "mod-pawn.conf: Enable=$(conf_get "$pw" Pawn.Enable) MaxPawns=$(conf_get "$pw" Pawn.MaxPawns) LevelWindow=$(conf_get "$pw" Pawn.LevelWindow) Featured=$(conf_get "$pw" Pawn.FeaturedMin)-$(conf_get "$pw" Pawn.FeaturedMax) Refresh=$(conf_get "$pw" Pawn.PoolRefreshMinMinutes)-$(conf_get "$pw" Pawn.PoolRefreshMaxMinutes)min"
+            ok "mod-mercenaries.conf: Enable=$(conf_get "$pw" Mercenary.Enable) MaxMercenaries=$(conf_get "$pw" Mercenary.MaxMercenaries) LevelWindow=$(conf_get "$pw" Mercenary.LevelWindow) Featured=$(conf_get "$pw" Mercenary.FeaturedMin)-$(conf_get "$pw" Mercenary.FeaturedMax) Refresh=$(conf_get "$pw" Mercenary.PoolRefreshMinMinutes)-$(conf_get "$pw" Mercenary.PoolRefreshMaxMinutes)min"
         else
-            if [ -n "$pw_bad" ]; then bad "mod-pawn.conf: unusable value(s):$pw_bad"; fi
-            if [ -n "$pw_absent" ]; then bad "mod-pawn.conf: key(s) the live file predates:$pw_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
+            if [ -n "$pw_bad" ]; then bad "mod-mercenaries.conf: unusable value(s):$pw_bad"; fi
+            if [ -n "$pw_absent" ]; then bad "mod-mercenaries.conf: key(s) the live file predates:$pw_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
             if [ "$fix" = 1 ]; then
                 FIXES=$((FIXES + 1))
-                conf_defaults "$pw" pawn_value_ok mod-pawn.conf "${PAWN_CONF_DEFAULTS[@]}"
+                conf_defaults "$pw" mercenary_value_ok mod-mercenaries.conf "${MERCENARY_CONF_DEFAULTS[@]}"
             fi
         fi
     fi

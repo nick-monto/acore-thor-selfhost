@@ -1,0 +1,517 @@
+[worldserver]
+
+########################################
+# mod-mercenaries configuration
+########################################
+#
+# Mercenaries: named bots you recruit at any innkeeper, keep in your party, and level
+# alongside. The model, the route and the acceptance criteria are in
+# docs/MERCENARY-SYSTEM-DESIGN.md and docs/MERCENARY-INTEGRATION-PLAN.md.
+#
+# A mercenary is a type-2 "AddClass" character from the playerbots pool: a real
+# character in a real group, so it keeps its gear and saves itself. It does not
+# gain XP (Mercenary.GainXP): it stays at the level it was hired at, and exchanging
+# it for a fresher one as the player levels is the point of the roster. This
+# module adds the four things the pool does not have on its own:
+#
+#   1. a roster, so a recruited mercenary comes back after a relog or a restart;
+#   2. a doorway on every innkeeper, with a paged picker that shows a rotating
+#      subsample of the pool rather than all of it;
+#   3. a level window, so the mercenaries offered are within Mercenary.LevelWindow levels
+#      of the player instead of snapping to the player's exact level;
+#   4. an archetype per mercenary: one premade PvE spec plus a hard spellbook
+#      blacklist, so a mercenary is a specialist and the player has to swap mercenaries
+#      to get a different toolkit.
+#
+# The party cap (Mercenary.MaxMercenaries) counts mercenaries only. Strangers met in the world
+# are ordinary random bots and are not counted, so a full group still needs
+# them - that is deliberate.
+#
+# Playerbots settings this module expects, written by scripts/thor-install.sh:
+#   Playerbots.AddClassCommand = 0        the innkeeper picker is the only doorway
+#   Playerbots.LootNeedRollLevel = 0      a mercenary passes instead of needing
+#   Playerbots.LootGreedRollLevel = 0     a mercenary passes instead of greeding
+#   Playerbots.FreeMethodLoot = 0         a mercenary leaves free-for-all corpses
+#   Playerbots.KeepAltsInGroup = 1        a mercenary stays when the player relogs
+
+# Master switch. 0 disables the innkeeper line and the login hooks; existing
+# roster rows stay in the database and nothing is logged out.
+# Default: 1 (enabled)
+Mercenary.Enable = 1
+
+# How many mercenaries one player may keep in the party at once. The third recruit is
+# refused at the innkeeper.
+# Default: 2
+Mercenary.MaxMercenaries = 2
+
+# How many levels above or below the player an offered mercenary may be. Each pool
+# mercenary gets a stable offset inside this window, derived from the player and
+# mercenary guids, so the same mercenary is always offered at the same level for the same
+# player. 0 makes every mercenary the player's exact level.
+#
+# It is also the band a mercenary is still "current" in: one the player has outgrown
+# by more than this is marked as fallen behind at the inn, and taking it on
+# again at the new level is a new hire with a new fee.
+# Default: 2
+Mercenary.LevelWindow = 2
+
+# Whether a hired mercenary keeps the experience it earns in the party. Off by
+# default, and the default is the design: a mercenary that levels with its owner
+# never needs exchanging, so the roster would stop being a set of contracts that
+# expire. With it off the mercenary carries the core's no-XP-gain player flag, which
+# Player::GiveXP checks before anything else - kills, quests, exploration and
+# battlegrounds all go through that one call - and it is pinned to the level it
+# was hired at even if something else moves it (playerbots rebuilds a type-2 bot
+# at its master's level on login when the gap is more than three; the pin is
+# applied after that pass).
+#
+# Set it to 1 to let mercenaries level in the party. The pin goes with it: the roster
+# then follows the mercenary's level instead of holding it, and exchanging companions
+# becomes a choice rather than something progression forces.
+# Default: 0 (a mercenary does not gain XP)
+Mercenary.GainXP = 0
+
+# What a hire costs, in copper, as a percentage of the player's level cubed:
+#
+#   fee = player_level^3 * HireFeePercent / 100 * gear_ratio / 100
+#               * (100 + HireFeeHeldPercent * mercenaries_held) / 100
+#
+# player_level^3 copper is the **baseline**: the price of a mercenary geared exactly like
+# the player. gear_ratio is that mercenary's own strength in percent of the player's
+# gear score - a mercenary a fifth weaker costs a fifth less, one half again as strong
+# costs half again as much - and it is drawn per mercenary, from the same seed as the
+# level and the spec, triangular around 100 and clamped to
+# [Mercenary.GearFloorPercent, Mercenary.GearCapPercent]. Most mercenaries therefore sit near the
+# player's strength and near the baseline price; the picker row says which way each
+# one went ("+20% gear", "-15% gear"), which is the only place the player needs to
+# see it.
+#
+# The mercenary's own level is deliberately not in the price. Inside the level window it
+# moves the power less than the gear does, and pricing it made a level-20 draw twice
+# as wide as a level-80 one.
+#
+# Level cubed copper is the point of the default. Measured against this server's
+# own loot-bag money table (scripts/loot-bags/gen_loot_bags.py: normal creatures
+# drop a bag 10% of the time, and the tier shares and money ranges are in MONEY),
+# level^3 copper is about 10-20 minutes of ordinary farming at 100 kills an hour
+# at every level that matters: 7 minutes at 10, 16 at 20, 20 at 30, 21 at 40-50,
+# 18 at 60, 14 at 70, 10 at 80. The fee in copper is 80s at 20, 2g 70s at 30,
+# 6g 40s at 40, 21g 60s at 60, 51g 20s at 80. The work it asks for therefore stays
+# the same as the player levels instead of vanishing at 80 or being impossible at
+# 10; quest money and vendor trash make it cheaper in practice, so treat those as
+# upper bounds. 0 makes every hire free.
+#
+# A fee is per mercenary *and per level*: calling back a mercenary this owner has already
+# paid for at the level it is standing at is free, so dismissing and re-hiring to
+# rearrange a party costs nothing. Taking the same mercenary on again at a new offer
+# level is a new hire - a new build, new gear, a new fee - exactly as hiring a
+# different mercenary would be.
+# Default: 100
+Mercenary.HireFeePercent = 100
+
+# What each mercenary already in the party adds to the price, as a percentage of the
+# base fee: 100 means the second mercenary costs twice the first, the third three
+# times. A full party is an achievement, not the default state.
+# Default: 100
+Mercenary.HireFeeHeldPercent = 100
+
+# The band a mercenary's gear ratio is drawn from, in percent of the player's gear
+# score. The ratio is both the gear the mercenary is built to and the multiplier on the
+# hire fee, so this is also the band the price moves in: 85 and 150 mean a mercenary can
+# be a seventh weaker than the player for six sevenths of the baseline, or half
+# again as strong for half again the baseline. The draw is triangular with its peak
+# at 100, so most mercenaries are near the baseline price and the ends of the band are
+# rare. The gear pass is held to
+# GetMixedGearScore(owner) * ratio / 100 as its per-item score ceiling. Floor 100
+# with cap 100 makes every mercenary a match for the player and every price in a draw
+# identical.
+#
+# One caveat: the ceiling only bites while the best items available at the mercenary's
+# level are above it. A raider at 80 already wears the best gear the level offers,
+# so a high ratio buys the same gear as a low one there and only the price differs.
+# Nothing at offer time can tell the two cases apart - the gear does not exist until
+# the mercenary is built.
+# Defaults: 85 and 150
+Mercenary.GearFloorPercent = 85
+Mercenary.GearCapPercent = 150
+
+# What the innkeeper charges to repair a mercenary and replace the food, potions,
+# reagents and ammunition it carries, in copper, as a percentage of the player's
+# level squared times ten:
+#
+#   fee = player_level^2 * 10 * ResupplyFeePercent / 100
+#
+# which is 64,000 copper (6g 40s) at 80 and 4,000 copper (40s) at 20. The fee is
+# paid by the player, not by the mercenary: a mercenary's own purse is the factory's, and a
+# cost the player cannot see is not a cost. 0 makes every restock free.
+# Default: 100
+Mercenary.ResupplyFeePercent = 100
+
+# Affinity: what a mercenary earns by fighting beside its owner. It is the one thing
+# about a mercenary that is not decided at hire time. Points are credited to every
+# mercenary in the party, per kill and per quest completed, and every whole step has
+# two effects, both on draws the module already makes:
+#
+#   * one of the variant abilities the mercenary was not dealt comes back - it learns
+#     what it was missing, and the spell gate stops refusing it;
+#   * the gear ceiling of its next build rises by AffinityGearPercent, capped at
+#     Mercenary.GearCapPercent. The hire fee does not move: a veteran is geared better
+#     than its price suggests, which is the reward and not a tax.
+#
+# A step is a whole AffinityStep points. Points are kept in memory and written
+# when the step count changes, so a kill does not cost a database write; the
+# points inside the current step are flushed by the next build, login or step.
+# AffinityEnabled = 0 keeps the counters frozen and the feature inert.
+# Defaults: on, 10 a kill, 25 a quest, a step every 100 points, 5% of gear
+Mercenary.AffinityEnabled = 1
+Mercenary.AffinityKillPoints = 10
+Mercenary.AffinityQuestPoints = 25
+Mercenary.AffinityStep = 100
+Mercenary.AffinityGearPercent = 5
+
+# Offers per gossip page. The gossip packet carries at most 16 rows and the
+# server aborts on a 33rd, so this is clamped to 16 minus the party rows and
+# the two navigation rows.
+# Default: 12
+Mercenary.OfferedPerPage = 12
+
+# How many mercenaries one selection holds: a random count in [FeaturedMin, FeaturedMax]
+# is drawn when the selection is dealt.
+#
+# A selection is dealt once per pool cycle, not once per visit. The first time a
+# player opens the picker after a pool refresh - or after a server restart - their
+# crowd is drawn, and every open until the next refresh shows the same mercenaries, at
+# the same level and spec. Recruiting one takes it out of the selection for good;
+# dismissing it does not put it back. Each player is dealt from their own deck, so
+# two players standing at the same inn see different crowds.
+#
+# The pool is dealt, not sampled: each player gets a shuffled deck of the eligible
+# pool and is dealt off the top of it, so no face comes round again until the whole
+# deck has been dealt out - a fresh roll of the pool reshuffles it, and the
+# selection before a reshuffle is dealt last in the new order, so a face never
+# repeats in the very next selection either. On a pool of 75 per team a face comes
+# back after about six cycles.
+#
+# The pool is far larger than this on purpose, so the roster reads like a rift
+# rather than a database dump.
+# Defaults: 10 and 15
+Mercenary.FeaturedMin = 10
+Mercenary.FeaturedMax = 15
+
+# How often the pool itself is re-read: which type-2 characters exist, their
+# level and whether they are offline. A random number of minutes in
+# [PoolRefreshMinMinutes, PoolRefreshMaxMinutes] is drawn each cycle, and the
+# pool is also read at startup and on demand if it is still empty (a boot can
+# finish before playerbots has created the pool characters).
+# Defaults: 40 and 60
+Mercenary.PoolRefreshMinMinutes = 40
+Mercenary.PoolRefreshMaxMinutes = 60
+
+# Log every recruit, dismiss, level and prune at INFO level. Leave 0 in normal
+# play: the login path is noisy otherwise.
+# Default: 0 (disabled)
+Mercenary.Debug = 0
+
+########################################
+# Archetypes: the spellbook a mercenary never has
+########################################
+#
+# One block per class and premade spec number, spelled
+#   Mercenary.Blacklist.<class>.<spec_no> = Spell Name, Spell Name, ...
+#
+# <class> is the ChrClasses id:
+#   1 warrior   2 paladin   3 hunter   4 rogue   5 priest
+#   6 death knight   7 shaman   8 mage   9 warlock   11 druid
+#
+# <spec_no> is the Playerbots.PremadeSpecLink number for that class, and the
+# names are the ones Playerbots.PremadeSpecName gives it. Only the PvE specs
+# are offered to a player, so only those need a block.
+#
+# Each list holds the signature abilities of the *other* specs of the same
+# class: the spells a mercenary must not have if it is to be a specialist. A prot
+# warrior without Shield Wall cannot tank a boss for the player who brought an
+# arms mercenary; a shadow priest without Resurrection cannot replace the healer.
+# That is the point: the toolkit is the reason to swap.
+#
+# Names, not ids, because a name is reviewable and a bare id is not. They are
+# resolved against the spell table once at startup, and a name that resolves to
+# nothing is logged as an error - a restriction that silently does nothing is
+# worse than a loud one. Two known aliases are harmless: a spell that is shared
+# between two specs ("Swipe", "Mangle") blacklists every spell of that name.
+#
+# Every name in this section and in the variant pools below was checked against
+# the 3.3.5 spell table on 2026-10-26: 152 distinct names over 293 entries, all
+# of them resolve, and none names an ability that only another class can learn.
+# One of them did not: the rogue talent is "Hunger For Blood" in the client's own
+# data (the core's smart_scripts.sql spells it the same way), so the lowercase
+# "for" resolved to nothing and was corrected on 2026-10-27. A name that differs
+# from the spell table only in case now resolves anyway and is logged as a warning,
+# so a slip like that costs a log line instead of a silently missing restriction.
+# That check is a one-off and not part of the build, so a name added later is
+# only proven by the `archetypes:` line in Server.log at the next startup.
+
+# Warrior: arms, fury, prot
+Mercenary.Blacklist.1.0 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam, Spell Reflection
+Mercenary.Blacklist.1.1 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam, Spell Reflection
+Mercenary.Blacklist.1.2 = Mortal Strike, Bloodthirst, Bladestorm, Recklessness, Sweeping Strikes
+
+# Paladin: holy, prot, ret
+Mercenary.Blacklist.2.0 = Crusader Strike, Divine Storm, Avenger's Shield, Hammer of the Righteous, Righteous Defense
+Mercenary.Blacklist.2.1 = Holy Light, Flash of Light, Holy Shock, Redemption, Divine Storm, Crusader Strike
+Mercenary.Blacklist.2.2 = Holy Light, Flash of Light, Holy Shock, Redemption, Avenger's Shield, Hammer of the Righteous, Righteous Defense
+
+# Hunter: beast mastery, marksmanship, survival
+Mercenary.Blacklist.3.0 = Aimed Shot, Chimera Shot, Explosive Shot, Black Arrow
+Mercenary.Blacklist.3.1 = Bestial Wrath, Kill Command, Explosive Shot, Black Arrow
+Mercenary.Blacklist.3.2 = Aimed Shot, Chimera Shot, Bestial Wrath, Kill Command
+
+# Rogue: assassination, combat, subtlety. Subtlety keeps the crowd control.
+Mercenary.Blacklist.4.0 = Blade Flurry, Adrenaline Rush, Shadowstep, Premeditation, Hemorrhage, Sap, Blind, Vanish
+Mercenary.Blacklist.4.1 = Mutilate, Hunger For Blood, Shadowstep, Premeditation, Hemorrhage, Sap, Blind, Vanish
+Mercenary.Blacklist.4.2 = Mutilate, Hunger For Blood, Blade Flurry, Adrenaline Rush
+
+# Priest: discipline, holy, shadow. Shadow keeps no resurrection and no group heal.
+Mercenary.Blacklist.5.0 = Shadowform, Mind Flay, Vampiric Touch, Devouring Plague, Mind Blast
+Mercenary.Blacklist.5.1 = Shadowform, Mind Flay, Vampiric Touch, Devouring Plague, Mind Blast
+Mercenary.Blacklist.5.2 = Greater Heal, Circle of Healing, Prayer of Healing, Holy Nova, Resurrection, Renew
+
+# Death knight: blood, frost, unholy
+Mercenary.Blacklist.6.0 = Howling Blast, Frost Strike, Scourge Strike, Summon Gargoyle, Unholy Blight
+Mercenary.Blacklist.6.1 = Vampiric Blood, Rune Tap, Scourge Strike, Summon Gargoyle, Unholy Blight
+Mercenary.Blacklist.6.2 = Vampiric Blood, Rune Tap, Howling Blast, Frost Strike
+
+# Shaman: elemental, enhancement, restoration
+Mercenary.Blacklist.7.0 = Stormstrike, Lava Lash, Riptide, Chain Heal, Healing Wave, Lesser Healing Wave, Ancestral Spirit
+Mercenary.Blacklist.7.1 = Chain Lightning, Lava Burst, Chain Heal, Riptide, Ancestral Spirit
+Mercenary.Blacklist.7.2 = Stormstrike, Lava Lash, Chain Lightning, Lava Burst, Lightning Bolt
+
+# Mage: arcane, fire, frost
+Mercenary.Blacklist.8.0 = Fireball, Pyroblast, Fire Blast, Combustion, Frostbolt, Ice Lance, Icy Veins, Blizzard, Summon Water Elemental
+Mercenary.Blacklist.8.1 = Arcane Blast, Arcane Missiles, Arcane Barrage, Frostbolt, Ice Lance, Icy Veins, Blizzard, Summon Water Elemental
+Mercenary.Blacklist.8.2 = Arcane Blast, Arcane Missiles, Arcane Barrage, Fireball, Pyroblast, Fire Blast, Combustion
+
+# Warlock: affliction, demonology, destruction
+Mercenary.Blacklist.9.0 = Incinerate, Chaos Bolt, Conflagrate, Soul Fire, Summon Felguard, Demonic Empowerment
+Mercenary.Blacklist.9.1 = Unstable Affliction, Haunt, Incinerate, Chaos Bolt, Conflagrate, Soul Fire
+Mercenary.Blacklist.9.2 = Unstable Affliction, Haunt, Summon Felguard, Demonic Empowerment
+
+# Druid: balance, bear, restoration, cat
+Mercenary.Blacklist.11.0 = Mangle, Shred, Rip, Maul, Swipe, Growl, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility
+Mercenary.Blacklist.11.1 = Starfire, Wrath, Starfall, Moonfire, Shred, Rip, Pounce, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility
+Mercenary.Blacklist.11.2 = Starfire, Wrath, Starfall, Mangle, Shred, Rip, Maul, Swipe, Growl
+Mercenary.Blacklist.11.3 = Starfire, Wrath, Starfall, Maul, Swipe, Growl, Healing Touch, Rejuvenation, Lifebloom, Swiftmend, Rebirth, Tranquility
+
+########################################
+#
+# Per-mercenary variants: the second half of an archetype.
+#
+# The blacklist above makes a mercenary a specialist. This makes two mercenaries of the
+# *same* spec different companions: each list is a pool of abilities that a mercenary
+# of that spec may or may not arrive with, and each mercenary is dealt a subset of it
+# from the same seed as its level, spec and gear ratio - so the same face always
+# arrives with the same toolkit for the same player, and two fury warriors do
+# not.
+#
+# The abilities chosen are the situational ones: interrupts, taunts, cooldowns,
+# dispels and crowd control. Losing an interrupt makes a mercenary that cannot stop a
+# heal; losing a cooldown makes it squishier; losing a fear makes it a different
+# fight. Rotational damage or healing is never in a pool - a mercenary missing its
+# rotation is broken, not different.
+#
+#   Mercenary.Variant.<class>.<spec_no> = Spell Name, Spell Name, ...
+#
+# Same class ids and spec numbers as the blacklist. An empty or missing block
+# means every mercenary of that spec arrives with the full toolkit. Names resolve
+# against the spell table once at startup, exactly like the blacklist, and an
+# unresolved name is an ERROR in the log - check the `archetypes:` line in
+# Server.log after a config change.
+
+# How many abilities from a spec's pool a mercenary is missing: the count is drawn
+# uniformly from [Min, Max], capped by the pool size. Min is what guarantees two
+# mercenaries of one spec never arrive with identical kits - with the shipped pools of
+# three and Min 1, Max 2, a mercenary is missing one or two of them in equal measure.
+# Min 0 lets a mercenary arrive with its whole pool; Max 0 turns the variation off.
+# A Min above Max is read as Max, and a Min above the pool size as the pool size.
+# Default: 1
+Mercenary.VariantWithholdMin = 1
+
+# Default: 2
+Mercenary.VariantWithholdMax = 2
+
+# Warrior: arms, fury, prot
+Mercenary.Variant.1.0 = Pummel, Mocking Blow, Retaliation
+Mercenary.Variant.1.1 = Pummel, Recklessness, Death Wish
+Mercenary.Variant.1.2 = Pummel, Spell Reflection, Last Stand
+
+# Paladin: holy, prot, ret
+Mercenary.Variant.2.0 = Hammer of Justice, Turn Evil, Lay on Hands
+Mercenary.Variant.2.1 = Hammer of Justice, Turn Evil, Divine Protection
+Mercenary.Variant.2.2 = Hammer of Justice, Turn Evil, Repentance
+
+# Hunter: beast mastery, marksmanship, survival
+Mercenary.Variant.3.0 = Concussive Shot, Feign Death, Deterrence
+Mercenary.Variant.3.1 = Concussive Shot, Feign Death, Misdirection
+Mercenary.Variant.3.2 = Concussive Shot, Feign Death, Wyvern Sting
+
+# Rogue: assassination, combat, subtlety
+Mercenary.Variant.4.0 = Kick, Evasion, Cloak of Shadows
+Mercenary.Variant.4.1 = Kick, Evasion, Sprint
+Mercenary.Variant.4.2 = Kick, Evasion, Vanish
+
+# Priest: discipline, holy, shadow
+Mercenary.Variant.5.0 = Dispel Magic, Shackle Undead, Fear Ward
+Mercenary.Variant.5.1 = Dispel Magic, Shackle Undead, Fade
+Mercenary.Variant.5.2 = Dispel Magic, Shackle Undead, Psychic Scream
+
+# Death knight: blood, frost, unholy
+Mercenary.Variant.6.0 = Mind Freeze, Strangulate, Anti-Magic Shell
+Mercenary.Variant.6.1 = Mind Freeze, Strangulate, Chains of Ice
+Mercenary.Variant.6.2 = Mind Freeze, Strangulate, Anti-Magic Zone
+
+# Shaman: elemental, enhancement, restoration
+Mercenary.Variant.7.0 = Wind Shear, Grounding Totem, Tremor Totem
+Mercenary.Variant.7.1 = Wind Shear, Grounding Totem, Frost Shock
+Mercenary.Variant.7.2 = Wind Shear, Grounding Totem, Frost Shock
+
+# Mage: arcane, fire, frost
+Mercenary.Variant.8.0 = Counterspell, Polymorph, Spellsteal
+Mercenary.Variant.8.1 = Counterspell, Polymorph, Blink
+Mercenary.Variant.8.2 = Counterspell, Polymorph, Ice Block
+
+# Warlock: affliction, demonology, destruction
+Mercenary.Variant.9.0 = Fear, Banish, Curse of Tongues
+Mercenary.Variant.9.1 = Fear, Banish, Howl of Terror
+Mercenary.Variant.9.2 = Fear, Banish, Shadowfury
+
+# Druid: balance, bear, restoration, cat
+Mercenary.Variant.11.0 = Entangling Roots, Hibernate, Cyclone
+Mercenary.Variant.11.1 = Bash, Feral Charge, Survival Instincts
+Mercenary.Variant.11.2 = Entangling Roots, Hibernate, Nature's Swiftness
+Mercenary.Variant.11.3 = Dash, Cower, Survival Instincts
+
+########################################
+#
+# Per-mercenary voice and temperament: how a mercenary sounds and how it fights.
+#
+# The variant blocks above give a mercenary its own toolkit. These two give it a
+# manner. Both are drawn from the same seed as its level and spec, so a face
+# never changes under the owner who hired it.
+#
+# A profile list is not a number: each `Label: +strategy,-strategy` entry is one
+# profile, entries are separated by `|`, and the mercenary is dealt one of them. A
+# profile may move two dials at once; join them with a comma and no space,
+# because the engine's own parser does not trim the tokens it splits on.
+#
+# Voice drives the non-combat engine and answers how the mercenary sounds between
+# fights. One pool serves every mercenary - a voice is a manner, not a spec. `emote`
+# is the strategy that drives talking and emoting and it is on for bots by
+# default, so `-emote` is what makes a mercenary quiet. Two realm-wide settings keep
+# the last word underneath: Playerbots.RandomBotTalk and Playerbots.RandomBotEmote
+# in playerbots.conf gate whether a bot may speak at all, so a silent realm
+# cannot be talked into life by this file.
+#
+# Default: Talkative: +emote | Quiet: -emote
+Mercenary.Voice = Talkative: +emote | Quiet: -emote
+
+# What a mercenary actually says, per voice. The pool above decides how a mercenary behaves
+# between fights; these lines are spoken at three moments the module sees for
+# itself - a kill it landed, its own death, and its dismissal - through the same
+# call playerbots' own say action uses.
+#
+# The format is `event: text`, entries separated by `|`, and the events are
+# `kill`, `death` and `dismiss`. The key is the voice label from Mercenary.Voice, so a
+# label that is not in that pool has no lines; a line for an event the voice does
+# not list is simply not said. A mercenary says the same line at the same moment every
+# time, because the line is drawn from the same (owner, mercenary) seed as its level
+# and its temperament. Text may not contain a `|`.
+#
+# The two scalars below decide when a mercenary speaks at all. The chance is per kill:
+# a mercenary that comments on every corpse is a nuisance, and the cooldown is per mercenary
+# and per event, so a quiet voice and a talkative one do not talk over each other.
+#
+# Defaults: 10 percent of kills, 120 seconds between two lines from one mercenary
+Mercenary.VoiceKillChancePercent = 10
+Mercenary.VoiceCooldownSeconds = 120
+Mercenary.VoiceLine.Talkative = kill: Well fought! | kill: Next one, then. | kill: That is how it is done. | death: Avenge me, friend. | dismiss: Until next time.
+Mercenary.VoiceLine.Quiet = death: ... | dismiss: *nods*
+
+# Temperament drives the combat engine and answers how the mercenary fights. Unlike
+# voice it is per spec, because what bold means for a fury warrior is not what
+# it means for a holy priest - a tank that charges in dies, and a healer that
+# charges in wipes the party. Each spec carries two or three profiles and the
+# mercenary gets one of them, so two arms warriors fight differently and neither
+# fights wrong. Only strategy dials are touched here; the class rotation is
+# left alone. An unknown strategy name is ignored by the engine, so a typo
+# makes a mercenary ordinary rather than broken.
+#
+#   Mercenary.Temperament.<class>.<spec_no> = Label: +strategy | Label: ...
+#
+# Two dials are not what they look like. `save mana` is the healer mana
+# multiplier and returns 1.0 for anything that is not a healing cast, so it
+# does nothing on a tank or a dps. `close` and `ranged` add melee and ranged
+# combat, which a death knight, mage or priest already has from its class
+# strategy, so those tokens are dead on those classes.
+#
+# Same class ids and spec numbers as the blacklist and variant blocks. The loader
+# reads the keys that exist rather than asking for every class and spec in turn,
+# so a spec with no `<class>.<spec>` key has no temperament at all and nothing is
+# logged for it - the class x spec grid is mostly undefined by design. An empty
+# block is dropped the same way.
+#
+# The profile is applied on top of the strategy list playerbots replayed from the
+# mercenary's last logout, not on the role defaults, so the module first undoes the
+# dials the pool's other profiles name. A dial removed from every profile of a
+# pool is named by nothing and lingers until the mercenary is re-hired.
+
+# Warrior: arms, fury, prot
+Mercenary.Temperament.1.0 = Relentless: +aggressive,+close | Patient: +wait for attack | Wary: +avoid aoe
+Mercenary.Temperament.1.1 = Reckless: +aggressive | Careful: +avoid aoe,-potions | Steady: +close
+Mercenary.Temperament.1.2 = Stalwart: +close | Wary: +avoid aoe | Frugal: -potions
+
+# Paladin: holy, prot, ret
+Mercenary.Temperament.2.0 = Frugal: +save mana | Distant: +ranged | Careful: +avoid aoe
+Mercenary.Temperament.2.1 = Stalwart: +close | Frugal: -potions | Wary: +avoid aoe
+Mercenary.Temperament.2.2 = Relentless: +aggressive,+close | Spare: -potions | Careful: +avoid aoe
+
+# Hunter: beast mastery, marksmanship, survival
+Mercenary.Temperament.3.0 = Bold: +aggressive | Distant: +ranged | Restless: +kite
+Mercenary.Temperament.3.1 = Patient: +wait for attack | Distant: +ranged | Spare: -potions
+Mercenary.Temperament.3.2 = Bold: +aggressive,+ranged | Restless: +kite | Wary: +avoid aoe
+
+# Rogue: assassination, combat, subtlety
+Mercenary.Temperament.4.0 = Relentless: +aggressive,+close | Spare: -potions | Wary: +avoid aoe
+Mercenary.Temperament.4.1 = Steady: +close | Bold: +aggressive | Spare: -potions
+Mercenary.Temperament.4.2 = Patient: +wait for attack | Careful: +avoid aoe | Relentless: +aggressive
+
+# Priest: discipline, holy, shadow
+Mercenary.Temperament.5.0 = Frugal: +save mana | Careful: +avoid aoe | Spare: -potions
+Mercenary.Temperament.5.1 = Frugal: +save mana | Restless: +kite | Careful: +avoid aoe
+Mercenary.Temperament.5.2 = Bold: +aggressive | Restless: +kite | Wary: +avoid aoe
+
+# Death knight: blood, frost, unholy, double aura blood
+Mercenary.Temperament.6.0 = Stalwart: +avoid aoe | Frugal: -potions
+Mercenary.Temperament.6.1 = Relentless: +aggressive | Spare: -potions | Wary: +avoid aoe
+Mercenary.Temperament.6.2 = Bold: +aggressive | Patient: +wait for attack | Careful: +avoid aoe
+Mercenary.Temperament.6.3 = Wary: +avoid aoe | Spare: -potions
+
+# Shaman: elemental, enhancement, restoration
+Mercenary.Temperament.7.0 = Bold: +aggressive,+ranged | Restless: +kite | Wary: +avoid aoe
+Mercenary.Temperament.7.1 = Relentless: +aggressive,+close | Spare: -potions | Careful: +avoid aoe
+Mercenary.Temperament.7.2 = Frugal: +save mana | Distant: +ranged | Careful: +avoid aoe
+
+# Mage: arcane, fire, frost, frostfire
+Mercenary.Temperament.8.0 = Bold: +aggressive | Frugal: -potions | Careful: +avoid aoe
+Mercenary.Temperament.8.1 = Reckless: +aggressive | Distant: +kite | Careful: +avoid aoe
+Mercenary.Temperament.8.2 = Careful: +avoid aoe | Restless: +kite | Frugal: -potions
+Mercenary.Temperament.8.3 = Bold: +aggressive | Patient: +wait for attack | Spare: -potions
+
+# Warlock: affliction, demonology, destruction
+Mercenary.Temperament.9.0 = Patient: +wait for attack | Careful: +avoid aoe | Restless: +kite
+Mercenary.Temperament.9.1 = Bold: +aggressive,+ranged | Frugal: -potions | Careful: +avoid aoe
+Mercenary.Temperament.9.2 = Reckless: +aggressive | Distant: +ranged | Spare: -potions
+
+# Druid: balance, bear, restoration, cat
+Mercenary.Temperament.11.0 = Distant: +ranged | Bold: +aggressive | Wary: +avoid aoe
+Mercenary.Temperament.11.1 = Stalwart: +close | Wary: +avoid aoe | Frugal: -potions
+Mercenary.Temperament.11.2 = Frugal: +save mana | Careful: +avoid aoe | Distant: +ranged
+Mercenary.Temperament.11.3 = Relentless: +aggressive,+close | Patient: +wait for attack | Spare: -potions

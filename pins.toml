@@ -34,17 +34,17 @@ ref = "main"                                                # SELF_REF in thor-i
 # out of its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a
 # tarball from SELF_REPO ($SELF_REF, default main). No third-party hash to keep in step.
 
-[module.pawn]
+[module.mercenary]
 repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
-path = "modules/mod-pawn"                                   # loader symbol Addmod_pawnScripts()
+path = "modules/mod-mercenaries"                            # loader symbol Addmod_mercenariesScripts()
 ref = "main"                                                # SELF_REF in thor-install.sh (overridable)
-# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-pawn out of
+# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-mercenaries out of
 # its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a tarball
-# from SELF_REPO ($SELF_REF, default main). The module ships no SQL: the picker is a CreatureScript
-# hook on every innkeeper, and its roster table is created in the characters database
-# programmatically at startup. It needs mod-playerbots compiled in, because a pawn is recruited
-# through PlayerbotHolder::AddPlayerBot, and it reads the pool from the playerbots database, so it
-# also needs the playerbots connection up.
+# from SELF_REPO ($SELF_REF, default main). The module ships no SQL: the picker is a pair of
+# AllCreatureScript gossip hooks on every innkeeper, and its roster table is created in the
+# characters database programmatically at startup. It needs mod-playerbots compiled in, because a
+# mercenary is recruited through PlayerbotHolder::AddPlayerBot, and it reads the pool from the
+# playerbots database, so it also needs the playerbots connection up.
 
 [module.survivor]
 repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own

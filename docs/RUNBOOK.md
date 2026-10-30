@@ -50,11 +50,11 @@ Parts 1–9 below are exactly what the install does, in order — read them to k
 Two checks run on a development host in under a minute and cover what the arm64 build used to be the first to see. They also run on every push (`.github/workflows/module-checks.yml`, about two minutes, nothing linked or published), so a slip is caught even when nobody runs them locally — but run both before committing anything under `modules/` anyway:
 
 ```sh
-python3 scripts/pawn/check_pawn.py     # the module's invariants, no build needed
+python3 scripts/mercenaries/check_mercenaries.py     # the module's invariants, no build needed
 bash scripts/syntax-check.sh           # -fsyntax-only over every module TU, with the real flags
 ```
 
-`check_pawn.py` reads the conf, the installer, the workflow and the module sources, and fails on the faults that only appeared at boot or at the next build: a conf key the code reads that the conf does not define, a hook that is not a hook the core declares, a class deriving from a database-bound script type (dropped at boot when `script_name` has no row for it), a table built during the first config pass — before `sSpellMgr->LoadSpellInfoStore` — a temperament key probed instead of enumerated, and traits applied before the last `ResetStrategies`.
+`check_mercenaries.py` reads the conf, the installer, the workflow and the module sources, and fails on the faults that only appeared at boot or at the next build: a conf key the code reads that the conf does not define, a hook that is not a hook the core declares, a class deriving from a database-bound script type (dropped at boot when `script_name` has no row for it), a table built during the first config pass — before `sSpellMgr->LoadSpellInfoStore` — a temperament key probed instead of enumerated, and traits applied before the last `ResetStrategies`.
 
 `syntax-check.sh` compiles each `modules/*/src/*.cpp` with `-fsyntax-only`, taking the include set, the defines and the C++ standard from one recorded command in a configured core's `compile_commands.json` — or, when there is no configured build (CI), from the checked-in `scripts/module-flags.txt`, which `scripts/syntax-check.sh --dump-flags` generates from such a build with the checkout paths left as placeholders. It proves every core symbol the module names exists, which is the class of error that stopped the build twice: `GetMSTime` for `getMSTime` and `OnLogin` for `OnPlayerLogin`. It needs a configured core checkout beside this repository and the core's dependency headers; without either it prints why and exits 0 rather than failing. The headers need no root:
 
@@ -65,7 +65,7 @@ mkdir -p ~/.cache/acore-deps/root
 for d in *.deb; do dpkg-deb -x "$d" ~/.cache/acore-deps/root; done
 ```
 
-`check_pawn.py` also fails when `scripts/module-flags.txt` was taken from a different core commit than `pins.toml` pins, so moving the pin means regenerating the flags — which is the one manual step this gate has.
+`check_mercenaries.py` also fails when `scripts/module-flags.txt` was taken from a different core commit than `pins.toml` pins, so moving the pin means regenerating the flags — which is the one manual step this gate has.
 
 Neither check proves the module links or behaves — the arm64 build and a client session still do that. They only keep the next hour-long build from being spent on a typo or a boot-time assumption.
 
@@ -347,18 +347,18 @@ grep -i "mod-survivor\|survivor" /opt/acore/logs/Server.log | tail -5
 
 Then opt a character in with `.survivor on` and die once (opt-in is one-way: there is no `.survivor off`, and a character promoted with `.hardcore on` loses the Survivor flag and can never get it back). That is the point where the container, the loot window, the map pin and the recovered item's enchantments need a client - and where the revival has to be watched: the character should wake alive at the closest graveyard, full health, no resurrection sickness, bones where the corpse was. None of it has been exercised in a client or on the Thor.
 
-## Part 5c — Prove the pawn module is live
+## Part 5c — Prove the mercenary module is live
 
-Same shape as 5a and 5b, for `mod-pawn`:
+Same shape as 5a and 5b, for `mod-mercenaries`:
 
 ```bash
 # 1. the module conf the worldserver actually reads
-ls -l /opt/acore/etc/modules/mod-pawn.conf
-grep -E '^Pawn\.(Enable|MaxPawns|LevelWindow|GainXP|Featured|PoolRefresh)' /opt/acore/etc/modules/mod-pawn.conf
+ls -l /opt/acore/etc/modules/mod-mercenaries.conf
+grep -E '^Mercenary\.(Enable|MaxMercenaries|LevelWindow|GainXP|Featured|PoolRefresh)' /opt/acore/etc/modules/mod-mercenaries.conf
 
 # 1b. the binary knows the keys the file has: 0 means the conf is newer than the build and the
 #     module ignores the voice, resupply and affinity keys without saying so
-grep -c 'Pawn.VoiceKillChancePercent' /opt/acore/bin/worldserver
+grep -c 'Mercenary.VoiceKillChancePercent' /opt/acore/bin/worldserver
 
 # 2. the pool the picker draws from: 15 AddClass accounts, about 150 characters
 mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_playerbots \
@@ -370,15 +370,15 @@ mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_charact
 
 # 3. the roster table was created at startup (programmatically, not by module SQL)
 mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_characters \
-  -e "SHOW COLUMNS FROM pawn_roster;
-      SELECT COUNT(*) AS rows_total, SUM(state = 1) AS in_party FROM pawn_roster;"
+  -e "SHOW COLUMNS FROM mercenary_roster;
+      SELECT COUNT(*) AS rows_total, SUM(state = 1) AS in_party FROM mercenary_roster;"
 
 # 4. the module registered itself, read the pool and resolved every archetype blacklist name
-grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
+grep -i "module.mercenary" /opt/acore/logs/Server.log | tail -10
 ```
 
-- (1) prints the file and the switches. `Pawn.MaxPawns = 2`, `Pawn.LevelWindow = 2` and
-  `Pawn.FeaturedMin`/`FeaturedMax = 10`/`15` are the installer's values; `Pawn.Enable = 0` turns the
+- (1) prints the file and the switches. `Mercenary.MaxMercenaries = 2`, `Mercenary.LevelWindow = 2` and
+  `Mercenary.FeaturedMin`/`FeaturedMax = 10`/`15` are the installer's values; `Mercenary.Enable = 0` turns the
   innkeeper line off and leaves existing rows alone. An upgrade keeps the live conf and appends the
   keys the newer artifact ships, so this file can end with a block the installer added; the count it
   prints (`appended N key(s) the live file did not have yet`) is that block, not a failure.
@@ -389,29 +389,29 @@ grep -i "module.pawn" /opt/acore/logs/Server.log | tail -10
 - (2) is the pool. `addclass_accounts` should be `15` and `pool_chars` around `150`; fewer means the
   accounts exist but playerbots has not created their characters yet, which happens on the first
   boot after the pool was widened (the log line `Creating random bot characters for account` marks
-  it, and it is a one-time cost). `Pawn: pool: N offline characters, next roll in M min` in (4)
+  it, and it is a one-time cost). `Mercenary: pool: N offline characters, next roll in M min` in (4)
   repeats the same number from the module's own view.
-- (3) prints the ten columns and `0` rows on a fresh realm. `built` is `1` once a pawn has been
-  equipped for its pinned spec, which is what keeps a returning pawn's gear untouched; `paid` is `1`
+- (3) prints the ten columns and `0` rows on a fresh realm. `built` is `1` once a mercenary has been
+  equipped for its pinned spec, which is what keeps a returning mercenary's gear untouched; `paid` is `1`
   once that owner has paid its hire fee at the level in `target_level`, which is what makes a re-hire
-  at that level free. A non-zero `in_party` is a pawn currently in someone's party.
-- (4) is the important one. A healthy boot has exactly two `module.pawn` lines and no `Pawn` warning
+  at that level free. A non-zero `in_party` is a mercenary currently in someone's party.
+- (4) is the important one. A healthy boot has exactly two `module.mercenary` lines and no `Mercenary` warning
   or error anywhere:
 
   ```
-  Pawn: archetypes: 33 specs named, 33 PvE specs offerable, N blacklisted ids, V variant abilities over S specs, 0 names unresolved
-  Pawn: personality: 33 temperament pools over 33 temperament keys, 2 voices
+  Mercenary: archetypes: 33 specs named, 33 PvE specs offerable, N blacklisted ids, V variant abilities over S specs, 0 names unresolved
+  Mercenary: personality: 33 temperament pools over 33 temperament keys, 2 voices
   ```
 
-  `names unresolved` above zero, or any `Pawn.Blacklist.<class>.<spec>: no spell is named '...'`
-  or `Pawn.Variant.<class>.<spec>: no spell is named '...'` line, is an ERROR and means that
-  restriction or variation does nothing — fix the name in `/opt/acore/etc/modules/mod-pawn.conf` and
-  restart; the config is read at load, not per use. `Config: Missing property Pawn.Temperament...`
+  `names unresolved` above zero, or any `Mercenary.Blacklist.<class>.<spec>: no spell is named '...'`
+  or `Mercenary.Variant.<class>.<spec>: no spell is named '...'` line, is an ERROR and means that
+  restriction or variation does nothing — fix the name in `/opt/acore/etc/modules/mod-mercenaries.conf` and
+  restart; the config is read at load, not per use. `Config: Missing property Mercenary.Temperament...`
   means the module and the conf disagree about which keys exist: the loaders enumerate the keys the
   conf defines, so that line only appears from a build older than the enumeration. And
-  `Script named 'npc_pawn_innkeeper' is not assigned in the database.` means the picker is a
+  `Script named 'npc_mercenary_innkeeper' is not assigned in the database.` means the picker is a
   database-bound `CreatureScript` again, which the core drops — it must be the `AllCreatureScript`
-  answering `CanCreatureGossipHello` and `CanCreatureGossipSelect` that `scripts/pawn/check_pawn.py`
+  answering `CanCreatureGossipHello` and `CanCreatureGossipSelect` that `scripts/mercenaries/check_mercenaries.py`
   asserts. An innkeeper that carries its own AI is no obstacle: the gossip hooks run for every
   creature, which is what an AI handed out by `GetCreatureAI` could not do — 65 of the 125
   innkeeper-flagged templates are `SmartAI`, Razor Hill's Innkeeper Grosk among them.
@@ -420,9 +420,9 @@ Then talk to any innkeeper - the capital inns and the town inns all carry the li
 "Recruit companions". What needs a client session, and has not been run on the Thor: the line
 appearing next to "make this inn your home" with the bind option still working, the paged menu, that
 two openings show different 10-15 subsets, the level and spec each row advertises, that the recruited
-pawn arrives at that level with that spec and without the abilities its row says it lacks, that two
-pawns of one spec differ in those abilities, that a third recruit is refused, that a blacklisted spell
-is refused when the pawn tries to learn it, that both pawns pass on a drop, that a pawn stays at its
+mercenary arrives at that level with that spec and without the abilities its row says it lacks, that two
+mercenaries of one spec differ in those abilities, that a third recruit is refused, that a blacklisted spell
+is refused when the mercenary tries to learn it, that both mercenaries pass on a drop, that a mercenary stays at its
 hired level when the player levels past it (no XP, and `fallen behind` in the party row), and that the
 party comes back after a relog and a world-server restart.
 

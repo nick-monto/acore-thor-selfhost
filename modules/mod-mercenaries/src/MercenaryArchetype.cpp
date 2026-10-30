@@ -1,10 +1,10 @@
 /*
- * mod-pawn: archetypes.
+ * mod-mercenaries: archetypes.
  *
  * Released under GNU GPL v2 or (at your option) any later version.
  */
 
-#include "PawnArchetype.h"
+#include "MercenaryArchetype.h"
 
 #include "Config.h"
 #include "Log.h"
@@ -98,13 +98,13 @@ namespace
         if (dot == std::string::npos || rest.find('.', dot + 1) != std::string::npos
             || !ParseNumber(rest.substr(0, dot), cls) || !ParseNumber(rest.substr(dot + 1), spec))
         {
-            LOG_WARN("module", "Pawn: {}: not <class>.<spec>; skipped", key);
+            LOG_WARN("module", "Mercenary: {}: not <class>.<spec>; skipped", key);
             return false;
         }
 
         // The checker validates the shipped conf, but nothing validates a
         // hand-edited conf at boot, so a class or spec this module does not cover is
-        // refused here rather than kept as a table entry no pawn can reach.
+        // refused here rather than kept as a table entry no mercenary can reach.
         bool knownClass = false;
         for (uint8 const candidate : kClasses)
             if (uint32(candidate) == cls)
@@ -112,7 +112,7 @@ namespace
 
         if (!knownClass || spec >= kMaxSpecs)
         {
-            LOG_WARN("module", "Pawn: {}: class {} or spec {} is outside the classes and specs this module covers; skipped",
+            LOG_WARN("module", "Mercenary: {}: class {} or spec {} is outside the classes and specs this module covers; skipped",
                      key, cls, spec);
             return false;
         }
@@ -186,7 +186,7 @@ namespace
         auto const folded = index.folded.find(Fold(name));
         if (folded == index.folded.end())
         {
-            LOG_ERROR("module", "Pawn: {} {}.{}: no spell is named '{}'; that restriction does nothing",
+            LOG_ERROR("module", "Mercenary: {} {}.{}: no spell is named '{}'; that restriction does nothing",
                       kind, cls, spec, name);
             return nullptr;
         }
@@ -196,25 +196,25 @@ namespace
             std::string candidates;
             for (std::string const& candidate : folded->second)
                 candidates += (candidates.empty() ? "'" : ", '") + candidate + "'";
-            LOG_ERROR("module", "Pawn: {} {}.{}: '{}' is not a spell name, and {} spells differ only in case ({}); spell one of them exactly",
+            LOG_ERROR("module", "Mercenary: {} {}.{}: '{}' is not a spell name, and {} spells differ only in case ({}); spell one of them exactly",
                       kind, cls, spec, name, uint32(folded->second.size()), candidates);
             return nullptr;
         }
 
         std::string const& real = folded->second.front();
-        LOG_WARN("module", "Pawn: {} {}.{}: '{}' is spelled '{}' in the spell table; using that",
+        LOG_WARN("module", "Mercenary: {} {}.{}: '{}' is spelled '{}' in the spell table; using that",
                  kind, cls, spec, name, real);
         return &index.exact.find(real)->second;
     }
 }
 
-PawnArchetype& PawnArchetype::instance()
+MercenaryArchetype& MercenaryArchetype::instance()
 {
-    static PawnArchetype instance;
+    static MercenaryArchetype instance;
     return instance;
 }
 
-void PawnArchetype::Load()
+void MercenaryArchetype::Load()
 {
     _forbidden.clear();
     _variants.clear();
@@ -261,7 +261,7 @@ void PawnArchetype::Load()
     uint32 blacklisted = 0;
     uint32 missing = 0;
 
-    std::string const blacklistPrefix = "Pawn.Blacklist.";
+    std::string const blacklistPrefix = "Mercenary.Blacklist.";
     for (std::string const& key : sConfigMgr->GetKeysByString(blacklistPrefix))
     {
         uint32 cls = 0;
@@ -291,11 +291,11 @@ void PawnArchetype::Load()
         blacklisted += uint32(ids.size());
     }
 
-    // The variant pools: abilities a pawn of the spec may or may not arrive with,
+    // The variant pools: abilities a mercenary of the spec may or may not arrive with,
     // kept as name + every id it resolves to, because the picker names them and
     // the learn gate has to match the ids.
     uint32 variantNames = 0;
-    std::string const variantPrefix = "Pawn.Variant.";
+    std::string const variantPrefix = "Mercenary.Variant.";
     for (std::string const& key : sConfigMgr->GetKeysByString(variantPrefix))
     {
         uint32 cls = 0;
@@ -307,7 +307,7 @@ void PawnArchetype::Load()
         if (list.empty())
             continue;
 
-        std::vector<PawnVariantSpell>& pool = _variants[Key(uint8(cls), uint8(spec))];
+        std::vector<MercenaryVariantSpell>& pool = _variants[Key(uint8(cls), uint8(spec))];
         for (std::string const& name : SplitNames(list))
         {
             std::vector<uint32> const* spells = ResolveName(nameIndex, name, "variant", cls, spec);
@@ -317,31 +317,31 @@ void PawnArchetype::Load()
                 continue;
             }
 
-            pool.push_back(PawnVariantSpell{name, *spells});
+            pool.push_back(MercenaryVariantSpell{name, *spells});
             ++variantNames;
         }
     }
 
-    LOG_INFO("module", "Pawn: archetypes: {} specs named, {} PvE specs offerable, {} blacklisted ids, {} variant abilities over {} specs, {} names unresolved",
+    LOG_INFO("module", "Mercenary: archetypes: {} specs named, {} PvE specs offerable, {} blacklisted ids, {} variant abilities over {} specs, {} names unresolved",
              uint32(_specNames.size()), pveSpecs, blacklisted, variantNames,
              uint32(_variants.size()), missing);
 }
 
-std::vector<uint8> const& PawnArchetype::PveSpecs(uint8 cls) const
+std::vector<uint8> const& MercenaryArchetype::PveSpecs(uint8 cls) const
 {
     static std::vector<uint8> const empty;
     auto it = _pveSpecs.find(cls);
     return it == _pveSpecs.end() ? empty : it->second;
 }
 
-std::string const& PawnArchetype::SpecName(uint8 cls, uint8 spec) const
+std::string const& MercenaryArchetype::SpecName(uint8 cls, uint8 spec) const
 {
     static std::string const unknown = "unknown";
     auto it = _specNames.find(Key(cls, spec));
     return it == _specNames.end() ? unknown : it->second;
 }
 
-PawnRole PawnArchetype::RoleFor(uint8 cls, uint8 spec) const
+MercenaryRole MercenaryArchetype::RoleFor(uint8 cls, uint8 spec) const
 {
     std::string const name = Lower(SpecName(cls, spec));
 
@@ -349,22 +349,22 @@ PawnRole PawnArchetype::RoleFor(uint8 cls, uint8 spec) const
     // "blood pve", "resto pve", "disc pve"), so the role is read off the name
     // rather than off a second table that could drift from it.
     if (HasWord(name, "prot") || HasWord(name, "bear") || HasWord(name, "blood"))
-        return PAWN_ROLE_TANK;
+        return MERCENARY_ROLE_TANK;
 
     if (HasWord(name, "holy") || HasWord(name, "resto") || HasWord(name, "disc"))
-        return PAWN_ROLE_HEALER;
+        return MERCENARY_ROLE_HEALER;
 
-    return PAWN_ROLE_DPS;
+    return MERCENARY_ROLE_DPS;
 }
 
-std::vector<PawnVariantSpell> const& PawnArchetype::Variants(uint8 cls, uint8 spec) const
+std::vector<MercenaryVariantSpell> const& MercenaryArchetype::Variants(uint8 cls, uint8 spec) const
 {
-    static std::vector<PawnVariantSpell> const empty;
+    static std::vector<MercenaryVariantSpell> const empty;
     auto it = _variants.find(Key(cls, spec));
     return it == _variants.end() ? empty : it->second;
 }
 
-bool PawnArchetype::IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const
+bool MercenaryArchetype::IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const
 {
     auto it = _forbidden.find(Key(cls, spec));
     if (it == _forbidden.end())
@@ -372,7 +372,7 @@ bool PawnArchetype::IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const
     return std::binary_search(it->second.begin(), it->second.end(), spellId);
 }
 
-void PawnArchetype::Apply(Player* bot, uint8 cls, uint8 spec, std::vector<PawnVariantSpell> const& withheld) const
+void MercenaryArchetype::Apply(Player* bot, uint8 cls, uint8 spec, std::vector<MercenaryVariantSpell> const& withheld) const
 {
     if (!bot)
         return;
@@ -394,12 +394,12 @@ void PawnArchetype::Apply(Player* bot, uint8 cls, uint8 spec, std::vector<PawnVa
     if (auto it = _forbidden.find(Key(cls, spec)); it != _forbidden.end())
         prune(it->second);
 
-    // The pawn's own withheld variants, so a rebuild does not leave one behind:
+    // The mercenary's own withheld variants, so a rebuild does not leave one behind:
     // the learn gate would refuse it anyway, but a spell already in the book is
     // not a learn attempt.
-    for (PawnVariantSpell const& variant : withheld)
+    for (MercenaryVariantSpell const& variant : withheld)
         prune(variant.Ids);
 
-    LOG_DEBUG("module", "Pawn: pawn {}: spec {} applied, {} spells pruned ({} variant{})", bot->GetName(),
+    LOG_DEBUG("module", "Mercenary: mercenary {}: spec {} applied, {} spells pruned ({} variant{})", bot->GetName(),
               uint32(spec), pruned, uint32(withheld.size()), withheld.size() == 1 ? "" : "s");
 }

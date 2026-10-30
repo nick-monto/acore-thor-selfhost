@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Offline checks for modules/mod-pawn.
+"""Offline checks for modules/mod-mercenaries.
 
 This host has no Boost headers, so no AzerothCore translation unit can be compiled here; the
 compile gate is the arm64 workflow, which runs this script first. What can be checked offline is
 the agreement between the files, which is where a module of this shape actually breaks:
 
-  * every Pawn.* key the C++ reads is defined, uncommented, in conf/mod-pawn.conf.dist;
-  * the installer's PAWN_CONF_DEFAULTS and the shipped conf agree, both ways: the repair path
+  * every Mercenary.* key the C++ reads is defined, uncommented, in conf/mod-mercenaries.conf.dist;
+  * the installer's MERCENARY_CONF_DEFAULTS and the shipped conf agree, both ways: the repair path
     restores exactly what the conf ships, and no key can be added to one without the other;
   * every column the roster code writes exists in the table it creates, the vanity columns
     survive a save, and the one text column is quoted by the statement and escaped by the
@@ -24,7 +24,7 @@ the agreement between the files, which is where a module of this shape actually 
 
 Exit code 0 means every check passed. Run it from anywhere:
 
-    python3 scripts/pawn/check_pawn.py
+    python3 scripts/mercenaries/check_mercenaries.py
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULE = ROOT / "modules" / "mod-pawn"
-CONF = MODULE / "conf" / "mod-pawn.conf.dist"
+MODULE = ROOT / "modules" / "mod-mercenaries"
+CONF = MODULE / "conf" / "mod-mercenaries.conf.dist"
 SRC = MODULE / "src"
 PINS = ROOT / "pins.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "server-aarch64.yml"
@@ -101,7 +101,7 @@ def conf_keys(text: str) -> dict[str, str]:
 
 
 def check_files() -> None:
-    for path in (CONF, PINS, WORKFLOW, INSTALLER, SRC / "PawnInnkeeper.cpp"):
+    for path in (CONF, PINS, WORKFLOW, INSTALLER, SRC / "MercenaryInnkeeper.cpp"):
         if not path.is_file():
             fail(f"missing file: {path.relative_to(ROOT)}")
     for path in sorted(SRC.glob("*.cpp")) + sorted(SRC.glob("*.h")):
@@ -117,16 +117,16 @@ def check_config_keys() -> dict[str, str]:
     # what the module does, which is the whole point of the file.
     used: set[str] = set()
     for path in sorted(SRC.glob("*.cpp")):
-        for match in re.finditer(r'GetOption<[^>]+>\(\s*"(Pawn\.[^"]+)"', path.read_text(encoding="utf-8")):
+        for match in re.finditer(r'GetOption<[^>]+>\(\s*"(Mercenary\.[^"]+)"', path.read_text(encoding="utf-8")):
             used.add(match.group(1))
 
     for key in sorted(used):
         if key not in keys:
-            fail(f"conf: {key} is read by the code but not defined in mod-pawn.conf.dist")
+            fail(f"conf: {key} is read by the code but not defined in mod-mercenaries.conf.dist")
 
     # Blacklist keys: class must be playable, spec inside the premade spec table.
     for key in sorted(keys):
-        match = re.fullmatch(r"Pawn\.(?:Blacklist|Variant|Temperament)\.(\d+)\.(\d+)", key)
+        match = re.fullmatch(r"Mercenary\.(?:Blacklist|Variant|Temperament)\.(\d+)\.(\d+)", key)
         if not match:
             continue
         cls, spec = int(match.group(1)), int(match.group(2))
@@ -138,9 +138,9 @@ def check_config_keys() -> dict[str, str]:
             fail(f"conf: {key} is empty")
 
     notes.append(f"conf: {len(keys)} keys, {len(used)} read by the code, "
-                 f"{sum(1 for k in keys if k.startswith('Pawn.Blacklist.'))} blacklist blocks, "
-                 f"{sum(1 for k in keys if k.startswith('Pawn.Variant.'))} variant blocks, "
-                 f"{sum(1 for k in keys if k.startswith('Pawn.Temperament.'))} temperament blocks")
+                 f"{sum(1 for k in keys if k.startswith('Mercenary.Blacklist.'))} blacklist blocks, "
+                 f"{sum(1 for k in keys if k.startswith('Mercenary.Variant.'))} variant blocks, "
+                 f"{sum(1 for k in keys if k.startswith('Mercenary.Temperament.'))} temperament blocks")
     return keys
 
 
@@ -149,9 +149,9 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
     if not installer:
         return
 
-    block = re.search(r"^PAWN_CONF_DEFAULTS=\((.*?)^\)", installer, re.S | re.M)
+    block = re.search(r"^MERCENARY_CONF_DEFAULTS=\((.*?)^\)", installer, re.S | re.M)
     if not block:
-        fail("installer: no PAWN_CONF_DEFAULTS block")
+        fail("installer: no MERCENARY_CONF_DEFAULTS block")
         return
 
     defaults: dict[str, str] = {}
@@ -160,7 +160,7 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
 
     for key, value in sorted(defaults.items()):
         if key not in keys:
-            fail(f"installer: PAWN_CONF_DEFAULTS has {key}, which the conf does not define")
+            fail(f"installer: MERCENARY_CONF_DEFAULTS has {key}, which the conf does not define")
         elif keys[key] != value:
             fail(f"installer: {key}={value} but the conf ships {keys[key]}; a repair would "
                  f"rewrite a value the conf does not carry")
@@ -169,18 +169,18 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
     # per-class pools and the per-voice lines are deliberately absent: they are long, they change
     # with balance, and the player is meant to edit them, so a repair leaves them alone.
     for key in sorted(keys):
-        if key.startswith(("Pawn.Blacklist.", "Pawn.Variant.", "Pawn.Temperament.",
-                           "Pawn.VoiceLine.")):
+        if key.startswith(("Mercenary.Blacklist.", "Mercenary.Variant.", "Mercenary.Temperament.",
+                           "Mercenary.VoiceLine.")):
             continue
         if key not in defaults:
-            fail(f"installer: {key} is in the conf but not in PAWN_CONF_DEFAULTS; a repair "
+            fail(f"installer: {key} is in the conf but not in MERCENARY_CONF_DEFAULTS; a repair "
                  f"would leave a bad value in place")
 
     notes.append(f"installer: {len(defaults)} conf defaults agree with the shipped conf")
 
 
 def check_picker(keys: dict[str, str]) -> None:
-    picker = read(SRC / "PawnInnkeeper.cpp")
+    picker = read(SRC / "MercenaryInnkeeper.cpp")
     if not picker:
         return
 
@@ -191,7 +191,7 @@ def check_picker(keys: dict[str, str]) -> None:
     # dispatched by the creature's own script id, which for an innkeeper is the core's
     # npc_innkeeper.
     if not re.search(r"\bclass\s+\w+\s*:\s*public\s+AllCreatureScript\b", picker):
-        fail("picker: PawnInnkeeper.cpp declares no AllCreatureScript; the picker has no way "
+        fail("picker: MercenaryInnkeeper.cpp declares no AllCreatureScript; the picker has no way "
              "to reach a creature without a template row or a ScriptName")
     for hook in ("CanCreatureGossipHello", "CanCreatureGossipSelect"):
         if not re.search(rf"\b{hook}\s*\(\s*Player\s*\*\s*\w+\s*,\s*Creature\s*\*\s*\w+", picker):
@@ -202,7 +202,7 @@ def check_picker(keys: dict[str, str]) -> None:
     # creature_template.AIName is set - and 65 of the 125 innkeeper-flagged templates are SmartAI,
     # Razor Hill's Innkeeper Grosk (6928) among them. That is the bug this hook pair replaced.
     if re.search(r"\bGetCreatureAI\s*\(", picker):
-        fail("picker: PawnInnkeeper.cpp hands out a CreatureAI again; that path skips every "
+        fail("picker: MercenaryInnkeeper.cpp hands out a CreatureAI again; that path skips every "
              "innkeeper whose creature_template.AIName is set (65 of 125 are SmartAI)")
     if re.search(r"GetCreatureTemplate\(\)\s*->\s*AIName", picker):
         fail("picker: the picker still refuses creatures by AIName")
@@ -213,23 +213,23 @@ def check_picker(keys: dict[str, str]) -> None:
 
     # Action codes below GOSSIP_OPTION_MAX (21) would swallow the innkeeper's own bind option,
     # because a database gossip row's action is its OptionType.
-    open_action = re.search(r"PAWN_ACTION_OPEN\s*=\s*(\d+)", picker)
+    open_action = re.search(r"MERCENARY_ACTION_OPEN\s*=\s*(\d+)", picker)
     if not open_action:
-        fail("picker: no PAWN_ACTION_OPEN")
+        fail("picker: no MERCENARY_ACTION_OPEN")
     elif int(open_action.group(1)) <= 21:
-        fail(f"picker: PAWN_ACTION_OPEN is {open_action.group(1)}, inside the range the core "
+        fail(f"picker: MERCENARY_ACTION_OPEN is {open_action.group(1)}, inside the range the core "
              f"uses for its own gossip options")
 
     # The picker draws from the module's own pool query. Falling back to
     # sRandomPlayerbotMgr.addclassCache would silently show nothing, because that cache is only
     # filled when Playerbots.AddClassCommand is on and the installer turns it off.
-    mgr = read(SRC / "PawnMgr.cpp")
+    mgr = read(SRC / "MercenaryMgr.cpp")
     if "addclassCache" in mgr:
-        fail("pool: PawnMgr.cpp reads addclassCache, which is empty with AddClassCommand = 0")
+        fail("pool: MercenaryMgr.cpp reads addclassCache, which is empty with AddClassCommand = 0")
     for needle in ("playerbots_account_type", "RefreshPool", "SelectionFor",
-                   "sPawnPersonality.Temperament", "sPawnPersonality.Apply"):
+                   "sMercenaryPersonality.Temperament", "sMercenaryPersonality.Apply"):
         if needle not in mgr:
-            fail(f"pool: PawnMgr.cpp has no {needle}")
+            fail(f"pool: MercenaryMgr.cpp has no {needle}")
 
     # The selection is the pool cycle's, not the menu's: RefreshPool has to clear it, or walking out
     # of the inn and back in would reroll the crowd. And nothing may drop it on logout for the same
@@ -237,20 +237,20 @@ def check_picker(keys: dict[str, str]) -> None:
     if not re.search(r"_decks\.clear\(\)\s*;\s*\n\s*_selections\.clear\(\)", mgr):
         fail("pool: RefreshPool does not clear the selections with the decks")
     if re.search(r"_selections\.erase", mgr):
-        fail("pool: PawnMgr.cpp erases a selection outside RefreshPool; only a pool refresh or a "
+        fail("pool: MercenaryMgr.cpp erases a selection outside RefreshPool; only a pool refresh or a "
              "restart may change a player's crowd")
 
-    for key in ("Pawn.FeaturedMin", "Pawn.FeaturedMax",
-                "Pawn.PoolRefreshMinMinutes", "Pawn.PoolRefreshMaxMinutes"):
+    for key in ("Mercenary.FeaturedMin", "Mercenary.FeaturedMax",
+                "Mercenary.PoolRefreshMinMinutes", "Mercenary.PoolRefreshMaxMinutes"):
         if key not in keys:
             fail(f"pool: {key} is missing from the conf")
 
     # The obelisk is gone; a leftover key or script would look like it still selects something.
     for path in (CONF, INSTALLER, *sorted(SRC.glob("*.cpp"))):
         if "ObeliskEntry" in path.read_text(encoding="utf-8") and path != INSTALLER:
-            fail(f"{path.relative_to(ROOT)}: still refers to Pawn.ObeliskEntry")
-    if "Pawn\\.ObeliskEntry" not in read(INSTALLER):
-        fail("installer: does not drop a stale Pawn.ObeliskEntry from an existing conf")
+            fail(f"{path.relative_to(ROOT)}: still refers to Mercenary.ObeliskEntry")
+    if "Mercenary\\.ObeliskEntry" not in read(INSTALLER):
+        fail("installer: does not drop a stale Mercenary.ObeliskEntry from an existing conf")
 
     notes.append("picker: the two AllCreatureScript gossip hooks on every innkeeper, "
                  "actions clear of the core's option range")
@@ -302,7 +302,7 @@ def strategy_vocabulary() -> set[str] | None:
 
 
 PLAYERBOTS_CONF = PLAYERBOTS / "conf" / "playerbots.conf.dist"
-TEMPERAMENT_KEY = re.compile(r"^Pawn\.Temperament\.(\d+)\.(\d+)$")
+TEMPERAMENT_KEY = re.compile(r"^Mercenary\.Temperament\.(\d+)\.(\d+)$")
 # Playerbots names its premade specs by talent, and the healer ones are the only specs whose
 # healing actions the mana-conservation strategy ever sees. These are whole words, as in the
 # module: "unholy pve" contains "holy" as a substring, and a death knight is no healer.
@@ -362,7 +362,7 @@ def parse_pool(value: str, key: str) -> list[tuple[str, list[str]]]:
 
 
 def has_word(name: str, word: str) -> bool:
-    """True when `word` is a whole word of `name`, the rule PawnArchetype::RoleFor uses."""
+    """True when `word` is a whole word of `name`, the rule MercenaryArchetype::RoleFor uses."""
     return re.search(rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])", name.lower()) is not None
 
 
@@ -371,13 +371,13 @@ def check_personality(keys: dict[str, str]) -> None:
     specs = premade_specs()
 
     pools: list[tuple[str, str]] = []
-    if "Pawn.Voice" not in keys:
-        fail("conf: no Pawn.Voice; every pawn would roll the same non-combat behaviour")
+    if "Mercenary.Voice" not in keys:
+        fail("conf: no Mercenary.Voice; every mercenary would roll the same non-combat behaviour")
     else:
-        pools.append(("Pawn.Voice", keys["Pawn.Voice"]))
-    temperament_keys = sorted(k for k in keys if k.startswith("Pawn.Temperament."))
+        pools.append(("Mercenary.Voice", keys["Mercenary.Voice"]))
+    temperament_keys = sorted(k for k in keys if k.startswith("Mercenary.Temperament."))
     if not temperament_keys:
-        fail("conf: no Pawn.Temperament.* blocks; every pawn would roll an empty temperament")
+        fail("conf: no Mercenary.Temperament.* blocks; every mercenary would roll an empty temperament")
     pools.extend((key, keys[key]) for key in temperament_keys)
 
     voice_profiles = 0
@@ -387,12 +387,12 @@ def check_personality(keys: dict[str, str]) -> None:
     for key, value in pools:
         profiles = parse_pool(value, key)
         if not profiles:
-            # PawnPersonality::Load keeps a block only `if (!pool.empty())`, so an empty one does
+            # MercenaryPersonality::Load keeps a block only `if (!pool.empty())`, so an empty one does
             # not survive as an empty temperament: it is dropped and the spec falls back to
             # whatever the class default is, silently.
             fail(f"conf: {key} defines no profiles; the loader drops an empty pool, so this "
                  f"block adds nothing")
-        if key == "Pawn.Voice":
+        if key == "Mercenary.Voice":
             voice_profiles = len(profiles)
         spec_key = TEMPERAMENT_KEY.fullmatch(key)
         cls = int(spec_key.group(1)) if spec_key else None
@@ -444,60 +444,60 @@ def check_personality(keys: dict[str, str]) -> None:
         return
 
     # Every PvE spec the module offers must have a pool, because an offer with no temperament
-    # rolls a pawn that behaves like every other pawn of its class. Blacklist and variant blocks
+    # rolls a mercenary that behaves like every other mercenary of its class. Blacklist and variant blocks
     # are not held to this: 6.3 and 8.3 never had one, and that gap is not this check's to close.
     # `covered` only holds blocks that parsed to at least one profile: a block that is present
     # but empty is dropped by the loader and would leave the spec with no temperament at all.
     pve = {pair: name for pair, name in specs.items() if name.endswith("pve")}
     for pair, name in sorted(pve.items()):
         if pair not in covered:
-            fail(f"conf: no Pawn.Temperament.{pair[0]}.{pair[1]} for the PvE premade spec "
+            fail(f"conf: no Mercenary.Temperament.{pair[0]}.{pair[1]} for the PvE premade spec "
                  f"{name}; an offer of it would roll an empty temperament")
     notes.append(f"personality: {len(set(pve) & covered)}/{len(pve)} PvE specs have a "
                  f"temperament")
 
     # The traits must land after the last ResetStrategies in the build path: that call rebuilds
     # the role defaults, so a trait applied before it is wiped on the next login.
-    mgr = read(SRC / "PawnMgr.cpp")
+    mgr = read(SRC / "MercenaryMgr.cpp")
     reset = mgr.rfind("ResetStrategies")
-    applied = mgr.rfind("sPawnPersonality.Apply")
+    applied = mgr.rfind("sMercenaryPersonality.Apply")
     if reset == -1 or applied == -1:
-        fail("personality: PawnMgr.cpp has no ResetStrategies or no sPawnPersonality.Apply; the "
+        fail("personality: MercenaryMgr.cpp has no ResetStrategies or no sMercenaryPersonality.Apply; the "
              "traits cannot be landing on a rebuilt engine")
     elif applied < reset:
-        fail("personality: sPawnPersonality.Apply comes before the last ResetStrategies in "
-             "PawnMgr.cpp; that call rebuilds the role defaults, so the trait is wiped")
+        fail("personality: sMercenaryPersonality.Apply comes before the last ResetStrategies in "
+             "MercenaryMgr.cpp; that call rebuilds the role defaults, so the trait is wiped")
 
 
 VOICE_EVENTS = ("kill", "death", "dismiss")
 
 
 def check_voice_lines(keys: dict[str, str]) -> None:
-    """Every Pawn.VoiceLine block names a voice the pool defines, and events the module speaks.
+    """Every Mercenary.VoiceLine block names a voice the pool defines, and events the module speaks.
 
-    A block keyed by a label the pool does not have is dead configuration: a pawn's voice is one of
-    Pawn.Voice's labels, so nothing can ever draw it. The loader drops such a key with a warning at
+    A block keyed by a label the pool does not have is dead configuration: a mercenary's voice is one of
+    Mercenary.Voice's labels, so nothing can ever draw it. The loader drops such a key with a warning at
     boot; this is the same check before the build, where it is cheap to fix.
     """
-    if "Pawn.Voice" not in keys:
+    if "Mercenary.Voice" not in keys:
         return  # check_personality already reports a missing pool
 
     labels: set[str] = set()
-    for chunk in keys["Pawn.Voice"].split("|"):
+    for chunk in keys["Mercenary.Voice"].split("|"):
         label = chunk.strip().partition(":")[0].strip()
         if label:
             labels.add(label)
 
-    line_keys = sorted(key for key in keys if key.startswith("Pawn.VoiceLine."))
+    line_keys = sorted(key for key in keys if key.startswith("Mercenary.VoiceLine."))
     if not line_keys:
-        fail("conf: no Pawn.VoiceLine.* blocks; no pawn would ever say anything")
+        fail("conf: no Mercenary.VoiceLine.* blocks; no mercenary would ever say anything")
         return
 
     for key in line_keys:
-        label = key[len("Pawn.VoiceLine."):]
+        label = key[len("Mercenary.VoiceLine."):]
         if label not in labels:
-            fail(f"conf: {key} names the voice {label!r}, which Pawn.Voice does not define; "
-                 f"a pawn's voice is one of that pool's labels, so the line can never be drawn")
+            fail(f"conf: {key} names the voice {label!r}, which Mercenary.Voice does not define; "
+                 f"a mercenary's voice is one of that pool's labels, so the line can never be drawn")
 
         spoken: set[str] = set()
         for chunk in keys[key].split("|"):
@@ -521,7 +521,7 @@ def check_voice_lines(keys: dict[str, str]) -> None:
 
 
 def check_roster() -> None:
-    cpp = read(SRC / "PawnMgr.cpp")
+    cpp = read(SRC / "MercenaryMgr.cpp")
     if not cpp:
         return
 
@@ -560,7 +560,7 @@ def check_roster() -> None:
 
     # The other half of that: the statement quotes, the caller escapes.
     if "EscapeString" not in cpp:
-        fail("code: PawnMgr.cpp never calls EscapeString; a pet name bound through Execute's "
+        fail("code: MercenaryMgr.cpp never calls EscapeString; a pet name bound through Execute's "
              "variadic overload is written raw, so a quote in it ends the literal early and an "
              "empty one leaves a trailing comma in the statement")
 
@@ -573,7 +573,16 @@ def check_roster() -> None:
     if "state" not in columns or "target_level" not in columns:
         fail("code: the roster table is missing state or target_level")
 
-    notes.append(f"schema: {table_name} has {len(columns)} named columns")
+    # The module was mod-pawn before it was mod-mercenaries and the roster table went with it. The
+    # old name may only appear in the two statements that migrate it: the existence probe and the
+    # RENAME. Anywhere else it would be a query reading a table nothing creates.
+    old = [line.strip() for line in cpp.splitlines() if "pawn_roster" in line]
+    allowed = [line for line in old if "RENAME TABLE" in line or "TableExists(" in line]
+    if len(old) != len(allowed) or not any("RENAME TABLE" in line for line in old):
+        stray = [line for line in old if line not in allowed]
+        fail(f"code: pawn_roster survives outside the migration: {stray or old}")
+
+    notes.append(f"schema: {table_name} has {len(columns)} named columns, migrated from pawn_roster")
 
 
 def check_loader() -> None:
@@ -589,24 +598,24 @@ def check_loader() -> None:
 
 def check_wiring() -> None:
     pins = read(PINS)
-    if "[module.pawn]" not in pins:
-        fail("pins.toml: no [module.pawn] entry")
-    if 'path = "modules/mod-pawn"' not in pins:
-        fail('pins.toml: [module.pawn] does not point at modules/mod-pawn')
+    if "[module.mercenary]" not in pins:
+        fail("pins.toml: no [module.mercenary] entry")
+    if 'path = "modules/mod-mercenaries"' not in pins:
+        fail('pins.toml: [module.mercenary] does not point at modules/mod-mercenaries')
 
     workflow = read(WORKFLOW)
-    for needle in ("modules/mod-pawn", "mod-pawn.conf.dist", "Pawn.FeaturedMin"):
+    for needle in ("modules/mod-mercenaries", "mod-mercenaries.conf.dist", "Mercenary.FeaturedMin"):
         if needle not in workflow:
             fail(f"workflow: {needle} is not mentioned; the build would not ship the module")
-    if "modules/mod-pawn/data/sql" in workflow:
-        fail("workflow: still lists modules/mod-pawn/data/sql, which no longer exists")
+    if "modules/mod-mercenaries/data/sql" in workflow:
+        fail("workflow: still lists modules/mod-mercenaries/data/sql, which no longer exists")
 
     installer = read(INSTALLER)
-    for needle in ("mod-pawn", "PAWN_CONF_DEFAULTS", "pawn_value_ok"):
+    for needle in ("mod-mercenaries", "MERCENARY_CONF_DEFAULTS", "mercenary_value_ok"):
         if needle not in installer:
             fail(f"installer: {needle} is not mentioned; an install would not configure the module")
-    if "modules/mod-pawn/data/sql" in installer:
-        fail("installer: still lists modules/mod-pawn/data/sql, which no longer exists")
+    if "modules/mod-mercenaries/data/sql" in installer:
+        fail("installer: still lists modules/mod-mercenaries/data/sql, which no longer exists")
 
     # The fast gate is only a gate if it is wired: a workflow that runs the compile check on push
     # is what keeps a misspelt core symbol from waiting for the arm64 build.
@@ -616,7 +625,7 @@ def check_wiring() -> None:
              "when someone remembers to run it")
     else:
         text = read(checks_workflow)
-        for needle in ("push:", "scripts/syntax-check.sh", "scripts/pawn/check_pawn.py",
+        for needle in ("push:", "scripts/syntax-check.sh", "scripts/mercenaries/check_mercenaries.py",
                        "scripts/module-flags.txt"):
             if needle not in text:
                 fail(f"wiring: module-checks.yml does not mention {needle}")
@@ -775,23 +784,23 @@ def check_startup_tables() -> None:
     config pass: every blacklist and variant spell name fails to resolve there. A reload happens
     on a running server, where the store is loaded, so that rebuild stays guarded.
     """
-    cpp = read(SRC / "PawnScripts.cpp")
+    cpp = read(SRC / "MercenaryScripts.cpp")
     if not cpp:
         return
 
-    if "sPawnArchetype.Load()" not in method_body(cpp, "OnStartup"):
-        fail("startup: sPawnArchetype.Load() is not in the OnStartup body; the first config "
+    if "sMercenaryArchetype.Load()" not in method_body(cpp, "OnStartup"):
+        fail("startup: sMercenaryArchetype.Load() is not in the OnStartup body; the first config "
              "pass runs before sSpellMgr->LoadSpellInfoStore (World.cpp:302 and World.cpp:407), "
              "so the archetype and variant tables build against an empty spell store and every "
              "blacklist and variant spell name fails to resolve")
 
     config = method_body(cpp, "OnAfterConfigLoad")
-    guarded = re.search(r"if\s*\(\s*reload\s*\)\s*\{[^}]*sPawnArchetype\.Load\(\)", config)
+    guarded = re.search(r"if\s*\(\s*reload\s*\)\s*\{[^}]*sMercenaryArchetype\.Load\(\)", config)
     if not guarded:
         fail("startup: the rebuild in the OnAfterConfigLoad body is not guarded by "
              "`if (reload)`; the first pass runs before the spell store is loaded, so an "
              "unguarded build leaves every blacklist and variant spell name unresolved")
-    elif config.count("sPawnArchetype.Load()") != 1:
+    elif config.count("sMercenaryArchetype.Load()") != 1:
         fail("startup: the OnAfterConfigLoad body builds the archetype table more than once, "
              "so a call sits outside the `if (reload)` guard; the first pass runs before the "
              "spell store is loaded and that call resolves nothing")
@@ -816,29 +825,29 @@ def check_startup_tables() -> None:
 def check_temperament_keys() -> None:
     """The temperament keys are enumerated, never probed.
 
-    A probe of `Pawn.Temperament.<class>.<spec>` is a missing-option warning for every spec the
+    A probe of `Mercenary.Temperament.<class>.<spec>` is a missing-option warning for every spec the
     conf does not define, and the class x spec grid is mostly undefined by design: the old
     probe wrote 47 `Config: Missing property` lines at boot.
     """
-    cpp = read(SRC / "PawnPersonality.cpp")
+    cpp = read(SRC / "MercenaryPersonality.cpp")
     if not cpp:
         return
 
-    if re.search(r'GetOption<[^>]+>\(\s*"Pawn\.Temperament\.', cpp):
-        fail("temperament: PawnPersonality.cpp asks for a literal Pawn.Temperament.<class>."
+    if re.search(r'GetOption<[^>]+>\(\s*"Mercenary\.Temperament\.', cpp):
+        fail("temperament: MercenaryPersonality.cpp asks for a literal Mercenary.Temperament.<class>."
              "<spec> key; every spec the conf does not define logs `Config: Missing property` "
              "at boot, so the keys must be enumerated instead")
 
-    prefix = re.search(r'(\w+)\s*=\s*"Pawn\.Temperament\."', cpp)
+    prefix = re.search(r'(\w+)\s*=\s*"Mercenary\.Temperament\."', cpp)
     # Every pool is enumerated the same way now (voice lines joined temperament), so the check
     # looks for a call that takes the temperament prefix rather than for the first call in the
     # file: which pool is read first is an implementation detail, that this one is enumerated is
     # the invariant.
-    wanted = {'"Pawn.Temperament."'} | ({prefix.group(1)} if prefix else set())
+    wanted = {'"Mercenary.Temperament."'} | ({prefix.group(1)} if prefix else set())
     enumerated = re.findall(r"GetKeysByString\(\s*([^)]*?)\s*\)", cpp)
     if not prefix or not any(argument in wanted for argument in enumerated):
-        fail("temperament: PawnPersonality.cpp does not enumerate the keys with "
-             "GetKeysByString over the Pawn.Temperament. prefix; a spec the conf leaves out "
+        fail("temperament: MercenaryPersonality.cpp does not enumerate the keys with "
+             "GetKeysByString over the Mercenary.Temperament. prefix; a spec the conf leaves out "
              "would then be probed and log `Config: Missing property`")
 
     notes.append("temperament: the keys present are enumerated with GetKeysByString, so an "

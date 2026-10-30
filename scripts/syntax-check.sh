@@ -4,7 +4,7 @@
 #
 # The arm64 build is the only compiler this repository has otherwise: it is a
 # manual dispatch that packages a release and takes most of an hour, and it
-# caught two errors in mod-pawn that were both a misspelt core symbol -
+# caught two errors in mod-mercenaries that were both a misspelt core symbol -
 # GetMSTime for getMSTime, and OnLogin for OnPlayerLogin. A -fsyntax-only pass
 # over the module sources finds both in seconds, which is the difference between
 # a typo caught at the keyboard and a typo caught the next morning.
@@ -17,7 +17,7 @@
 #
 # Usage:
 #   scripts/syntax-check.sh                                   # every module source
-#   scripts/syntax-check.sh modules/mod-pawn/src/PawnMgr.cpp   # named files
+#   scripts/syntax-check.sh modules/mod-mercenaries/src/MercenaryMgr.cpp   # named files
 #   scripts/syntax-check.sh --dump-flags                       # regenerate the flags file
 #
 # Environment:
@@ -165,7 +165,7 @@ if [ "${1:-}" = "--dump-flags" ]; then
         printf '#   @PLAYERBOTS@  the mod-playerbots checkout   (AC_PLAYERBOTS)\n'
         printf '#   @DEPS@        the core dependency headers   (AC_DEPS_ROOT)\n'
         printf '#\n'
-        printf '# The commit below is the core these flags were taken from; scripts/pawn/check_pawn.py\n'
+        printf '# The commit below is the core these flags were taken from; scripts/mercenaries/check_mercenaries.py\n'
         printf '# fails when pins.toml moves to another core commit without this file being regenerated.\n'
         printf '# core: %s\n' "$commit"
         templated_flags "$COMPILE_COMMANDS" keep-placeholders | tr '\0' '\n'
@@ -214,7 +214,7 @@ for source in "${SOURCES[@]}"; do
     checked=$((checked + 1))
 
     # The module's own headers are added per file, so two modules may each have a
-    # PawnMgr.h and never see each other's.
+    # MercenaryMgr.h and never see each other's.
     if output=$("${FLAGS[@]}" -I"$(dirname "$source")" "$source" 2>&1); then
         printf 'ok    %s\n' "${source#"$ROOT"/}"
     else

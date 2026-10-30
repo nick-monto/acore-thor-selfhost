@@ -1,12 +1,12 @@
-# Pawn system: integration plan
+# Mercenary system: integration plan
 
-The feasibility study is [PAWN-SYSTEM-DESIGN.md](PAWN-SYSTEM-DESIGN.md). This is the plan that
+The feasibility study is [MERCENARY-SYSTEM-DESIGN.md](MERCENARY-SYSTEM-DESIGN.md). This is the plan that
 replaces its "what has to be written" section: the design decisions taken since, the route change
-that removes the patch from the pawn work, the exact components, and the order to build them in.
+that removes the patch from the mercenary work, the exact components, and the order to build them in.
 
-The five later features — the innkeeper's per-pawn page and its orders, repair and restock,
+The five later features — the innkeeper's per-mercenary page and its orders, repair and restock,
 retraining, affinity and voice lines — are specified and shipped per
-[PAWN-EXPANSION-PLAN.md](PAWN-EXPANSION-PLAN.md). This document remains the record of the original
+[MERCENARY-EXPANSION-PLAN.md](MERCENARY-EXPANSION-PLAN.md). This document remains the record of the original
 integration and of the decisions that route it.
 
 Every claim about existing behaviour carries a `path:line` reference against
@@ -16,12 +16,12 @@ Every claim about existing behaviour carries a `path:line` reference against
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | Pawns are offered at **player level ± 2** | A pawn you cannot use at your level is noise; a pawn that snaps to your exact level erases the choice. |
-| D2 | A party holds **the player plus two pawns**; a third requires strangers from the world | Keeps the pawns special and makes the ambient crowd useful. |
-| D3 | Each pawn is a **restricted archetype**: one premade PvE spec plus a hard spellbook blacklist, plus a per-pawn variant of its own spec's situational abilities | The player must swap pawns to get a toolkit, not just a body, and two pawns of one spec are different companions. |
-| D4 | Pawns **never compete for loot**: they pass on every roll and never loot a free-for-all corpse | Loot bags are this realm's progression system. |
-| D5 | The pawn doorway is the **innkeeper line only**: `Playerbots.AddClassCommand = 0` | Makes D2 strict by construction, with no patch to the command. The pool is read directly for the same reason. |
-| D6 | The pawn layer is a **new module**, `modules/mod-pawn`, not an extension of the playerbots patch | See "Route" below: the two facts the study called unverified are now verified. |
+| D1 | Mercenaries are offered at **player level ± 2** | A mercenary you cannot use at your level is noise; a mercenary that snaps to your exact level erases the choice. |
+| D2 | A party holds **the player plus two mercenaries**; a third requires strangers from the world | Keeps the mercenaries special and makes the ambient crowd useful. |
+| D3 | Each mercenary is a **restricted archetype**: one premade PvE spec plus a hard spellbook blacklist, plus a per-mercenary variant of its own spec's situational abilities | The player must swap mercenaries to get a toolkit, not just a body, and two mercenaries of one spec are different companions. |
+| D4 | Mercenaries **never compete for loot**: they pass on every roll and never loot a free-for-all corpse | Loot bags are this realm's progression system. |
+| D5 | The mercenary doorway is the **innkeeper line only**: `Playerbots.AddClassCommand = 0` | Makes D2 strict by construction, with no patch to the command. The pool is read directly for the same reason. |
+| D6 | The mercenary layer is a **new module**, `modules/mod-mercenaries`, not an extension of the playerbots patch | See "Route" below: the two facts the study called unverified are now verified. |
 
 ## Route: a module, not a patch
 
@@ -34,7 +34,7 @@ verified, and it is safe:
   and `add_library(modules STATIC ... ${PRIVATE_SOURCES_MODULES})` in
   `modules/CMakeLists.txt:270-300`; the build uses `-DMODULES=static`
   (`.github/workflows/server-aarch64.yml:132`). So `#include "Bot/PlayerbotMgr.h"` from
-  `modules/mod-pawn/src` resolves, and `-DMOD_PLAYERBOTS` reaches the same target through
+  `modules/mod-mercenaries/src` resolves, and `-DMOD_PLAYERBOTS` reaches the same target through
   `game-interface` (`modules/CMakeLists.txt:74-80`).
 - Module SQL applies automatically: `UpdateFetcher.cpp:159-186` scans
   `modules/<name>/data/sql/<dir>` for every module in the compiled `AC_MODULES_LIST`
@@ -42,12 +42,12 @@ verified, and it is safe:
   name. `modules/mod-survivor/data/sql/world/base/` and
   `modules/mod-creature-gear/data/sql/world/base/` are the working precedents.
 
-Nothing in the pawn feature needs to be *inside* a playerbots function, because four hooks already
+Nothing in the mercenary feature needs to be *inside* a playerbots function, because four hooks already
 exist:
 
 | Need | Hook | Evidence |
 |---|---|---|
-| Know when a pawn logs in | `PlayerScript::OnPlayerLogin` — bots log in through the normal path | `botSession->HandlePlayerLoginFromDB(holder)` at `PlayerbotMgr.cpp:256` → `sScriptMgr->OnPlayerLogin(pCurrChar)` at `CharacterHandler.cpp:1126` |
+| Know when a mercenary logs in | `PlayerScript::OnPlayerLogin` — bots log in through the normal path | `botSession->HandlePlayerLoginFromDB(holder)` at `PlayerbotMgr.cpp:256` → `sScriptMgr->OnPlayerLogin(pCurrChar)` at `CharacterHandler.cpp:1126` |
 | Defer work until the bot is in the world | `PlayerbotWorldThreadProcessor::QueueOperation(std::unique_ptr<PlayerbotOperation>)`, a public API over an abstract `PlayerOperation::Execute()` | `PlayerbotWorldThreadProcessor.h:62`, `PlayerbotOperation.h:26-39` |
 | Refuse a spell | `PlayerScript::OnPlayerCanLearnSpell` is checked at the top of `Player::learnSpell` and returns bool | `Player.cpp:3428-3431` |
 | Recruit and dismiss | `PlayerbotHolder::AddPlayerBot(guid, masterAccountId)` / `LogoutPlayerBot(guid)` | `PlayerbotMgr.cpp:88-150`, `:394` |
@@ -58,31 +58,31 @@ The player-centric patch is untouched by this work.
 
 | File | Responsibility |
 |---|---|
-| `modules/mod-pawn/conf/mod-pawn.conf.dist` | `Pawn.*` keys: master switch, cap, level window, page size, featured count and pool refresh, per-archetype blacklists and per-spec variant pools |
-| `modules/mod-pawn/src/pawn_common.h` | Config struct, role enum, shared types |
-| `modules/mod-pawn/src/PawnArchetype.h/.cpp` | Spec choice, blacklist name→id resolution, apply and prune |
-| `modules/mod-pawn/src/PawnMgr.h/.cpp` | Config load, pool refresh, featured draw, roster I/O, offer derivation, recruit/dismiss, login queue |
-| `modules/mod-pawn/src/PawnInnkeeper.cpp` | the two `AllCreatureScript` gossip hooks, with the paged gossip picker on every innkeeper |
-| `modules/mod-pawn/src/PawnScripts.cpp` | `PlayerScript` login queue, spell gate; `WorldScript` that drains the queue |
-| `modules/mod-pawn/src/pawn_loader.cpp` | `Addmod_pawnScripts()`, the symbol the loader generator looks up |
-| `modules/mod-pawn/README.md` | What it does, how to configure it |
+| `modules/mod-mercenaries/conf/mod-mercenaries.conf.dist` | `Mercenary.*` keys: master switch, cap, level window, page size, featured count and pool refresh, per-archetype blacklists and per-spec variant pools |
+| `modules/mod-mercenaries/src/mercenary_common.h` | Config struct, role enum, shared types |
+| `modules/mod-mercenaries/src/MercenaryArchetype.h/.cpp` | Spec choice, blacklist name→id resolution, apply and prune |
+| `modules/mod-mercenaries/src/MercenaryMgr.h/.cpp` | Config load, pool refresh, featured draw, roster I/O, offer derivation, recruit/dismiss, login queue |
+| `modules/mod-mercenaries/src/MercenaryInnkeeper.cpp` | the two `AllCreatureScript` gossip hooks, with the paged gossip picker on every innkeeper |
+| `modules/mod-mercenaries/src/MercenaryScripts.cpp` | `PlayerScript` login queue, spell gate; `WorldScript` that drains the queue |
+| `modules/mod-mercenaries/src/mercenary_loader.cpp` | `Addmod_mercenariesScripts()`, the symbol the loader generator looks up |
+| `modules/mod-mercenaries/README.md` | What it does, how to configure it |
 
 ## Data model
 
 Characters database, because every row belongs to a character pair and joins to `characters`. The
-table is created **programmatically** (`PawnMgr::EnsureSchema`, `CREATE TABLE IF NOT EXISTS`), not by
+table is created **programmatically** (`MercenaryMgr::EnsureSchema`, `CREATE TABLE IF NOT EXISTS`), not by
 module SQL: a failing module SQL file aborts the worldserver boot on this fork
 (`docs/SERVER-STACK.md` §13, which is why mod-survivor creates its three character tables the same
 way).
 
 ```sql
-CREATE TABLE IF NOT EXISTS `pawn_roster` (
+CREATE TABLE IF NOT EXISTS `mercenary_roster` (
   `owner_guid`   INT UNSIGNED NOT NULL,          -- the real player's character
-  `bot_guid`     INT UNSIGNED NOT NULL,          -- the pawn
+  `bot_guid`     INT UNSIGNED NOT NULL,          -- the mercenary
   `spec_no`      TINYINT UNSIGNED NOT NULL,      -- Playerbots.PremadeSpecLink.<class>.<spec_no>
   `role`         TINYINT UNSIGNED NOT NULL,      -- 1 tank, 2 healer, 3 dps
   `state`        TINYINT UNSIGNED NOT NULL,      -- 1 in the party, 0 dismissed
-  `target_level` TINYINT UNSIGNED NOT NULL,      -- the level the pawn was recruited at
+  `target_level` TINYINT UNSIGNED NOT NULL,      -- the level the mercenary was recruited at
   `built`        TINYINT UNSIGNED NOT NULL,      -- 1 once the gear pass has run
   `paid`         TINYINT UNSIGNED NOT NULL,      -- 1 once this owner has paid the hire fee
   `updated_at`   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS `pawn_roster` (
 ```
 
 A dismissed row is kept (`state = 0`) so the archetype, the level and the paid fee survive and
-re-recruiting the same pawn gives the same pawn for nothing. `state = 1` rows are the party: they are
+re-recruiting the same mercenary gives the same mercenary for nothing. `state = 1` rows are the party: they are
 what the cap counts and what the login hook restores. `built` and `paid` are added to a table an
 earlier build made through an `information_schema` lookup plus `ALTER`, because
 `ADD COLUMN IF NOT EXISTS` is MariaDB-only.
@@ -100,27 +100,27 @@ earlier build made through an `information_schema` lookup plus `ALTER`, because
 ## Config
 
 ```ini
-Pawn.Enable = 1
-Pawn.MaxPawns = 2                  # D2
-Pawn.HireFeePercent = 100          # level^3 copper
-Pawn.HireFeeHeldPercent = 100      # each pawn held adds the base fee again
-Pawn.GearFloorPercent = 85         # the per-pawn gear ratio's band, and the price band
-Pawn.GearCapPercent = 150
-Pawn.LevelWindow = 2               # D1, in levels either way
-Pawn.GainXP = 0                    # a pawn is pinned to the level it was hired at
-Pawn.OfferedPerPage = 12           # gossip carries at most 16 rows per page
-Pawn.FeaturedMin = 10              # per selection, one per pool cycle
-Pawn.FeaturedMax = 15
-Pawn.PoolRefreshMinMinutes = 40    # pool re-read, random inside the range
-Pawn.PoolRefreshMaxMinutes = 60
-Pawn.Debug = 0
+Mercenary.Enable = 1
+Mercenary.MaxMercenaries = 2                  # D2
+Mercenary.HireFeePercent = 100          # level^3 copper
+Mercenary.HireFeeHeldPercent = 100      # each mercenary held adds the base fee again
+Mercenary.GearFloorPercent = 85         # the per-mercenary gear ratio's band, and the price band
+Mercenary.GearCapPercent = 150
+Mercenary.LevelWindow = 2               # D1, in levels either way
+Mercenary.GainXP = 0                    # a mercenary is pinned to the level it was hired at
+Mercenary.OfferedPerPage = 12           # gossip carries at most 16 rows per page
+Mercenary.FeaturedMin = 10              # per selection, one per pool cycle
+Mercenary.FeaturedMax = 15
+Mercenary.PoolRefreshMinMinutes = 40    # pool re-read, random inside the range
+Mercenary.PoolRefreshMaxMinutes = 60
+Mercenary.Debug = 0
 
 # Archetype blacklists: the signature abilities of the *other* specs of the same class,
 # by spell name. <class> is the ChrClasses id (1 warrior, 2 paladin, 3 hunter, 4 rogue,
 # 5 priest, 6 death knight, 7 shaman, 8 mage, 9 warlock, 11 druid); <spec_no> is the
 # Playerbots.PremadeSpecLink number. Names are resolved against the spell table at startup and
 # an unresolved name is logged, never silently ignored.
-Pawn.Blacklist.1.0 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam
+Mercenary.Blacklist.1.0 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam
 ```
 
 Spell names, not ids: the server has no name→id table, but `SpellMgr::GetSpellInfo` and
@@ -133,7 +133,7 @@ reviewable in a config file where a bare id is not.
 
 `RandomPlayerbotMgr::addclassCache` (`RandomPlayerbotMgr.h:172`) already holds the type-2 pool
 per team and class, keyed by `GetTeamClassIdx(isAlliance, claz)` (`:168`). For a player, the offers
-are that pool filtered to pawns that are offline, not in a real guild, and not already in this
+are that pool filtered to mercenaries that are offline, not in a real guild, and not already in this
 player's party — the same filters the `addclass` command applies (`PlayerbotMgr.cpp:1200-1225`).
 
 Each offer carries a **derived** level and spec, stable for the pair:
@@ -152,14 +152,14 @@ name is `Playerbots.PremadeSpecName.<class>.<spec_no>`.
 
 ### Recruit
 
-1. Refuse when `Pawn.Enable = 0`, when the player is in combat, or when the pawn is already online.
-2. Refuse when the party already holds `Pawn.MaxPawns` pawns (D2). The message names both exits:
-   dismiss a pawn at the innkeeper, or recruit strangers in the world.
+1. Refuse when `Mercenary.Enable = 0`, when the player is in combat, or when the mercenary is already online.
+2. Refuse when the party already holds `Mercenary.MaxMercenaries` mercenaries (D2). The message names both exits:
+   dismiss a mercenary at the innkeeper, or recruit strangers in the world.
 3. Refuse when the hire fee is unaffordable. The fee is
-   `player_level^3 * Pawn.HireFeePercent / 100 * gear_ratio / 100 *
-   (100 + Pawn.HireFeeHeldPercent * pawns_held) / 100` copper, where `gear_ratio` is the pawn's
-   strength in percent of the owner's gear score, and it is 0 for a pawn this owner has already paid
-   for. The player's level, not the pawn's, is the baseline: a pawn geared like the player costs
+   `player_level^3 * Mercenary.HireFeePercent / 100 * gear_ratio / 100 *
+   (100 + Mercenary.HireFeeHeldPercent * mercenaries_held) / 100` copper, where `gear_ratio` is the mercenary's
+   strength in percent of the owner's gear score, and it is 0 for a mercenary this owner has already paid
+   for. The player's level, not the mercenary's, is the baseline: a mercenary geared like the player costs
    `player_level^3`, and the gear ratio moves it in a band that does not widen as the player levels. Level cubed is calibrated against the loot-bag money table: 10-20 minutes of
    ordinary farming at every level that matters. It is charged *here*, after every check, and not
    through the gossip box: the core deducts box money after the script hook and unconditionally, so
@@ -171,21 +171,21 @@ name is `Playerbots.PremadeSpecName.<class>.<spec_no>`.
 
 ### Login
 
-`OnPlayerLogin` only *marks* a pawn pending; a `WorldScript::OnUpdate` drains the mark once
+`OnPlayerLogin` only *marks* a mercenary pending; a `WorldScript::OnUpdate` drains the mark once
 `ObjectAccessor::FindConnectedPlayer(guid)->IsInWorld()`. Two reasons: the factory wants a player in
-the world, and this way the pawn's own level is applied **after** playerbots' re-level pass, which
-fires on login when the pawn is more than three levels from its master
+the world, and this way the mercenary's own level is applied **after** playerbots' re-level pass, which
+fires on login when the mercenary is more than three levels from its master
 (`PlayerbotMgr.cpp:639-651`). Applied work:
 
-1. If the pawn's level is not the one it was hired at (`pawn_roster.target_level`), rebuild it
+1. If the mercenary's level is not the one it was hired at (`mercenary_roster.target_level`), rebuild it
    there: `PlayerbotFactory factory(bot, target, ...)` then `factory.Randomize(false)`. This is what
    undoes playerbots' login pass, which rebuilds a type-2 bot at its master's exact level when the
-   gap is more than three — a pawn does not follow its owner up. It also sets
-   `PLAYER_FLAGS_NO_XP_GAIN` unless `Pawn.GainXP`, so the level cannot drift between logins.
+   gap is more than three — a mercenary does not follow its owner up. It also sets
+   `PLAYER_FLAGS_NO_XP_GAIN` unless `Mercenary.GainXP`, so the level cannot drift between logins.
 2. `PlayerbotFactory::InitTalentsBySpecNo(bot, spec_no, true)` — the archetype's spec, pinned
    (`PlayerbotFactory.cpp:1802`).
-3. Prune every blacklisted spell the pawn still has (`Player::removeSpell`), and the variant
-   abilities this pawn was not dealt.
+3. Prune every blacklisted spell the mercenary still has (`Player::removeSpell`), and the variant
+   abilities this mercenary was not dealt.
 4. `bot->SaveToDB(false, false)` so the next login starts from the right state.
 
 The player's own login restores `state = 1` rows by calling `AddPlayerBot` for each, which is what
@@ -193,19 +193,19 @@ makes a party survive a relog and a restart.
 
 ### Spell gate
 
-`OnPlayerCanLearnSpell` returns false for a blacklisted spell on a pawn. That one gate covers every
+`OnPlayerCanLearnSpell` returns false for a blacklisted spell on a mercenary. That one gate covers every
 learn path — factory initialisation (`PlayerbotFactory.cpp:899-923`), trainer
 (`TrainerAction.cpp:166`), level-up maintenance (`AutoMaintenanceOnLevelupAction.cpp:50-68`) and
 quest rewards — so a restriction cannot be undone by any of them.
 
 ### Gear
 
-A pawn has to arrive dressed for the spec it was pinned to, at its own level — not in the gear the
-factory rolled for a spec it no longer has. The order in `PawnMgr::ApplyPawn` is therefore:
+A mercenary has to arrive dressed for the spec it was pinned to, at its own level — not in the gear the
+factory rolled for a spec it no longer has. The order in `MercenaryMgr::ApplyMercenary` is therefore:
 
 1. `PlayerbotFactory::Randomize` — on the first build and on a re-level (level, spells, talents,
    gear for whatever spec it happened to roll, bags, food, reagents);
-2. `PawnArchetype::Apply` — the pinned spec's talents, and the blacklist;
+2. `MercenaryArchetype::Apply` — the pinned spec's talents, and the blacklist;
 3. `PlayerbotAI::ResetStrategies(false)` — the weight calculator's role test (`IsTank`/`IsHeal`/
    `IsCaster` with `bySpec=false`) reads `STRATEGY_TYPE_*` on the AI's engines, not the talent tab,
    and those strategies still describe the spec step 1 rolled. This is the same call `Randomize`
@@ -214,26 +214,26 @@ factory rolled for a spec it no longer has. The order in `PawnMgr::ApplyPawn` is
    the tab, so it runs again against the pinned talents (`ChangeTalentsAction::SpecPick` does the
    same);
 5. `DestroyEquippedGear`, because step 1's items were chosen for the other spec;
-6. `InitEquipment` at the pawn's level, then ammo, enchants/gems and a durability repair.
+6. `InitEquipment` at the mercenary's level, then ammo, enchants/gems and a durability repair.
 
 Step 6 is `PlayerbotFactory::AutoGear`'s own sequence with one difference: the gear-score cap comes
 from the **owner** — `GetMixedGearScore(owner, withBags = true, topN = 12)`, the average score of the
-owner's twelve best items — times the pawn's own **gear ratio**, instead of an item level. The ratio
-is drawn per pawn from the same seed as the level and the spec, triangular with its peak at 100 over
-`[Pawn.GearFloorPercent, Pawn.GearCapPercent]`, so one pawn offered at a level arrives in better gear
-than another and the hire fee says so. With the defaults (85, 150) a pawn can be a seventh weaker than
+owner's twelve best items — times the mercenary's own **gear ratio**, instead of an item level. The ratio
+is drawn per mercenary from the same seed as the level and the spec, triangular with its peak at 100 over
+`[Mercenary.GearFloorPercent, Mercenary.GearCapPercent]`, so one mercenary offered at a level arrives in better gear
+than another and the hire fee says so. With the defaults (85, 150) a mercenary can be a seventh weaker than
 its owner or half again as strong. Item choice is spec-aware
 because `InitEquipment` scores every candidate with `StatsWeightCalculator`, whose collector type
 comes from the AI's strategies (`TankWarriorStrategy` declares `STRATEGY_TYPE_TANK`, and
 `AddDefaultCombatStrategies` picks it from the talent tab) and whose tab comes from
 `GetPlayerSpecTab`. Steps 3 and 4 are what make those agree with the pinned spec.
 
-That pass runs **once**: the roster's `built` column records it, so afterwards the pawn keeps
-whatever it wears, including gear the player gives it. A pawn is pinned to the level it was hired at,
+That pass runs **once**: the roster's `built` column records it, so afterwards the mercenary keeps
+whatever it wears, including gear the player gives it. A mercenary is pinned to the level it was hired at,
 so it does not level in the party and there is no maintenance pass to follow it up. The pass runs
 again only when the pin has to be restored — playerbots rebuilt the bot at its master's level on
-login, or the pawn was re-hired at a new offer level — and then it re-gears at that level with the
-owner's gear score as the ceiling. A dismissed pawn keeps its `built` flag, so re-recruiting it at
+login, or the mercenary was re-hired at a new offer level — and then it re-gears at that level with the
+owner's gear score as the ceiling. A dismissed mercenary keeps its `built` flag, so re-recruiting it at
 the same level does not strip the gear it earned — unless the recruit names a different spec or a
 new level, in which case the gear on it was scored for the old build and the pass runs again.
 
@@ -261,7 +261,7 @@ own script id (`CreatureScript.cpp:24-41`) — an innkeeper's is the core's `npc
 Action codes start at `1000`: a database gossip row's action *is* its `OptionType`, and
 `GOSSIP_OPTION_MAX` is 21 (`GossipDef.h:33-57`), so the `1..99` range this plan first sketched would
 have swallowed the bind option. `1000` opens the picker, `1010..1099` recruit an offer,
-`1110..1199` dismiss a party pawn, `1200`/`1201` change page. Pages hold `Pawn.OfferedPerPage` rows
+`1110..1199` dismiss a party mercenary, `1200`/`1201` change page. Pages hold `Mercenary.OfferedPerPage` rows
 (12) plus navigation, under the 16-row packet cap (`GossipDef.cpp:199-201`) and far under the
 32-row fatal `ASSERT` (`GossipDef.cpp:43`). The selection is cached per player for the life of one
 pool cycle and the rows shown are rebuilt from it, so a click on a stale menu reopens the picker
@@ -276,7 +276,7 @@ it is still empty — a boot can finish before playerbots has created the pool c
 does **not** read `sRandomPlayerbotMgr.addclassCache`: that cache is only filled when
 `Playerbots.AddClassCommand` is on, and the installer turns it off (D5).
 
-A player's **selection** is a random count in `[Pawn.FeaturedMin, Pawn.FeaturedMax]` of candidates,
+A player's **selection** is a random count in `[Mercenary.FeaturedMin, Mercenary.FeaturedMax]` of candidates,
 dealt off a per-player **deck** rather than sampled: the eligible pool is shuffled with Fisher-Yates
 (SplitMix64 seeded from the player and a per-draw counter, so the global RNG is untouched), the next
 rows are handed out, and the cursor carries across cycles until the deck is exhausted — then it is
@@ -286,8 +286,8 @@ into the next shuffle). No face repeats until the whole deck has been dealt, and
 reshuffles every deck.
 
 The selection is dealt once per pool cycle and **not** per visit: the first open after a refresh (or
-a restart) deals it, and every open until the next refresh shows the same pawns at the same spec, so
-the picker cannot be rerolled by walking out of the inn and back in. Recruiting a pawn takes it out
+a restart) deals it, and every open until the next refresh shows the same mercenaries at the same spec, so
+the picker cannot be rerolled by walking out of the inn and back in. Recruiting a mercenary takes it out
 of the selection; dismissing it does not put it back; a selection with nothing eligible left on it
 (all recruited, logged in or dropped from the pool) is dealt again, because a menu with no rows
 cannot be browsed.
@@ -310,55 +310,55 @@ Config only, in the installer:
 | `Playerbots.LootGreedRollLevel` | `0` | a bot's GREED becomes PASS (`:93`) |
 | `Playerbots.FreeMethodLoot` | `0` | bots do not loot free-for-all corpses (`LootAction.cpp:57`) |
 
-With all three, a pawn passes on every roll under any loot method and leaves the corpse alone.
+With all three, a mercenary passes on every roll under any loot method and leaves the corpse alone.
 
 ### Party cap (D2, D5)
 
 The cap is enforced in the recruit path by counting `state = 1` rows. The command-level bypass is
 closed by configuration rather than by code: the installer writes `Playerbots.AddClassCommand = 0`,
 which restricts `.playerbots bot addclass` to GMs (`PlayerbotMgr.cpp:1133-1137`), leaving the
-innkeeper picker as the only doorway to a pool pawn. Strangers — random bots met in the world — are not
-pool pawns and are not counted, which is exactly the intended second route to a full group.
+innkeeper picker as the only doorway to a pool mercenary. Strangers — random bots met in the world — are not
+pool mercenaries and are not counted, which is exactly the intended second route to a full group.
 
 ## Wiring
 
 | File | Change |
 |---|---|
-| `.github/workflows/server-aarch64.yml` | copy `modules/mod-pawn` into `core/modules/`; run `scripts/pawn/check_pawn.py` before the build; assert `$PREFIX/etc/modules/mod-pawn.conf.dist`, its blacklist and its pool keys after install; name the feature in the release notes |
-| `pins.toml` | `[module.pawn]` entry, in-repo module like `mod-survivor` |
-| `scripts/thor-install.sh` | fetch pattern for `--from-source`, `conf_pair modules/mod-pawn`, `Pawn.*` and the loot/`AddClassCommand`/pool-size keys, a stale `Pawn.ObeliskEntry` drop on repair, and a log line |
+| `.github/workflows/server-aarch64.yml` | copy `modules/mod-mercenaries` into `core/modules/`; run `scripts/mercenaries/check_mercenaries.py` before the build; assert `$PREFIX/etc/modules/mod-mercenaries.conf.dist`, its blacklist and its pool keys after install; name the feature in the release notes |
+| `pins.toml` | `[module.mercenary]` entry, in-repo module like `mod-survivor` |
+| `scripts/thor-install.sh` | fetch pattern for `--from-source`, `conf_pair modules/mod-mercenaries`, `Mercenary.*` and the loot/`AddClassCommand`/pool-size keys, a stale `Mercenary.ObeliskEntry` drop on repair, and a log line |
 | `README.md`, `docs/RUNBOOK.md`, `docs/SERVER-STACK.md` | feature, operation and module-table rows |
-| `docs/PAWN-SYSTEM-DESIGN.md` | point its decisions at this plan; the patch route is superseded |
+| `docs/MERCENARY-SYSTEM-DESIGN.md` | point its decisions at this plan; the patch route is superseded |
 
 ## Phases
 
 | Phase | Work | Acceptance |
 |---|---|---|
-| P1 | Module skeleton: conf, loader, config struct, `PawnMgr` roster I/O and schema creation | module directory complete; loader symbol `Addmod_pawnScripts` present; the roster table is created on first boot |
+| P1 | Module skeleton: conf, loader, config struct, `MercenaryMgr` roster I/O and schema creation | module directory complete; loader symbol `Addmod_mercenariesScripts` present; the roster table is created on first boot |
 | P2 | Archetypes: spec choice, name resolution, apply and prune | blacklist names resolve; an unresolved name logs an error at startup |
 | P3 | Picker: the innkeeper line, gossip pages, recruit and dismiss | the line appears on an innkeeper beside the bind option, pages, recruits and dismisses |
-| P4 | Login queue, level window, spell gate, party restore | a recruited pawn returns after relog and after a restart |
+| P4 | Login queue, level window, spell gate, party restore | a recruited mercenary returns after relog and after a restart |
 | P5 | Installer and CI wiring, pins, docs | workflow copies and asserts the module; installer writes the keys |
-| P6 | Offline checks | `scripts/pawn/check_pawn.py` passes: config keys used in code exist in the `.dist`, the installer's defaults and the conf agree both ways, the picker is an `AllCreatureScript` answering the two gossip hooks, gated on the innkeeper flag, with actions clear of the core's range and no `GetCreatureAI` left in it, no module class derives from a database-bound script type, the spell-derived tables are built in `OnStartup` and only rebuilt under `if (reload)`, the temperament keys are enumerated rather than probed, the pool reads the playerbots account table, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
+| P6 | Offline checks | `scripts/mercenaries/check_mercenaries.py` passes: config keys used in code exist in the `.dist`, the installer's defaults and the conf agree both ways, the picker is an `AllCreatureScript` answering the two gossip hooks, gated on the innkeeper flag, with actions clear of the core's range and no `GetCreatureAI` left in it, no module class derives from a database-bound script type, the spell-derived tables are built in `OnStartup` and only rebuilt under `if (reload)`, the temperament keys are enumerated rather than probed, the pool reads the playerbots account table, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
 
 ## Verification
 
 The compile gate is the arm64 workflow, as it is for every other module in this repository: this
 host has no Boost headers, so no AzerothCore translation unit can be compiled locally
 (`boost/version.hpp` is absent; the build tree at `azerothcore-wotlk/build` cannot compile). What is
-verifiable offline is checked by `scripts/pawn/check_pawn.py`, which the workflow runs before it
+verifiable offline is checked by `scripts/mercenaries/check_mercenaries.py`, which the workflow runs before it
 builds - the roster schema, the conf, the installer's defaults and the picker's own invariants are
 cross-checked before the 40-minute build rather than after it. The in-game steps are:
 
 1. Talk to an innkeeper: the line sits beside "make this inn your home" and the bind option still
-   works. The page lists 10-15 pawns within ±2 levels of the player, each with class, spec and
-   level; closing and reopening shows the same pawns, and the same face keeps its level and spec.
+   works. The page lists 10-15 mercenaries within ±2 levels of the player, each with class, spec and
+   level; closing and reopening shows the same mercenaries, and the same face keeps its level and spec.
 2. Recruit one: it appears in the party, at the level the menu showed, with the spec the menu named.
 3. Recruit a second; a third recruit is refused and the message names the two exits.
 4. `.playerbots bot addclass warrior` as a non-GM is refused.
-5. Whisper the pawn `train`-level abilities it should not have: it never learns a blacklisted spell
+5. Whisper the mercenary `train`-level abilities it should not have: it never learns a blacklisted spell
    (`OnPlayerCanLearnSpell` refuses), and the spell is absent from its spellbook.
-6. Kill something with a drop: both pawns pass; the corpse is the player's under free-for-all.
-7. Relog, then restart the world server: both pawns return without being re-recruited.
-8. Level past the window with a pawn in the party: it stays at its hired level, the inn marks it
+6. Kill something with a drop: both mercenaries pass; the corpse is the player's under free-for-all.
+7. Relog, then restart the world server: both mercenaries return without being re-recruited.
+8. Level past the window with a mercenary in the party: it stays at its hired level, the inn marks it
    `fallen behind`, and hiring it again at the new offer level charges the fee once.

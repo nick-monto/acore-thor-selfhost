@@ -1,11 +1,11 @@
-# Pawn system (Dragon's Dogma style)
+# Mercenary system (Dragon's Dogma style)
 
 A solo realm should feel like a party game, not a summoning game. The request: walk up to an
 obelisk in a town, pick which bots travel with you, and have those bots fight, level and gear
 alongside you as a stable roster rather than as anonymous bodies that happen to be nearby.
 
 This document is a feasibility study, not an implementation. It states what the pinned
-`mod-playerbots` and core already provide, what a pawn layer would have to add, and where the
+`mod-playerbots` and core already provide, what a mercenary layer would have to add, and where the
 real risks are. Every claim about existing behaviour carries a `path:line` reference against
 `mod-playerbots@d750b4b` and `azerothcore-wotlk@8a4e76e`; claims that were not verified in
 source are marked **[INFERENCE]**.
@@ -17,7 +17,7 @@ assigns those random bots to the player's zone so the world is not empty, but th
 ambient: the player did not choose those bots, cannot keep them, and they are replaced as the zone
 tier reshuffles. Nothing in the current setup gives the player a *party* with identity.
 
-What a pawn system needs, in the game's terms:
+What a mercenary system needs, in the game's terms:
 
 1. A roster of named, persistent bots with a class and a role.
 2. A place in town to swap them, and a UI to choose from.
@@ -43,12 +43,12 @@ roster and the UI are missing.
 
 Two consequences worth stating plainly:
 
-- **Levelling needs no new code.** A pawn is a real character in a real group, and the level it is
-  built to is set by the module on recruit. It is deliberately *not* levelled by play: a pawn that
+- **Levelling needs no new code.** A mercenary is a real character in a real group, and the level it is
+  built to is set by the module on recruit. It is deliberately *not* levelled by play: a mercenary that
   gained XP would never need exchanging, so the roster would stop being a set of contracts. The pin
   is `PLAYER_FLAGS_NO_XP_GAIN` plus a rebuild at the hired level, which is cheaper than a sync
   feature and needs no XP plumbing of its own.
-- **The pawn pool already exists on the device, most likely.** The installer sets
+- **The mercenary pool already exists on the device, most likely.** The installer sets
   `Playerbots.MinRandomBots`/`MaxRandomBots` (`scripts/thor-install.sh:1266-1267`) but never touches
   `AddClassAccountPoolSize`, so the shipped default of 50 accounts applies. **[INFERENCE]** the
   realm therefore holds ~500 type-2 characters today, all level 1 and never logged in. Verify on
@@ -65,9 +65,9 @@ Three things, and only three:
 
 1. **A roster.** Nothing records *which* bots belong to the player. `BotAutologin` exists, but it
    logs in every character on the player's own account (`src/Bot/PlayerbotMgr.cpp:1710-1760`), and
-   pool pawns live on `rndbot*` accounts, not the player's. So today a recruited pawn is gone at
+   pool mercenaries live on `rndbot*` accounts, not the player's. So today a recruited mercenary is gone at
    the next relog and must be re-recruited by name. A roster table plus a login hook fixes that.
-2. **A picker.** No surface exists to browse the pool or see a pawn's class, level and role.
+2. **A picker.** No surface exists to browse the pool or see a mercenary's class, level and role.
 3. **The obelisk.** Nothing in town triggers any of it.
 
 > **Superseded in the built module.** The picker is one extra gossip line on every innkeeper: two
@@ -79,7 +79,7 @@ Three things, and only three:
 > in `script_name` and registers nothing without a row, and gossip is dispatched by the creature's
 > own script id, which for an innkeeper is the core's `npc_innkeeper`. The analysis below is kept
 > because it is what made the gameobject route look workable. See
-> [`PAWN-INTEGRATION-PLAN.md`](PAWN-INTEGRATION-PLAN.md) "Picker".
+> [`MERCENARY-INTEGRATION-PLAN.md`](MERCENARY-INTEGRATION-PLAN.md) "Picker".
 
 ## The obelisk
 
@@ -119,85 +119,85 @@ That gives two ways to present the picker, and the cheap plan is to build the sm
 | Surface | Reaches | Effort | Limit |
 |---|---|---|---|
 | Gossip menu on the obelisk | any client, no addon | small: one `GameObjectScript` | 16 options/page, plain text only, no sorting or filtering |
-| `PAWN` addon channel + a `Pawn` addon | this launcher only | medium: addon frame plus the same server calls | none worth worrying about; a list frame with class icons and role buttons |
+| `MERCENARY` addon channel + a `Mercenary` addon | this launcher only | medium: addon frame plus the same server calls | none worth worrying about; a list frame with class icons and role buttons |
 
-Recommendation: server-side protocol first (`PAWN\tlist` → rows; `PAWN\trecruit <guid>`;
-`PAWN\tdismiss <guid>`), with the gossip menu as a thin renderer over the same calls. The addon then
+Recommendation: server-side protocol first (`MERCENARY\tlist` → rows; `MERCENARY\trecruit <guid>`;
+`MERCENARY\tdismiss <guid>`), with the gossip menu as a thin renderer over the same calls. The addon then
 replaces the renderer without touching the model. This mirrors how `EInteract` is layered: the
 module answers whispers, the addon only presents them.
 
-## The pawn model
+## The mercenary model
 
-**A pawn is a type-2 addclass character, recruited into the player's party and recorded in a
+**A mercenary is a type-2 addclass character, recruited into the player's party and recorded in a
 roster.** Two sources are worth supporting:
 
-1. **Pool pawns** — the ~500 existing type-2 characters. Instant to use, arrive levelled and geared
+1. **Pool mercenaries** — the ~500 existing type-2 characters. Instant to use, arrive levelled and geared
    to the player, not customisable, and the roster can offer a stable subset (say 12) so the obelisk
    reads like a rift rather than a database dump.
-2. **Own-account pawns** — characters the player creates on their own account and then recruits.
+2. **Own-account mercenaries** — characters the player creates on their own account and then recruits.
    `AllowAccountBots = 1` already permits this (`conf/playerbots.conf.dist:161`), and `BotAutologin = 0`
    means they are not dragged in automatically. These are the ones a player would actually invest in:
    they keep their gear, their talents and their name, and they level purely by playing.
 
 Both are the same roster row; the difference is only where the character came from.
 
-**Composition.** A party holds 5, so 4 pawns beside the player (Dragon's Dogma gives 3). A raid
+**Composition.** A party holds 5, so 4 mercenaries beside the player (Dragon's Dogma gives 3). A raid
 group is available but should not be the default: `GroupInviteOperation` converts a full party to a
 raid automatically (`src/Bot/PlayerbotMgr.cpp:600-618`), so a 5th recruit silently becomes a raid.
 
 **Roles.** Playerbots expresses behaviour as strategies, which is what the picker should expose:
-tank, healer, dps. A pawn's class already suggests a role; the picker sets the strategy preset, and
+tank, healer, dps. A mercenary's class already suggests a role; the picker sets the strategy preset, and
 the roster remembers it.
 
-**Loot.** This needs a decision, because it is the one place where pawns can annoy a solo player.
+**Loot.** This needs a decision, because it is the one place where mercenaries can annoy a solo player.
 Bots roll by config (`Playerbots.LootNeedRollLevel = 1`, `Playerbots.LootGreedRollLevel = 0`,
 `conf/playerbots.conf.dist:316,321`) and keep looting under free-for-all only when
 `Playerbots.FreeMethodLoot` is enabled (`:312`). With loot bags driving progression on this realm,
-the recommended defaults are: group loot set to free-for-all, `FreeMethodLoot = 0`, so pawns fight
+the recommended defaults are: group loot set to free-for-all, `FreeMethodLoot = 0`, so mercenaries fight
 and do not compete for drops.
 
 **Dismissal.** `.playerbots bot remove` logs the bot out (`src/Bot/PlayerbotMgr.cpp:754-770`), the character
 saves itself, and the roster row is marked released. Re-recruiting later restores it as it was,
 including gear, because it is the same character.
 
-**Gearing a pawn.** No new code: a pawn is a player character, so the trade window works. The bot
+**Gearing a mercenary.** No new code: a mercenary is a player character, so the trade window works. The bot
 accepts a trade from its master or from a group member and refuses everyone else ("I'm kind of busy
 now", `src/Ai/Base/Actions/TradeStatusAction.cpp:25-38`), and when the trade completes
 (`TRADE_STATUS_TRADE_ACCEPT`) `EquipUpgradesPacketAction` scans its bags and equips what is an
 upgrade — defined as a score above `Playerbots.EquipUpgradeThreshold` (default 1.1×) of the item
 already in that slot (`EquipAction.cpp:369-403`, `ItemUsageValue.cpp:290-310`). A sidegrade stays in
-the bag. To force one specific item past that threshold, whisper the pawn `e <item link>`: the
+the bag. To force one specific item past that threshold, whisper the mercenary `e <item link>`: the
 `e` trigger runs the `equip` action, which parses `|Hitem:` links and equips exactly those
 (`ChatCommandHandlerStrategy.cpp:42`, `ChatHelper::parseItems`). `.playerbots bot init=<quality>`
 remains the blunt instrument that re-rolls the whole set.
 
 Two config keys gate this, and both default to the useful value: `Playerbots.AutoEquipUpgradeLoot = 1`
 (`conf/playerbots.conf.dist:291-293`) and `Playerbots.EnableRandomBotTrading = 1` (`:788-790`). The
-trading key matters specifically for pawns because type-2 bots are treated as randombots by that
+trading key matters specifically for mercenaries because type-2 bots are treated as randombots by that
 gate: `0` disables trading with them outright, `2` ("only buy") still accepts gifts, and `3`
 ("only sell") refuses them (`TradeStatusAction.cpp:40-49`, `:235-248`).
 
 ## What has to be written
 
-**Superseded by [PAWN-INTEGRATION-PLAN.md](PAWN-INTEGRATION-PLAN.md).** That document carries the
+**Superseded by [MERCENARY-INTEGRATION-PLAN.md](MERCENARY-INTEGRATION-PLAN.md).** That document carries the
 decisions taken since this study, the component list, the ordered phases and the acceptance
 criteria. What follows is the study's original sketch, kept for the reasoning; where the two
 disagree, the plan wins.
 
 ### Roster schema
 
-The final table is `pawn_roster` in the **characters** database, created programmatically at startup
+The final table is `mercenary_roster` in the **characters** database, created programmatically at startup
 (`CREATE TABLE IF NOT EXISTS`) rather than by module SQL, because a failing module SQL file aborts
 the worldserver boot on this fork (`SERVER-STACK.md` §13):
 
 ```sql
-CREATE TABLE IF NOT EXISTS `pawn_roster` (
+CREATE TABLE IF NOT EXISTS `mercenary_roster` (
   `owner_guid`   INT UNSIGNED NOT NULL,          -- the real player's character
-  `bot_guid`     INT UNSIGNED NOT NULL,          -- the pawn
+  `bot_guid`     INT UNSIGNED NOT NULL,          -- the mercenary
   `spec_no`      TINYINT UNSIGNED NOT NULL,      -- Playerbots.PremadeSpecLink.<class>.<spec_no>
   `role`         TINYINT UNSIGNED NOT NULL,      -- 1 tank, 2 healer, 3 dps
   `state`        TINYINT UNSIGNED NOT NULL,      -- 1 in the party, 0 dismissed
-  `target_level` TINYINT UNSIGNED NOT NULL,      -- the level the pawn was recruited at
+  `target_level` TINYINT UNSIGNED NOT NULL,      -- the level the mercenary was recruited at
   `built`        TINYINT UNSIGNED NOT NULL,      -- 1 once the gear pass has run
   `paid`         TINYINT UNSIGNED NOT NULL,      -- 1 once this owner has paid the hire fee
   `updated_at`   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -213,7 +213,7 @@ No `characters` change beyond that table and no `world` change beyond the obelis
 
 This study recommended extending `playerbots-player-centric.patch`, because a separate module
 "would have to reach those headers from a different CMake target, which is unverified". That is now
-verified, and the work is a module (`modules/mod-pawn`) instead:
+verified, and the work is a module (`modules/mod-mercenaries`) instead:
 
 - Every module's `src` is added to one shared include list and static modules compile into a single
   library (`modules/CMakeLists.txt:270-300`, `-DMODULES=static` in `server-aarch64.yml:132`), so
@@ -223,13 +223,13 @@ verified, and the work is a module (`modules/mod-pawn`) instead:
   `Player::learnSpell` (`Player.cpp:3428-3431`), and `PlayerbotWorldThreadProcessor::QueueOperation`
   is a public API for deferred world-thread work.
 
-The patch is untouched by the pawn work.
+The patch is untouched by the mercenary work.
 
 ### Client side
 
-A `Pawn` addon in the launcher's assets, installed by `installLocalAddons` like `EInteract` and
+A `Mercenary` addon in the launcher's assets, installed by `installLocalAddons` like `EInteract` and
 `Survivor`, with `LOCAL_ADDON_VERSION` bumped so existing installs pick it up. It shows the offered
-pawns (name, class icon, level, role), the current party, and recruit/dismiss buttons.
+mercenaries (name, class icon, level, role), the current party, and recruit/dismiss buttons.
 
 ### Wiring
 
@@ -243,44 +243,44 @@ release notes at `:396-400`), `pins.toml` if a patch file is added, and the laun
 ## Interaction with the zone-tier random bots
 
 `patches/playerbots-player-centric.patch` already skips bots that are grouped with a real player
-(`:174`, `:193`, `:344` of the patch), so a recruited pawn is never teleported or reassigned by the
-zone tier. The two features compose: pawns are *added* bots (`PlayerbotMgr`), the ambient crowd is
+(`:174`, `:193`, `:344` of the patch), so a recruited mercenary is never teleported or reassigned by the
+zone tier. The two features compose: mercenaries are *added* bots (`PlayerbotMgr`), the ambient crowd is
 *world* bots (`RandomPlayerbotMgr`). The crowd cap (`RandomBotNearPlayersMaxPerPlayer`) still governs
-how many strangers are around while the pawns are in the party.
+how many strangers are around while the mercenaries are in the party.
 
 ## Decisions taken
 
 1. **Pool size** — 5 accounts (50 characters across both teams), written by the installer as
    `Playerbots.AddClassAccountPoolSize = 5`. 50 accounts was 500 characters and made the picker a
    database dump.
-2. **Offered roster** — the whole team-and-class pool, paged, with a stable level and spec per pawn
+2. **Offered roster** — the whole team-and-class pool, paged, with a stable level and spec per mercenary
    derived from the two guids. The picker shows a per-player selection of it (10-15 rows, dealt off
    a deck) rather than the whole pool: the pool is large enough that listing it reads as a database
    dump, and a selection that holds for the whole pool cycle cannot be rerolled by walking back into
    the inn. Paging keeps the page short either way.
-3. **Own-account pawns** — allowed by the pool rules (`AllowAccountBots`), but the obelisk is the
+3. **Own-account mercenaries** — allowed by the pool rules (`AllowAccountBots`), but the obelisk is the
    only doorway, and `Playerbots.AddClassCommand = 0` keeps the command GM-only so the party cap
    cannot be sidestepped.
-4. **Loot sharing** — pawns never compete: `LootNeedRollLevel = 0`, `LootGreedRollLevel = 0`,
+4. **Loot sharing** — mercenaries never compete: `LootNeedRollLevel = 0`, `LootGreedRollLevel = 0`,
    `FreeMethodLoot = 0`.
-5. **Death** — a dead pawn stays in the roster and in the group; playerbots' own resurrection
+5. **Death** — a dead mercenary stays in the roster and in the group; playerbots' own resurrection
    behaviour applies. Nothing is auto-released, so a wipe costs a walk back, not a re-recruit.
-6. **Level window** — pawns are offered within `Pawn.LevelWindow` (default ±2) levels of the player,
-   instead of snapping to the player's exact level, and the same window decides when a hired pawn has
+6. **Level window** — mercenaries are offered within `Mercenary.LevelWindow` (default ±2) levels of the player,
+   instead of snapping to the player's exact level, and the same window decides when a hired mercenary has
    fallen behind and wants exchanging.
-7. **Archetypes** — each pawn is one premade PvE spec plus a blacklist of the other specs' signature
-   abilities, so the toolkit is the reason to swap pawns.
-8. **Party cap** — the player plus two pawns; a third needs strangers from the world, which are not
-   pool pawns and are not counted.
-9. **Temperament and voice** — two more per-pawn draws from the same `(owner, bot)` seed, so two
-   pawns of one spec differ in behaviour as well as in toolkit: `Pawn.Temperament.<class>.<spec_no>`
+7. **Archetypes** — each mercenary is one premade PvE spec plus a blacklist of the other specs' signature
+   abilities, so the toolkit is the reason to swap mercenaries.
+8. **Party cap** — the player plus two mercenaries; a third needs strangers from the world, which are not
+   pool mercenaries and are not counted.
+9. **Temperament and voice** — two more per-mercenary draws from the same `(owner, bot)` seed, so two
+   mercenaries of one spec differ in behaviour as well as in toolkit: `Mercenary.Temperament.<class>.<spec_no>`
    is a pool of named combat profiles (`Relentless: +aggressive,+close`) applied to the combat
-   engine, and the one global `Pawn.Voice` pool (`Talkative: +emote` / `Quiet: -emote`) to the
+   engine, and the one global `Mercenary.Voice` pool (`Talkative: +emote` / `Quiet: -emote`) to the
    non-combat one (`emote` drives speech; `chat` is command handling and is left alone). Both are
-   re-applied at the end of `PawnMgr::ApplyPawn`, because playerbots restores its role defaults on
-   every `ResetStrategies`. Vanity rides along: the mount and pet a pawn ends up with are read back
-   after the build into `pawn_roster.mount_spell` / `pet_name`, because the party row is drawn from
-   the roster while the pawn itself may be offline.
+   re-applied at the end of `MercenaryMgr::ApplyMercenary`, because playerbots restores its role defaults on
+   every `ResetStrategies`. Vanity rides along: the mount and pet a mercenary ends up with are read back
+   after the build into `mercenary_roster.mount_spell` / `pet_name`, because the party row is drawn from
+   the roster while the mercenary itself may be offline.
 
 ## Risks
 
@@ -288,7 +288,7 @@ how many strangers are around while the pawns are in the party.
 |---|---|---|
 | `ASSERT` on gossip overflow | a 33rd menu item aborts the server, it does not clamp (`GossipDef.cpp:43`) | page at 16, never build a menu from an unbounded query |
 | Goblin-level CMake for a module that includes playerbots headers | unverified on the pinned commit | keep the logic inside the patch |
-| Pawns competing for loot bags | undermines the progression economy this realm is built around | free-for-all + `FreeMethodLoot = 0` |
+| Mercenaries competing for loot bags | undermines the progression economy this realm is built around | free-for-all + `FreeMethodLoot = 0` |
 | 500 unused characters | DB size, slower character cache, meaningless roster | reduce `AddClassAccountPoolSize` |
 | Recruit during combat or teleport | `AddPlayerBot` queues a login; a bot joining mid-fight can arrive in a bad state | the obelisk is a town object; refuse while `IsInCombat()` |
 | Addon-only picker excludes a stock client | the launcher installs the addon, a vanilla client would not have it | gossip fallback over the same server calls |
@@ -301,14 +301,14 @@ playerbots runtime behaviour rather than a compile-time contract.
 1. **Pool exists** — the two SQL queries in "What is missing" return non-zero type-2 rows.
 2. **Recruit by command, before any code** — this proves the model with zero new C++:
    ```text
-   .playerbots bot addclass warrior   # recruits a pool pawn, levelled and geared to you
+   .playerbots bot addclass warrior   # recruits a pool mercenary, levelled and geared to you
    .playerbots bot list               # it is in your party
    .playerbots bot remove <name>      # it leaves
    ```
-   If that works in game, the pawn model is sound and everything else is UI and persistence.
-3. **The pin** — level the player 3+ levels with the pawn in the party; the pawn should not move,
+   If that works in game, the mercenary model is sound and everything else is UI and persistence.
+3. **The pin** — level the player 3+ levels with the mercenary in the party; the mercenary should not move,
    and after a relog it should still be at the level it was hired at rather than snapped up.
-4. **Roster** — recruit, relog, confirm the pawn returns; restart the world server, confirm again.
+4. **Roster** — recruit, relog, confirm the mercenary returns; restart the world server, confirm again.
 5. **Obelisk** — the gossip menu opens from the object, pages, and recruiting from it produces the
    same result as the command in step 2.
 6. **Addon** — the frame lists the same rows the gossip menu shows, and both routes agree.
@@ -319,12 +319,12 @@ What was built, against the plan's phases:
 
 | Step | Work | State |
 |---|---|---|
-| 1 | Prove the model in game with `.playerbots bot addclass` (no code) | **done in game**: `.playerbots bot addclass warrior` recruits, levels and gears a pool pawn |
-| 2 | Roster: schema, load, recruit/dismiss, relog persistence | **built** in `modules/mod-pawn/src/PawnMgr.cpp` |
-| 3 | Picker: a paged gossip menu on every innkeeper | **built** as two `AllCreatureScript` gossip hooks in `src/PawnInnkeeper.cpp`; the gameobject route described above was dropped because the line needs no template, spawn or `ScriptName`, a named `CreatureScript` was dropped in turn because it is database-bound and gossip follows the creature's own script id, and a `CreatureAI` handed out by `GetCreatureAI` was dropped because it has to skip every innkeeper that carries an AI of its own (65 of the 125 innkeeper templates are `SmartAI`) |
-| 4 | Level window and archetypes: spec pinning, spellbook blacklist, learn gate | **built** in `src/PawnArchetype.cpp` and `src/PawnScripts.cpp` |
+| 1 | Prove the model in game with `.playerbots bot addclass` (no code) | **done in game**: `.playerbots bot addclass warrior` recruits, levels and gears a pool mercenary |
+| 2 | Roster: schema, load, recruit/dismiss, relog persistence | **built** in `modules/mod-mercenaries/src/MercenaryMgr.cpp` |
+| 3 | Picker: a paged gossip menu on every innkeeper | **built** as two `AllCreatureScript` gossip hooks in `src/MercenaryInnkeeper.cpp`; the gameobject route described above was dropped because the line needs no template, spawn or `ScriptName`, a named `CreatureScript` was dropped in turn because it is database-bound and gossip follows the creature's own script id, and a `CreatureAI` handed out by `GetCreatureAI` was dropped because it has to skip every innkeeper that carries an AI of its own (65 of the 125 innkeeper templates are `SmartAI`) |
+| 4 | Level window and archetypes: spec pinning, spellbook blacklist, learn gate | **built** in `src/MercenaryArchetype.cpp` and `src/MercenaryScripts.cpp` |
 | 5 | Config keys, installer and workflow wiring, runbook | **built** |
-| 6 | `PAWN` addon channel and a `Pawn` addon for the launcher | **not built**: the gossip picker is the complete doorway, and the addon was never requested |
+| 6 | `MERCENARY` addon channel and a `Mercenary` addon for the launcher | **not built**: the gossip picker is the complete doorway, and the addon was never requested |
 
 The feature is feasible and now implemented server-side. What remains unverified is the same thing
 the study named: the in-game feel - the menu, the level window, the archetype restrictions and the

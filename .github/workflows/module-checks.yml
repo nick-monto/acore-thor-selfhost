@@ -5,14 +5,14 @@ name: module-checks
 #
 # Nothing is linked, packaged or published here: server-aarch64.yml does that on a
 # manual dispatch and takes most of an hour, which is far too late to learn that a
-# module names a core function that does not exist. Both errors it caught in mod-pawn
+# module names a core function that does not exist. Both errors it caught in mod-mercenaries
 # were exactly that - GetMSTime for getMSTime, OnLogin for OnPlayerLogin.
 #
 # The compile flags come from scripts/module-flags.txt, not from a configured build:
 # configuring the core would mean downloading and building its dependencies, which is
 # the expensive half of the real build. The file is generated from a configured build
 # by scripts/syntax-check.sh --dump-flags and carries placeholders for the checkouts,
-# so it works here as well as on a development host. scripts/pawn/check_pawn.py fails
+# so it works here as well as on a development host. scripts/mercenaries/check_mercenaries.py fails
 # when it no longer matches the core commit in pins.toml.
 
 on:
@@ -67,7 +67,7 @@ jobs:
 
       - name: Fetch the pinned core and playerbots
         run: |
-          # Both are needed: the modules include playerbots headers, and check_pawn.py
+          # Both are needed: the modules include playerbots headers, and check_mercenaries.py
           # reads the core's script headers and playerbots' strategy vocabulary.
           git init -q core && cd core
           git remote add origin "$CORE_REPO"
@@ -91,7 +91,7 @@ jobs:
         env:
           AC_CORE: ${{ github.workspace }}/core
           AC_PLAYERBOTS: ${{ github.workspace }}/playerbots
-        run: python3 scripts/pawn/check_pawn.py
+        run: python3 scripts/mercenaries/check_mercenaries.py
 
       - name: No module commits a characters transaction synchronously
         # CharacterDatabase.DirectCommitTransaction runs the transaction on the synchronous
