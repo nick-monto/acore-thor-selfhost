@@ -82,6 +82,9 @@ ROOTFS_NAME="ubuntu"
 TERMUX_PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
 POLICY_RC_D="${POLICY_RC_D:-/usr/sbin/policy-rc.d}"     # overridable for tests
 HOST_STATE="${THOR_HOST_STATE:-$HOME/.thor-wow}"        # overridable for tests
+# Shared storage, where a 3.3.5a client can live: Termux's own $EXTERNAL_STORAGE and its two usual
+# aliases (the same place on nearly every device, so they are deduplicated before scanning).
+read -r -a STORAGE_ROOTS <<< "${THOR_STORAGE_ROOTS:-${EXTERNAL_STORAGE:-/storage/emulated/0} /storage/emulated/0 /sdcard}"
 DB_PROBE_TIMEOUT="${DB_PROBE_TIMEOUT:-30}"              # seconds a write probe may take (tests shorten it)
 
 ROOT="$ROOT_DEFAULT"
@@ -937,15 +940,21 @@ ask() {   # ask PROMPT -> REPLY, from the terminal
 }
 
 client_candidates() {   # one line per folder under shared storage that holds Data/common.MPQ
-    local root dir
-    for root in "${EXTERNAL_STORAGE:-/storage/emulated/0}" /storage/emulated/0 /sdcard; do
+    local root dir seen=""
+    for root in "${STORAGE_ROOTS[@]}"; do
         [ -d "$root" ] || continue
+        # $EXTERNAL_STORAGE, /storage/emulated/0 and /sdcard are usually one directory: scan it once.
+        root="$(cd "$root" && pwd -P)" || continue
+        case " $seen " in *" $root "*) continue ;; esac
+        seen="$seen $root"
+        # Two levels deep is where a client sits (/sdcard/<name>/Data or /sdcard/<folder>/<name>/Data).
+        # Hidden directories are skipped by the glob, and a folder is only listed when its Data holds a
+        # common.MPQ, so a half-copied client or an unrelated folder never appears.
         for dir in "$root"/*/ "$root"/*/*/; do
             [ -d "${dir}Data" ] || continue
             ls "${dir}Data" 2>/dev/null | grep -qix 'common\.mpq' || continue
             printf '%s\n' "${dir%/}"
         done
-        return 0   # the three names are the same place; one pass is enough
     done
     return 1
 }
