@@ -138,6 +138,20 @@ unzip -q -o /tmp/data.zip -d /opt/acore/data && rm /tmp/data.zip
 
 The client-data download supplies `dbc/`, `maps/`, `vmaps/` and `mmaps/` — **no WoW client is needed for the server** [V]. `thor-install.sh` runs exactly this download (curl, sha256 against the pinned hash, `unzip`) as its own step, so the artifact can stay a binary drop.
 
+**Upgrading an install that predates the rename.** The mercenary module was `mod-pawn`, and the
+installer and the module carry the rename over rather than leaving two of everything:
+
+- `etc/modules/mod-pawn.conf` is deleted once `etc/modules/mod-mercenaries.conf` is written; if only
+  `--repair` is run, `--status` reports the stale file and `--repair` deletes it. The module reads
+  `Mercenary.*` keys now, so an old file's `Pawn.*` keys would be ignored either way — the new conf
+  is written from the shipped `.dist` instead of reusing the old one.
+- The roster table is renamed `pawn_roster` → `mercenary_roster` by the module on its first boot
+  (`MercenaryMgr::EnsureSchema`), so a recruited party survives; a fresh realm has no old table and
+  the `CREATE TABLE IF NOT EXISTS` makes the new one.
+- `modules/mod-mercenaries` is what the build looks for, and the loader symbol follows the directory
+  name (`Addmod_mercenariesScripts`), so an artifact built before the rename cannot load the module
+  from the new directory and vice versa: reinstall the artifact and the module sources together.
+
 ## Part 3 — Database
 
 There is no systemd inside proot, so start the daemon directly. The install keeps the data directory **inside the install root** (`/opt/acore/db`) with its socket in `/opt/acore/run`, so removing the install removes the database with it and nothing is left in `/var/lib/mysql`:

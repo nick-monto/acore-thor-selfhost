@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Offline checks for modules/mod-mercenaries.
 
-This host has no Boost headers, so no AzerothCore translation unit can be compiled here; the
-compile gate is the arm64 workflow, which runs this script first. What can be checked offline is
-the agreement between the files, which is where a module of this shape actually breaks:
+This script reads files, it does not compile them: `scripts/syntax-check.sh` is the compile gate
+(a -fsyntax-only pass over every module source, using a configured build's flags or the
+checked-in scripts/module-flags.txt), and the arm64 workflow runs both. What can be checked
+offline here is the agreement between the files, which is where a module of this shape actually
+breaks:
 
   * every Mercenary.* key the C++ reads is defined, uncommented, in conf/mod-mercenaries.conf.dist;
   * the installer's MERCENARY_CONF_DEFAULTS and the shipped conf agree, both ways: the repair path
@@ -48,10 +50,6 @@ PLAYERBOTS = Path(os.environ.get("AC_PLAYERBOTS") or ROOT.parent / "mod-playerbo
 # The core is the other checkout; its script headers are what an override has to match.
 CORE = Path(os.environ.get("AC_CORE") or ROOT.parent / "azerothcore-wotlk")
 SCRIPT_HOOKS = CORE / "src" / "server" / "game" / "Scripting" / "ScriptDefines"
-# An AI override is checked the same way as a script override, and its hooks are declared here:
-# sGossipHello and sGossipSelect are UnitAI members (UnitAI.h:421-423), not ScriptDefines ones.
-AI_HOOKS = [CORE / "src" / "server" / "game" / "AI" / "CoreAI" / "UnitAI.h",
-            CORE / "src" / "server" / "game" / "AI" / "CreatureAI.h"]
 # A hook declaration in the core, and a hook the module claims to override.
 DECLARED_HOOK = re.compile(r"\bvirtual\s+[\w:<>&*\s]+?\b(\w+)\s*\(")
 OVERRIDE = re.compile(r"\b(\w+)\s*\([^()]*\)\s*(?:const\s*)?override\b")
@@ -684,10 +682,11 @@ def check_core_hooks() -> None:
     compiler this repository has, so the names are checked here instead. `OnLogin` for
     `OnPlayerLogin` compiled nowhere and failed the build a day after it was written.
 
-    The AI hooks count as much as the script hooks: the picker used to override `sGossipHello`
-    and `sGossipSelect`, which are UnitAI members (UnitAI.h:421-423) that no ScriptDefines header
-    declares, and it now overrides `CanCreatureGossipHello` and `CanCreatureGossipSelect`, which
-    AllCreatureScript.h does declare (AllCreatureScript.h:67,79).
+    Every override in the module is a script hook, so ScriptDefines is the whole vocabulary: the
+    picker used to override `sGossipHello` and `sGossipSelect`, which are UnitAI members
+    (UnitAI.h:421-423) that no ScriptDefines header declares, and it overrides
+    `CanCreatureGossipHello` and `CanCreatureGossipSelect` now, which AllCreatureScript.h does
+    declare (AllCreatureScript.h:67,79).
     """
     if not SCRIPT_HOOKS.is_dir():
         notes.append("hooks: no core checkout beside this repository, so the override names, "
@@ -695,7 +694,7 @@ def check_core_hooks() -> None:
         return
 
     declared: set[str] = set()
-    headers = list(SCRIPT_HOOKS.glob("*.h")) + [path for path in AI_HOOKS if path.is_file()]
+    headers = list(SCRIPT_HOOKS.glob("*.h"))
     for header in headers:
         declared.update(DECLARED_HOOK.findall(header.read_text()))
 
@@ -707,8 +706,7 @@ def check_core_hooks() -> None:
         fail(f"hooks: {name} is marked override, but the core declares no such hook; the "
              f"script would compile nowhere and the arm64 build would stop")
 
-    notes.append(f"hooks: {len(overridden)} overrides, all declared by the core's script and "
-                 f"AI headers")
+    notes.append(f"hooks: {len(overridden)} overrides, all declared by the core's script headers")
 
 
 def database_bound_types() -> set[str] | None:
