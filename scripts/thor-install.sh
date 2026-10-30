@@ -48,6 +48,9 @@
 #   --github-token TOKEN    token for a private repository (or set THOR_GH_TOKEN); also used
 #                           to fetch the server artifact and the script itself when private
 #   --data-zip URL|PATH|none  client data (dbc/maps/vmaps/mmaps)
+#   --client-data DIR       the client's Data directory, where the loot-bag Item.dbc patch archive is
+#                           written (default: probe /sdcard and /storage/emulated/0 for an
+#                           "AzerothCore 3.3.5a" or "WoW Forever" install; "none" skips that half)
 #   --boot-timeout SECS     first-boot wait for "World initialized" (default 1800)
 #   THOR_ROOTFS_DIR DIR     the rootfs directory, if proot-distro stores it somewhere this script
 #                           does not probe - a wrong rootfs puts the script's copy where the guest
@@ -143,6 +146,7 @@ ACCOUNT="admin"
 ACCOUNT_PASS=""
 LAN_IP=""
 DATA_SRC="$DATA_URL"
+CLIENT_DATA=""
 BOOT_TIMEOUT=1800
 MODE="host"            # host | inside
 ACTION="install"       # install | repair | uninstall | status
@@ -202,6 +206,7 @@ parse_args() {
             --release-url)  RELEASE_URL="${2:?}"; shift ;;
             --github-token) GH_TOKEN_OPT="${2:?}"; shift ;;
             --data-zip)     DATA_SRC="${2:?}"; shift ;;
+            --client-data)  CLIENT_DATA="${2:?--client-data needs a directory}"; shift ;;
             --boot-timeout) BOOT_TIMEOUT="${2:?}"; shift ;;
             -h|--help)      usage; exit 0 ;;
             *)              die "unknown argument: $1 (try --help)" ;;
@@ -872,6 +877,197 @@ host_packages() {
     ok "installed ${missing[*]}"
 }
 
+# ---------------------------------------------------------------- loot-bag items in Item.dbc
+#
+# The loot bags are custom item entries (91000-91063), and a 3.3.5a client draws an inventory item
+# from its own Item.dbc: with no record there the bag shows the red question mark once it is in the
+# player's bags, even though the loot window draws it from the packet. Two halves close that:
+#
+#   * the server's data/dbc/Item.dbc gets the 64 records, so sItemStore agrees with item_template and
+#     the DBC attribute checks run instead of the debug line "does not exist in item.dbc!";
+#   * the client gets the same file inside a patch archive - the half that fixes the icon.
+#
+# scripts/item-dbc/patch_item_dbc.py writes both. It is fetched from this repository at SELF_REF
+# because this script is downloaded on its own, and it is run from Termux rather than from inside the
+# rootfs: the guest has no python, and the client's Data directory is only visible out here.
+
+ITEM_DBC_TOOLS_REL=".thor-state/scripts"   # under $ROOT: item-dbc/ and loot-bags/ side by side
+
+item_dbc_python() {   # the interpreter that runs the tools, or nothing
+    if have python3; then printf 'python3\n'; elif have python; then printf 'python\n'; fi
+}
+
+item_dbc_verify_supported() {   # the fetched tools may be older than this script (a release installer)
+    [ -f "$1" ] && "$2" "$1" --help 2>/dev/null | grep -q -- '--verify'
+}
+
+client_data_file() { printf '%s/client-data\n' "$HOST_STATE"; }
+
+client_data_dir() {   # --client-data, the remembered path, or the first probe that is a real client Data directory
+    local candidate saved
+    # Not in state.env: the inside stage rewrites that file and never sees this path, so it would be
+    # blanked on every --repair. This file is the host stage's alone.
+    if [ -z "$CLIENT_DATA" ] && [ -f "$(client_data_file)" ]; then
+        saved="$(head -1 "$(client_data_file)")"
+        [ -n "$saved" ] && CLIENT_DATA="$saved"
+    fi
+    if [ -n "$CLIENT_DATA" ]; then
+        [ "$CLIENT_DATA" = none ] && return 1
+        printf '%s\n' "$CLIENT_DATA"
+        return 0
+    fi
+    # A client Data directory is the one holding common.MPQ; a bare directory of the right name is
+    # not enough, because a half-copied client looks exactly like it.
+    for candidate in \
+        "/sdcard/AzerothCore 3.3.5a/Data" \
+        "/storage/emulated/0/AzerothCore 3.3.5a/Data" \
+        "/sdcard/WoW Forever/Data" \
+        "/storage/emulated/0/WoW Forever/Data" \
+        "$HOME/AzerothCore 3.3.5a/Data"; do
+        [ -d "$candidate" ] || continue
+        if ls "$candidate" 2>/dev/null | grep -qix 'common\.mpq'; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - the two python files, once
+    local base="$1" url tarball
+    if [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ] && [ "$FORCE" != 1 ]; then
+        return 0
+    fi
+    if [ "$CHECK" = 1 ]; then note "fetch $SELF_REPO@$SELF_REF scripts/item-dbc and scripts/loot-bags into $base"; return 0; fi
+    if ! have curl; then
+        warn "curl is missing, so the Item.dbc tools cannot be fetched"
+        return 1
+    fi
+    url="https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF"
+    tarball="$(mktemp)"
+    if ! curl_gh -fL --retry 3 -o "$tarball" "$url"; then
+        rm -f "$tarball"
+        warn "cannot download $url (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
+        return 1
+    fi
+    mkdir -p "$base"
+    # "<repo>-<ref>/scripts/item-dbc/..." becomes "$base/item-dbc/...", and the same for loot-bags:
+    # the patch script finds its generator as ../loot-bags/gen_loot_bags.py, so the two keep that
+    # shape instead of being flattened into one directory.
+    if ! tar -xzf "$tarball" --wildcards --strip-components=2 -C "$base" '*/scripts/item-dbc*' '*/scripts/loot-bags*'; then
+        rm -f "$tarball"
+        warn "cannot extract scripts/item-dbc and scripts/loot-bags out of $SELF_REPO@$SELF_REF (wrong SELF_REF?)"
+        return 1
+    fi
+    rm -f "$tarball"
+    [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ]
+}
+
+apply_item_dbc_patch() {   # the server's Item.dbc, then the client's, if a client can be found
+    local base="$ROOTFS$ROOT/$ITEM_DBC_TOOLS_REL"
+    local tools="$base/item-dbc/patch_item_dbc.py"
+    local dbc="$ROOTFS$ROOT/data/dbc/Item.dbc"
+    local out="$ROOTFS$ROOT/.thor-state/item-dbc" py data rc=0
+    step "Loot-bag items in Item.dbc"
+    if [ ! -f "$dbc" ]; then
+        if [ "$CHECK" = 1 ]; then
+            note "add the 64 bag records to $ROOT/data/dbc/Item.dbc once the client data is installed"
+        else
+            warn "no $ROOT/data/dbc/Item.dbc yet, so the bag records were not added (install the client data first)"
+        fi
+        return 0
+    fi
+    py="$(item_dbc_python)"
+    if [ -z "$py" ]; then
+        if [ "$CHECK" = 1 ]; then
+            note "pkg install python, then add the 64 bag records to $ROOT/data/dbc/Item.dbc"
+        else
+            warn "python is missing, so the loot-bag Item.dbc patch is skipped: pkg install python, then re-run --repair"
+        fi
+        return 0
+    fi
+    if [ "$CHECK" = 1 ]; then
+        fetch_item_dbc_tools "$base"
+        note "$py $tools --dbc $dbc --server-dbc ${dbc%/*}"
+        if data="$(client_data_dir)"; then note "$py $tools --client-data $data"; fi
+        return 0
+    fi
+    if ! fetch_item_dbc_tools "$base"; then
+        warn "the Item.dbc tools are missing, so the bags keep the red question mark"
+        return 0
+    fi
+
+    if [ -n "$CLIENT_DATA" ]; then
+        mkdir -p "$HOST_STATE"
+        printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
+    fi
+    local args=(--dbc "$dbc" --server-dbc "${dbc%/*}" --out "$out")
+    if data="$(client_data_dir)"; then
+        args+=(--client-data "$data")
+    else
+        data=""
+    fi
+    "$py" "$tools" "${args[@]}" || rc=$?
+    if [ "$rc" != 0 ]; then
+        warn "the Item.dbc patch failed (exit $rc); the bags keep the red question mark until it runs"
+        return 0
+    fi
+    ok "server Item.dbc: the 64 bag records are in $ROOT/data/dbc/Item.dbc"
+
+    if [ -z "$data" ]; then
+        warn "no client Data directory found, so the client half was not written: pass --client-data DIR"
+        warn "  (or copy $ROOT/.thor-state/item-dbc/item-dbc.MPQ into the client's Data as patch-9.MPQ)"
+        return 0
+    fi
+    # The archive is written under the highest free patch name, so it loads after every archive
+    # already in Data; --verify reads the directory back in that same order and says which archive
+    # the client will actually use, which is the only thing that decides whether the icon appears.
+    if ! item_dbc_verify_supported "$tools" "$py"; then
+        warn "the Item.dbc tools at $SELF_REF are older than this script and cannot verify the archive; restart the client and check a bag"
+        return 0
+    fi
+    if "$py" "$tools" --verify --client-data "$data" >/dev/null 2>&1; then
+        ok "client Item.dbc: $data reads the patched file"
+    else
+        bad "client Item.dbc: $data does not read the patched file (run the patch by hand to see why)"
+    fi
+    return 0
+}
+
+item_dbc_status() {   # the status line: is the server's copy patched, and will the client read it
+    local base="$ROOTFS$ROOT/$ITEM_DBC_TOOLS_REL" tools="$ROOTFS$ROOT/$ITEM_DBC_TOOLS_REL/item-dbc/patch_item_dbc.py"
+    local dbc="$ROOTFS$ROOT/data/dbc/Item.dbc" staged="$ROOTFS$ROOT/.thor-state/item-dbc/Item.dbc"
+    local py data
+    if [ ! -f "$dbc" ]; then
+        bad "Item.dbc: no $ROOT/data/dbc/Item.dbc (the client data is not installed)"
+        return 0
+    fi
+    if [ -f "$staged" ] && cmp -s "$dbc" "$staged"; then
+        ok "Item.dbc: the server's copy carries the 64 bag records"
+    else
+        bad "Item.dbc: the server's copy has no bag records (--repair adds them)"
+    fi
+    py="$(item_dbc_python)"
+    if [ -z "$py" ] || [ ! -f "$tools" ]; then
+        warn "Item.dbc: the client half is not checked (needs python and the tools; --repair fetches both)"
+        return 0
+    fi
+    if ! data="$(client_data_dir)"; then
+        warn "Item.dbc: no client Data directory found; pass --client-data DIR to check the client half"
+        return 0
+    fi
+    if ! item_dbc_verify_supported "$tools" "$py"; then
+        warn "Item.dbc: the client half is not checked (the tools are older than this script)"
+        return 0
+    fi
+    if "$py" "$tools" --verify --client-data "$data" >/dev/null 2>&1; then
+        ok "Item.dbc: the client at $data reads the patched file"
+    else
+        warn "Item.dbc: the client at $data does not read the patched file (--repair writes it)"
+    fi
+    return 0
+}
+
 host_install() {
     step "Termux preflight"
     host_preflight
@@ -939,6 +1135,7 @@ host_install() {
     write_host_wrappers
 
     state_save
+    apply_item_dbc_patch
     step "Host side finished"
     log "start with: ~/start-wow-server.sh   |   inspect with: bash thor-install.sh --status"
 }
@@ -963,6 +1160,7 @@ host_status() {
         if [ -x "$w" ]; then ok "wrapper: $w"; else bad "wrapper missing: $w"; fi
     done
     log "free space in \$HOME: $(( $(df -Pk "$HOME" | awk 'NR == 2 {print $4}') / 1048576 )) GB"
+    item_dbc_status
     if [ -d "$ROOTFS" ] && [ -f "$ROOTFS$INSIDE_SCRIPT_COPY" ]; then
         step "Inside the rootfs"
         if ! proot_login "$ROOTFS_NAME" -- bash "$INSIDE_SCRIPT_COPY" --inside --root "$ROOT" --status; then
@@ -1005,6 +1203,7 @@ host_repair() {
     else
         warn "the inside repair exited $rc: the report above says why (it could not start, or problems remain)"
     fi
+    apply_item_dbc_patch
     log "re-run --status to see the result"
 }
 

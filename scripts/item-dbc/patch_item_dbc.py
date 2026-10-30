@@ -419,15 +419,64 @@ def verify_client(data_dir: Path, ids: range) -> int:
     return 1
 
 
-def first_free_patch(data_dir: Path) -> Path:
+def our_archives(data_dir: Path) -> list[Path]:
+    """The archives an earlier run of this script wrote, in load order.
+
+    Re-running has to overwrite its own archive. Picking the highest free name every time would
+    leave patch-7, patch-8 and patch-9 behind - a megabyte of the same Item.dbc each, and only the
+    last one read - so the newest of ours is reused and the rest are removed. An archive only counts
+    as ours when it holds exactly the two files this script writes: overwriting a launcher's patch
+    would take that patch's own files with it.
+    """
+    found = []
+    for _, path in client_archives(data_dir):
+        try:
+            archive = path.read_bytes()
+            _, header_size, _, _, _, _, _, _, block_count = struct.unpack_from("<4sIIHHIIII", archive)
+            if header_size != MPQ_HEADER_SIZE or block_count != 2:
+                continue
+            read_mpq_file(archive, "DBFilesClient\\Item.dbc")
+            read_mpq_file(archive, "(listfile)")
+        except (SystemExit, struct.error):
+            continue
+        found.append(path)
+    return found
+
+
+def first_free_patch_name(data_dir: Path) -> str | None:
+    """The highest patch name the directory does not use, or None when all six are taken."""
     for name in PATCH_NAMES:
-        candidate = data_dir / name
-        if not candidate.exists():
-            return candidate
-    raise SystemExit(
-        f"{data_dir}: every patch name from {PATCH_NAMES[-1]} to {PATCH_NAMES[0]} is taken; "
-        f"merge or delete one of them, then run this again"
-    )
+        if not (data_dir / name).exists():
+            return name
+    return None
+
+
+def patch_target(data_dir: Path) -> Path:
+    """Where this run's archive goes, and the copies of it that are now dead.
+
+    Two rules, in this order. Ours that are not the last one in load order are dead the moment a
+    later one exists, so they are removed rather than left as a megabyte of shadowed Item.dbc. Then
+    the archive goes to the highest free name when that name loads after the copy we already have,
+    and over the copy itself otherwise - so a re-run either replaces its own archive or moves it up
+    the load order, and never piles up a new one per run.
+    """
+    ours = our_archives(data_dir)
+    for stale in ours[1:]:
+        stale.unlink()
+        print(f"removed {stale.name}: an older copy of this archive, shadowed by {ours[0].name}")
+    keep = ours[0] if ours else None
+    free = first_free_patch_name(data_dir)
+    if keep is not None and (free is None or patch_rank(free) <= patch_rank(keep.name)):
+        return keep
+    if free is None:
+        raise SystemExit(
+            f"{data_dir}: every patch name from {PATCH_NAMES[-1]} to {PATCH_NAMES[0]} is taken, and none "
+            f"of them is this script's; merge or delete one of them, then run this again"
+        )
+    if keep is not None:
+        keep.unlink()
+        print(f"removed {keep.name}: {free} loads after it, so that is the copy to keep")
+    return data_dir / free
 
 
 def build(dbc_path: Path) -> tuple[bytes, bytes, int]:
@@ -499,9 +548,10 @@ def main() -> int:
     if args.client_data:
         if not args.client_data.is_dir():
             raise SystemExit(f"{args.client_data} is not a directory; point --client-data at the client's Data folder")
-        target = first_free_patch(args.client_data)
+        target = patch_target(args.client_data)
+        replaced = target.exists()
         target.write_bytes(archive)
-        print(f"client patch: {target}")
+        print(f"client patch: {target}" + (" (replaced)" if replaced else ""))
         print("restart the client so it loads the new archive")
 
     if not args.client_data:

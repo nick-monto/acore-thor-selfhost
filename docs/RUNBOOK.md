@@ -494,7 +494,14 @@ Four tests, in this order — each one is a gate:
 
 ## Part 9a — Loot-bag icons
 
-The bag items are custom entries (91000-91063), so the client has no `Item.dbc` record for them: the loot window shows the icon because that packet carries it, and the player's bags show a red question mark. One command fixes it, run once per client (and again after a client update replaces `Item.dbc`):
+The bag items are custom entries (91000-91063), so the client has no `Item.dbc` record for them: the loot window shows the icon because that packet carries it, and the player's bags show a red question mark.
+
+`thor-install.sh` closes that on every install and every `--repair`, as its last step: it appends the 64 records to the server's `data/dbc/Item.dbc` and writes the archive into the client's `Data` directory under the highest free patch name (`patch-9` down to `patch-4`, so it loads after every archive already there), replacing its own copy rather than adding another one on a re-run. Two things have to be true for the client half, and the step says which one is missing:
+
+- **Termux needs python** (`pkg install python`). It runs out here rather than inside the rootfs because the guest has none, and because the client's `Data` directory is only visible from Termux.
+- **The client's `Data` directory has to be found.** `--client-data DIR` names it; without the flag the installer probes `/sdcard` and `/storage/emulated/0` for an `AzerothCore 3.3.5a` or `WoW Forever` install and takes the first that holds a `common.MPQ`. `--client-data none` skips the client half. The path is remembered in the install state, so `--repair` and `--status` keep using it.
+
+Restart the client afterwards. Running it by hand is the same thing, and it is what to do after a client update replaces the archive:
 
 ```bash
 pkg install python          # once, in Termux
@@ -504,8 +511,6 @@ python3 scripts/item-dbc/patch_item_dbc.py \
     --client-data "/sdcard/AzerothCore 3.3.5a/Data" \
     --server-dbc "$RF/opt/acore/data/dbc"
 ```
-
-It appends the 64 records to `Item.dbc`, writes the archive into the client's `Data` directory under the highest free patch name (`patch-9` down to `patch-4`, so it loads after every archive already there), and puts the patched `Item.dbc` where the server reads it. Restart the client afterwards.
 
 Check: bags in the player's bags show the tier icon instead of a question mark, and `Item (Entry: 910xx) does not exist in item.dbc!` no longer appears in the worldserver log at debug level. `docs/LOOT-BAGS-DESIGN.md` § "The bag icon" has the mechanism and the archive layout.
 

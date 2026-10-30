@@ -95,7 +95,9 @@ the DBC attribute checks for that entry. Everything else about the item works,
 which is why the bags drop, open and roll their contents regardless.
 
 `scripts/item-dbc/patch_item_dbc.py` closes the gap the standard way for custom
-items:
+items, and `scripts/thor-install.sh` runs it as the last step of every install
+and `--repair` (`--client-data DIR`, or a probe of the usual client locations,
+picks the `Data` directory):
 
 ```sh
 RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
@@ -113,7 +115,10 @@ python3 scripts/item-dbc/patch_item_dbc.py \
   writing a letter name, which not every 3.3.5a build loads. The client loads
   patches in name order and the last archive that carries a file wins, so a
   `patch-4` written under a launcher's `patch-5` loses its `Item.dbc` silently and
-  looks exactly like a patch that was never applied. The archive holds
+  looks exactly like a patch that was never applied. A re-run therefore replaces
+  the copy it wrote (recognised by holding exactly the two files it writes) or
+  moves it to a name that loads after the others; it never leaves one archive per
+  run behind. The archive holds
   `DBFilesClient\Item.dbc` stored in 4096-byte sectors, with its hash and block
   tables encrypted the way the client expects.
 - It writes the patched `Item.dbc` back to the server's `data/dbc`, so
@@ -221,7 +226,7 @@ economy without editing the SQL.
 | Roll simulation | 50k rolls per representative bracket/rank reproduced the configured drop chances (10/20/35/50/100%) and tier mixes; bag opens always produced cloth, potions and 1-4 gear items whose required level was inside the bracket or at most four levels above it |
 | Generator `--check` | committed SQL matches a fresh run |
 | Item.dbc patch | run against a synthetic 54,000-record `Item.dbc`: 64 records appended in id order, the archive extracts byte-identically through an independent MPQ reader (`mpyq`), re-running on its own output is byte-identical, and a stock file with an id above 91000 or a wrong record layout is refused |
-| Patch name | against a `Data` directory holding `patch-4.MPQ` and `patch-5.MPQ`, the script writes `patch-9.MPQ`; `--verify` names the last archive in load order as the one the client reads, reports `bag ids MISSING` and exits 1 when a client update has put a stock `Item.dbc` back under that name, and reports `bag ids present` and exits 0 otherwise |
+| Patch name | against a `Data` directory holding `patch-4.MPQ` and `patch-5.MPQ`, the script writes `patch-9.MPQ`; three runs leave one archive, the second and third replacing it; a copy of ours under a launcher `patch-7` is moved to `patch-9` and the old one removed; `--verify` names the last archive in load order as the one the client reads, reports `bag ids MISSING` and exits 1 when a client update has put a stock `Item.dbc` back under that name, and reports `bag ids present` and exits 0 otherwise |
 | Worldserver / client | **not observed**: the regenerated files no longer contain the 24063 row or the 18 unreferenced tables, but no worldserver boot was performed here, and the patched `Item.dbc` has not been loaded by a real client |
 
 ## Limits
