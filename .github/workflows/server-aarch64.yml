@@ -14,8 +14,8 @@ name: server-aarch64
 #             have no SQL tree; mod-survivor ships one world file, the container gameobject
 #             template, and creates its three character tables programmatically; mod-pawn
 #             creates its roster table programmatically and puts its picker on every
-#             innkeeper through a CreatureScript, so it needs no template, spawn or
-#             ScriptName)
+#             innkeeper through two AllCreatureScript gossip hooks, so it needs no
+#             template, spawn or ScriptName)
 #
 # No data/ in the tarball. GitHub refuses release assets of 2 GiB or more, and the
 # dbc/maps/vmaps/mmaps trees are around 1.2 GiB on their own, which is what pushed the first
