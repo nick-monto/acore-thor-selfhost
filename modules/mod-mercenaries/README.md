@@ -22,11 +22,12 @@ at (see "A mercenary is what you hired" below). This module adds the six things 
    the window, derived from the player and mercenary guids, so offers vary instead of all snapping to the
    player's exact level. The same window is what makes a mercenary *current*: once the player is more
    than that many levels ahead of it, the party row at the inn says it has fallen behind.
-4. **An archetype**: one premade PvE spec plus a hard blacklist of the other specs' signature
-   abilities. A prot warrior mercenary without Shield Wall cannot tank; a shadow priest mercenary without
-   Resurrection cannot heal. The toolkit is the reason to swap. On top of that, each mercenary is dealt a
-   *variant* of its own spec's situational abilities, so two fury warriors are different companions —
-   see "Two mercenaries of one spec" below.
+4. **An archetype**: one premade PvE spec, pinned so the mercenary is geared for that role and fights
+   it. The spec is the whole of the restriction: a mercenary keeps every ability its class and level
+   give it. An earlier build also withheld the other specs' signature abilities and a per-mercenary
+   subset of the spec's situational ones, which at low levels took away abilities a player expects a
+   companion to have — a level-10 hunter missing Concussive Shot — so that was removed and is deferred.
+   Two mercenaries of one spec still differ; see "Two mercenaries of one spec" below.
 5. **Gear for that spec at its level.** The spec is pinned *before* the equipment pass, the AI's
    strategies are rebuilt from it, and the glyphs are re-rolled against its tab, because playerbots
    scores every candidate item against the bot's active strategy (`TankWarriorStrategy` carries
@@ -48,37 +49,18 @@ keeps by being kept — is the rest of this document: "The mercenary page", "Upk
 
 ## Two mercenaries of one spec
 
-The blacklist makes a mercenary a specialist; the variant pool makes two specialists of the same spec
-different. `Mercenary.Variant.<class>.<spec_no>` is a short list of the spec's *situational* abilities —
-interrupts, taunts, cooldowns, dispels, crowd control — and each mercenary is dealt a subset of it:
-`MercenaryMgr::WithheldVariants` draws a count uniformly from `Mercenary.VariantWithholdMin` to
-`Mercenary.VariantWithholdMax` (default 1 to 2), capped by the pool size, and picks that many entries by
-the lowest hash of their spell id, all from the same seed as the mercenary's level, spec and gear ratio.
-
-So the same face always arrives with the same toolkit for the same player, and two fury warriors do
-not: with the shipped pool (`Pummel, Recklessness, Death Wish`) and a range of 1 to 2, a mercenary is
-missing one or two of them in equal measure — six distinct kits over five thousand mercenary pairs, and
-every one of them a fury warrior that fights a little differently. The floor is the point: with a
-floor of 0 a third of all mercenaries would be missing nothing at all, which is the identical-twin case
-the pools exist to avoid.
-
-The withheld set is enforced in the same place as the blacklist — `PlayerScript::OnPlayerCanLearnSpell`
-through `MercenaryMgr::IsSpellForbidden` — so no learn path, factory or trainer, can undo it, and
-`MercenaryArchetype::Apply` prunes the ones a rebuild would otherwise leave in the book. The picker row
-says what the mercenary lacks (`no Pummel/Recklessness`), because that is part of what the player is
-choosing between.
-
-Nothing rotational is ever in a pool: a mercenary missing its rotation is broken, not different. Nor are
-capstone talents — the pools ship trainer abilities and small talents only.
-
-Every shipped name was validated against the 3.3.5 spell table on 2026-10-26: 152 distinct names over
-the 293 entries of the 31 blacklists and 31 variant pools, all resolving, none naming an ability only
-another class can learn. That check is not part of the build, so a name added later is proven by the
-`archetypes:` line in `Server.log` at the next startup.
+Two mercenaries of one spec carry the same abilities, and are still different companions: they differ
+in the level they are offered at, in their gear ratio, and in the two draws the next section describes —
+their temperament and their voice. That is deliberate. The toolkit was the first thing this module
+varied, and a mercenary missing an interrupt it should have had read as broken rather than as different,
+so the spellbook restriction was removed and is deferred until there is a way to vary a toolkit that
+does not take away abilities the player expects. A mercenary hired before the removal gets those
+abilities back on its next login: `ApplyMercenary` runs the same trainer pass `Randomize` does for a
+fresh build, which re-teaches what the class and level already allow and nothing else.
 
 ## How they fight, and how they talk
 
-The variant pool decides what a mercenary carries. Two further draws decide how it behaves, and both come
+Two draws decide how a mercenary behaves, and both come
 from the same seed as its level, spec and gear ratio, so a face keeps them for as long as its owner
 keeps the face.
 
@@ -257,12 +239,14 @@ A party row opens that mercenary's page, and dismissal lives there with everythi
 told to do, because the offers page has no rows to spare: the gossip packet carries at most sixteen
 rows (`src/server/game/Entities/Creature/GossipDef.cpp:199-201`) and the server aborts on a 33rd
 (`:43`), while the offers page is already at twelve offers plus two party rows plus two navigation
-rows with two mercenaries. One page per mercenary has seven rows and does not grow with the party.
+rows with two mercenaries. One page per mercenary has six rows and does not grow with the party.
 
 The page names the mercenary on every row that acts on it, because the gossip title does not: a page of
 bare "follow me" rows would be indistinguishable from the same page for the other companion. The
-rows are retrain (with the level it would reach and its fee), follow me, hold here, attack my
-target, restock and repair (with the fee), dismiss and back. Back returns to the offers page the
+rows are retrain (with the level it would reach and its fee), follow me, break off, restock and
+repair (with the fee), dismiss and back. The two orders are recall orders only: how a mercenary
+engages is its temperament's business, so there is no "hold here" and no "attack my target" row to
+fight the manner it was hired with. Back returns to the offers page the
 player came from at the same page index — the page keeps the offers page's cursor untouched while it
 is open — and a dismissal lands there too, because the mercenary the page was about is no longer in the
 party. A menu that outlived the party it was drawn for is re-checked against the live roster on the
@@ -326,8 +310,8 @@ rebuilds it at the level it would be offered at now.
 
 `MercenaryMgr::OfferFor` builds the offer the roster row would get at the player's current level: the same
 bot, the level re-derived through `DeriveLevel`, the row's spec pinned back over the seed's draw
-(with the name, the role, the withheld variants and the temperament re-derived from the pinned spec,
-so the offer describes one character rather than a blend of two), and the gear ratio from the
+(with the name, the role and the temperament re-derived from the pinned spec, so the offer describes
+one character rather than a blend of two), and the gear ratio from the
 roster's base ratio. `Retrain` charges `HireFee` for that offer — the fee of hiring this mercenary at the
 new level, gear ratio and held-party multiplier included — and refuses when the player cannot afford
 it. It also refuses while the player is in combat.
@@ -355,21 +339,15 @@ affinity is a participation counter, not a score, and the bookkeeping to recogni
 would cost more than the step it saves. Quest completion comes from `OnPlayerCompleteQuest`, which
 only ever fires for a real player's own turn-in.
 
-Points are counted in whole steps of `Mercenary.AffinityStep` (default 100), and a step has exactly two
-effects, both on draws the module already makes:
+Points are counted in whole steps of `Mercenary.AffinityStep` (default 100), and a step has one
+effect: **it arrives better geared at its next build.** `ApplyMercenary` adds one
+`Mercenary.AffinityGearPercent` (default 5) per step to the gear-score ceiling, capped at
+`Mercenary.GearCapPercent`. The hire fee keeps the base ratio, so a veteran mercenary is geared
+better than its price suggests — the reward for keeping it, not a tax on the player who does.
 
-- **It learns what it was missing.** `WithheldVariants` subtracts the step count from the withheld
-  draw, clamped to the pool, so enough steps and a mercenary is missing nothing it was not dealt.
-  `IsSpellForbidden` reads the same function, so the spell gate lets an ability through on the same
-  build that grants it.
-- **It arrives better geared at its next build.** `ApplyMercenary` adds one `Mercenary.AffinityGearPercent`
-  (default 5) per step to the gear-score ceiling, capped at `Mercenary.GearCapPercent`. The hire fee keeps
-  the base ratio, so a veteran mercenary is geared better than its price suggests — the reward for
-  keeping it, not a tax on the player who does.
-
-The step count is clamped to `Mercenary.VariantWithholdMax`, because a step exists to hand back one
-withheld ability and a bond that ran past its own denominator would be buying nothing. That clamp is
-also the `M` in `bonded N/M` on the party row and on the retrain row: the most any mercenary could learn.
+The step count is clamped to `Mercenary.AffinityMaxSteps` (default 2), because a bond that ran past
+its own denominator would be buying nothing. That clamp is also the `M` in `bonded N/M` on the party
+row and on the retrain row: the most any mercenary could earn.
 A mercenary that has earned nothing keeps a bare row, since the suffix is a reward rather than a
 baseline.
 
@@ -399,17 +377,17 @@ PASS), `Playerbots.LootGreedRollLevel = 0` (GREED becomes PASS) and `Playerbots.
 | Piece | Where |
 |---|---|
 | Roster schema, I/O, offers, recruit/dismiss, orders, restock, retrain, affinity, the gear pass | `src/MercenaryMgr.cpp` |
-| Spec pinning and the spellbook blacklist | `src/MercenaryArchetype.cpp` |
+| Spec pinning | `src/MercenaryArchetype.cpp` |
 | Temperament and voice pools, their lines, and applying them | `src/MercenaryPersonality.cpp` |
 | The innkeeper line, the offers page and the mercenary page | `src/MercenaryInnkeeper.cpp` |
-| Login queue, the learn-spell gate, the affinity hooks and the kill and death lines | `src/MercenaryScripts.cpp` |
+| Login queue, the affinity hooks and the kill and death lines | `src/MercenaryScripts.cpp` |
 | Loader symbol `Addmod_mercenariesScripts` | `src/mercenary_loader.cpp` |
 
-Two hooks carry the behaviour. `PlayerScript::OnPlayerCanLearnSpell` refuses a blacklisted spell at
-the top of `Player::learnSpell`, so no learn path — factory, trainer, level-up maintenance, quest —
-can undo a restriction. `PlayerScript::OnPlayerLogin` only *marks* a mercenary; `WorldScript::OnUpdate` applies
-its level and archetype once it is in the world, which is what puts that work after playerbots' own
-login pass — the pass that would otherwise rebuild the mercenary at its owner's level.
+Two hooks carry the behaviour. `PlayerScript::OnPlayerLogin` only *marks* a mercenary;
+`WorldScript::OnUpdate` applies its level and archetype once it is in the world, which is what puts
+that work after playerbots' own login pass — the pass that would otherwise rebuild the mercenary at
+its owner's level. Nothing gates what a mercenary may learn: the spellbook restriction is gone, so
+the only thing the spec decides is its talents and the gear scored against them.
 
 ## Configuration
 
@@ -417,29 +395,26 @@ login pass — the pass that would otherwise rebuild the mercenary at its owner'
 `Mercenary.HireFeePercent`, `Mercenary.HireFeeHeldPercent`, `Mercenary.GearFloorPercent`, `Mercenary.GearCapPercent`,
 `Mercenary.ResupplyFeePercent`, `Mercenary.OfferedPerPage`, `Mercenary.FeaturedMin`/`FeaturedMax`,
 `Mercenary.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Mercenary.Debug`, the affinity scalars
-`Mercenary.AffinityEnabled`, `Mercenary.AffinityKillPoints`, `Mercenary.AffinityQuestPoints`, `Mercenary.AffinityStep`
-and `Mercenary.AffinityGearPercent`, the voice scalars `Mercenary.VoiceKillChancePercent` and
+`Mercenary.AffinityEnabled`, `Mercenary.AffinityKillPoints`, `Mercenary.AffinityQuestPoints`, `Mercenary.AffinityStep`,
+`Mercenary.AffinityGearPercent` and `Mercenary.AffinityMaxSteps`, the voice scalars `Mercenary.VoiceKillChancePercent` and
 `Mercenary.VoiceCooldownSeconds`, one `Mercenary.Voice` pool and one `Mercenary.VoiceLine.<label>` pool per voice,
-and one `Mercenary.Blacklist.<class>.<spec_no>` list and one `Mercenary.Variant.<class>.<spec_no>` pool and one
-`Mercenary.Temperament.<class>.<spec_no>` pool per archetype. The shipped values are
+and one `Mercenary.Temperament.<class>.<spec_no>` pool per spec. The shipped values are
 `Mercenary.ResupplyFeePercent = 100`, `Mercenary.AffinityEnabled = 1`, `Mercenary.AffinityKillPoints = 10`,
 `Mercenary.AffinityQuestPoints = 25`, `Mercenary.AffinityStep = 100`, `Mercenary.AffinityGearPercent = 5`,
+`Mercenary.AffinityMaxSteps = 2`,
 `Mercenary.VoiceKillChancePercent = 10` and `Mercenary.VoiceCooldownSeconds = 120`. The two shipped line pools
 match the two shipped voice labels:
 `Mercenary.VoiceLine.Talkative = kill: Well fought! | kill: Next one, then. | kill: That is how it is done. | death: Avenge me, friend. | dismiss: Until next time.`
-and `Mercenary.VoiceLine.Quiet = death: ... | dismiss: *nods*`. Spell names in the blacklist are resolved
-once at startup; an unresolved name is logged as an error rather than ignored. That resolution
-happens in `OnStartup`, not at the first config load: `OnAfterConfigLoad` runs at
-`World.cpp:302` and `sSpellMgr->LoadSpellInfoStore` at `World.cpp:407`, so a build there finds an
-empty spell store and every blacklist and variant name fails to resolve. A reload rebuilds both
-tables, on a running server where the store is already loaded.
+and `Mercenary.VoiceLine.Quiet = death: ... | dismiss: *nods*`. The spec table is read from the config
+manager once at startup rather than at the first config load, because hook order between modules is not
+guaranteed and this module's own conf may not have been parsed yet when that hook runs; a reload
+rebuilds both tables.
 
 The pool keys are where an upgrade shows. `scripts/thor-install.sh` copies the `.dist` only when the
 live conf is missing, so an install made before a pool shipped would keep a conf with no
 `Mercenary.Temperament.*` block at all and `MercenaryPersonality::Load` would have nothing to roll from. The
 installer therefore back-fills them (`mercenary_append_missing_conf`): every shipped `Mercenary.Voice`,
-`Mercenary.VoiceLine.<label>`, `Mercenary.Blacklist.<cls>.<spec>`, `Mercenary.Variant.<cls>.<spec>` and
-`Mercenary.Temperament.<cls>.<spec>` line
+`Mercenary.VoiceLine.<label>` and `Mercenary.Temperament.<cls>.<spec>` line
 the live conf does not define is appended with its shipped value, under a comment saying so. It is
 append-only — no existing value is rewritten, and a pool the admin trimmed is left alone — and
 idempotent: the second run appends nothing.

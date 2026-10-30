@@ -8,9 +8,6 @@
  *     from the roster. The drain runs in WorldScript::OnUpdate, on the world
  *     thread, after playerbots' own login pass - which is what lets a mercenary's
  *     level stay inside the window instead of being snapped to the player's.
- *   * PlayerScript::OnPlayerCanLearnSpell refuses a blacklisted spell. The core
- *     checks it at the top of Player::learnSpell, so no learn path can bypass
- *     it: factory initialisation, trainer, level-up maintenance or a quest.
  *   * PlayerScript::OnPlayerLogout drops the picker's per-player cache entry.
  *   * PlayerScript::OnPlayerCreatureKillCredit and OnPlayerCompleteQuest credit affinity
  *     to the owner's mercenaries. Kills are resolved back to the owner when a mercenary landed
@@ -21,11 +18,11 @@
  *     at the two moments the module sees for itself, before anything else about the
  *     mercenary has changed. The kill hook carries no credit of its own.
  *
- * The picker itself lives in MercenaryInnkeeper.cpp: a CreatureAI handed out by an
- * AllCreatureScript, so the line is on every innkeeper without a template row, a
- * spawn or a ScriptName. It cannot be a named CreatureScript: those are
- * database-bound and gossip is dispatched by the creature's own script id, and an
- * innkeeper's is the core's npc_innkeeper.
+ * The picker itself lives in MercenaryInnkeeper.cpp: two AllCreatureScript gossip hooks,
+ * so the line is on every innkeeper without a template row, a spawn or a ScriptName, and
+ * an innkeeper that carries an AI of its own keeps it. It cannot be a named
+ * CreatureScript: those are database-bound and gossip is dispatched by the creature's own
+ * script id, and an innkeeper's is the core's npc_innkeeper.
  *
  * Released under GNU GPL v2 or (at your option) any later version.
  */
@@ -58,11 +55,6 @@ public:
         // dropped: they belong to the pool cycle, and the refresh that ends the
         // cycle clears both, so a relogin finds the same crowd at the inn.
         MercenaryMenuForgetPlayer(player->GetGUID());
-    }
-
-    [[nodiscard]] bool OnPlayerCanLearnSpell(Player* player, uint32 spellId) override
-    {
-        return !sMercenaryMgr.IsSpellForbidden(player, spellId);
     }
 
     void OnPlayerCreatureKill(Player* killer, Creature* /*killed*/) override

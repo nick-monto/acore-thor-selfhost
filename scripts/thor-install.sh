@@ -116,8 +116,6 @@ MERCENARY_CONF_DEFAULTS=(
     "Mercenary.MaxMercenaries=2"
     "Mercenary.LevelWindow=2"
     "Mercenary.GainXP=0"
-    "Mercenary.VariantWithholdMin=1"
-    "Mercenary.VariantWithholdMax=2"
     "Mercenary.Voice=Talkative: +emote | Quiet: -emote"
     "Mercenary.VoiceKillChancePercent=10"
     "Mercenary.VoiceCooldownSeconds=120"
@@ -131,6 +129,7 @@ MERCENARY_CONF_DEFAULTS=(
     "Mercenary.AffinityQuestPoints=25"
     "Mercenary.AffinityStep=100"
     "Mercenary.AffinityGearPercent=5"
+    "Mercenary.AffinityMaxSteps=2"
     "Mercenary.OfferedPerPage=12"
     "Mercenary.FeaturedMin=10"
     "Mercenary.FeaturedMax=15"
@@ -311,8 +310,6 @@ mercenary_value_ok() {   # mercenary_value_ok KEY VALUE - true when VALUE is one
             [ "$val" -ge 0 ] && [ "$val" -le 10 ] ;;
         Mercenary.GainXP)
             [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Mercenary.VariantWithholdMin|Mercenary.VariantWithholdMax)
-            [ "$val" -ge 0 ] && [ "$val" -le 5 ] ;;
         Mercenary.OfferedPerPage)
             [ "$val" -ge 1 ] && [ "$val" -le 14 ] ;;
         Mercenary.HireFeePercent)
@@ -337,6 +334,8 @@ mercenary_value_ok() {   # mercenary_value_ok KEY VALUE - true when VALUE is one
             [ "$val" -ge 1 ] && [ "$val" -le 100000 ] ;;
         Mercenary.AffinityGearPercent)
             [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
+        Mercenary.AffinityMaxSteps)
+            [ "$val" -ge 0 ] && [ "$val" -le 20 ] ;;
         Mercenary.FeaturedMin|Mercenary.FeaturedMax)
             [ "$val" -ge 1 ] && [ "$val" -le 50 ] ;;
         Mercenary.PoolRefreshMinMinutes|Mercenary.PoolRefreshMaxMinutes)
@@ -364,7 +363,7 @@ mercenary_append_missing_conf() {   # mercenary_append_missing_conf LIVE DIST - 
         case "$key" in
             Mercenary.Voice) ;;
             Mercenary.VoiceLine.*) ;;
-            Mercenary.Blacklist.[0-9]*.[0-9]*|Mercenary.Variant.[0-9]*.[0-9]*|Mercenary.Temperament.[0-9]*.[0-9]*) ;;
+            Mercenary.Temperament.[0-9]*.[0-9]*) ;;
             *) continue ;;                          # comments, blanks and every scalar key
         esac
         # An empty value counts as absent here, unlike for a scalar: a pool is never legitimately
@@ -1610,6 +1609,10 @@ write_configs() {
         # longer exists is dropped: the obelisk gameobject is gone, and a leftover entry would
         # look like it still selected something.
         sed -i -E '/^[[:space:]]*Mercenary\.ObeliskEntry[[:space:]]*=/d' "$pw"
+        # Same for the spellbook restriction: the blacklist and variant blocks and their two scalars
+        # are no longer read by the module, so a conf written before the removal would keep a page of
+        # blocks that do nothing. Only the live file is edited - the .dist is the shipped one.
+        sed -i -E '/^[[:space:]]*Mercenary\.(Blacklist|Variant)\.[0-9]+\.[0-9]+[[:space:]]*=/d; /^[[:space:]]*Mercenary\.VariantWithhold(Min|Max)[[:space:]]*=/d' "$pw"
         conf_defaults "$pw" mercenary_value_ok mod-mercenaries.conf "${MERCENARY_CONF_DEFAULTS[@]}"
         mercenary_append_missing_conf "$pw" "$CONF_DIR/modules/mod-mercenaries.conf.dist"
         # The module was mod-pawn before it was mod-mercenaries and its conf file is renamed with it.

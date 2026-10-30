@@ -1,11 +1,12 @@
 /*
  * mod-mercenaries: archetypes.
  *
- * An archetype is one premade PvE spec plus the signature abilities of the
- * *other* specs of the same class, which the mercenary may never learn. The spec
- * makes the mercenary play like its role; the blacklist makes the role real, because
- * a fury warrior that still knows Shield Wall can tank and a shadow priest that
- * still knows Resurrection can heal.
+ * An archetype is one premade PvE spec, pinned when the mercenary is built so that it
+ * plays like its role and is geared for it. The spec is all that is pinned: a mercenary
+ * keeps every ability its class and level give it. An earlier build also withheld the
+ * other specs' signature abilities and a per-mercenary subset of the spec's situational
+ * ones, which read as broken rather than as different at low levels - a level-10 hunter
+ * missing Concussive Shot - so the restriction was removed and is deferred.
  *
  * Released under GNU GPL v2 or (at your option) any later version.
  */
@@ -26,8 +27,7 @@ class MercenaryArchetype
 public:
     static MercenaryArchetype& instance();
 
-    // Reads Playerbots.PremadeSpecName.* and Mercenary.Blacklist.*, resolving every
-    // spell name against the spell table. Safe to call again on config reload.
+    // Reads Playerbots.PremadeSpecName.*. Safe to call again on config reload.
     void Load();
 
     // The PvE spec numbers of a class, in configuration order. Empty when the
@@ -36,22 +36,13 @@ public:
 
     [[nodiscard]] std::string const& SpecName(uint8 cls, uint8 spec) const;
     [[nodiscard]] MercenaryRole RoleFor(uint8 cls, uint8 spec) const;
-    [[nodiscard]] bool IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const;
 
-    // The variant pool of a spec: abilities a mercenary of it may or may not have.
-    // Empty for a spec with no Mercenary.Variant.<class>.<spec> block.
-    [[nodiscard]] std::vector<MercenaryVariantSpell> const& Variants(uint8 cls, uint8 spec) const;
-
-    // Pins the spec and removes every blacklisted spell the mercenary still knows,
-    // plus the variant abilities this mercenary was not dealt. Called on every mercenary
-    // login, after any re-levelling.
-    void Apply(Player* bot, uint8 cls, uint8 spec, std::vector<MercenaryVariantSpell> const& withheld = {}) const;
+    // Pins the spec's talents. Called on every mercenary login, after any re-levelling.
+    void Apply(Player* bot, uint8 spec) const;
 
 private:
     static uint32 Key(uint8 cls, uint8 spec) { return (uint32(cls) << 8) | uint32(spec); }
 
-    std::unordered_map<uint32, std::vector<uint32>> _forbidden;   // Key -> spell ids
-    std::unordered_map<uint32, std::vector<MercenaryVariantSpell>> _variants;  // Key -> variant pool
     std::unordered_map<uint32, std::string>         _specNames;   // Key -> premade spec name
     std::unordered_map<uint8, std::vector<uint8>>   _pveSpecs;    // class -> spec numbers
 };

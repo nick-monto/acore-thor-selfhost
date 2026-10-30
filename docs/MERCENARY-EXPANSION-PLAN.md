@@ -16,9 +16,9 @@ These hold for every phase, and `scripts/mercenaries/check_mercenaries.py` enfor
    defined in `modules/mod-mercenaries/conf/mod-mercenaries.conf.dist`; every non-pool key must also be in
    `MERCENARY_CONF_DEFAULTS` in `scripts/thor-install.sh` **with the same value**, and `mercenary_value_ok`
    must accept it (its `*) return 1` fallback rejects anything without a case arm).
-2. **Pool keys are the exception**: `Mercenary.VoiceLine.<label>` joins `Mercenary.Voice`, `Mercenary.Blacklist.*`,
-   `Mercenary.Variant.*` and `Mercenary.Temperament.*` in the installer's `mercenary_append_missing_conf` case and
-   in the checker's exemption tuple, because a repair must never overwrite a pool an admin trimmed.
+2. **Pool keys are the exception**: `Mercenary.VoiceLine.<label>` joins `Mercenary.Voice` and
+   `Mercenary.Temperament.*` in the installer's `mercenary_append_missing_conf` case and in the
+   checker's exemption tuple, because a repair must never overwrite a pool an admin trimmed.
 3. **No new SQL file.** The roster is created programmatically; a new column goes through
    `EnsureSchema`'s `CREATE TABLE` **and** `AddMissingColumn` (MariaDB-only syntax is not used), and
    into `LoadRoster` and the `REPLACE INTO` column list in `Upsert` or it is dropped on the next
@@ -64,9 +64,10 @@ does for a whisper.
 bool Order(Player* player, ObjectGuid bot, char const* verb, std::string& message);
 ```
 
-**Verbs.** `follow`, `stay`, `attack`, `flee`. Each has a reply line ("<name> falls in behind you.",
-"<name> holds here.", "<name> takes your target.", "<name> breaks off."). `attack` maps to the
-`attack` trigger ("attack my target"); `flee` to `flee`.
+**Verbs.** `follow` and `flee`, the two recall words: each has a reply line ("<name> falls in behind
+you.", "<name> breaks off."). `flee` maps to `flee`. The engagement orders an earlier build carried -
+`stay` ("hold here") and `attack` ("attack my target") - were removed: how a mercenary engages is its
+temperament's business, and a manual dial fought the manner it was hired with.
 
 **Refusals.** Not enabled; not this player's recruited mercenary; the mercenary is offline (nothing is
 queued — an order is a moment, not a state); the owner is in combat *only* for the non-combat
@@ -74,8 +75,8 @@ verbs? No: every verb is legal in combat, and `stay`/`follow` in combat is exact
 wanted.
 
 **Acceptance.** At an innkeeper, click a party row → the mercenary page opens; "Follow me" makes the
-mercenary follow, "Hold here" makes it stay, "Attack my target" attacks the player's target; "Back"
-returns to the offers page with the same page index.
+mercenary follow and "Break off" calls it out of a fight; "Back" returns to the offers page with the
+same page index.
 
 ## Feature 3 — repair and restock
 
@@ -155,21 +156,20 @@ because it is already at that level. Its affinity and voice are unchanged.
 ## Feature 4 — affinity
 
 **Problem.** Everything about a mercenary is decided at hire time and frozen: level, spec, gear ratio,
-which variant abilities it was dealt, its temperament, its voice. A companion the player has fought
-beside for twenty levels is mechanically the same stranger it was on day one.
+its temperament, its voice. A companion the player has fought beside for twenty levels is mechanically
+the same stranger it was on day one.
 
-**Design.** Affinity is a per-(owner, mercenary) point count that moves with play. It has exactly two
-effects, both on draws the module already makes:
+**Design.** Affinity is a per-(owner, mercenary) point count that moves with play. It has one effect:
 
-1. **It learns what it was missing.** The withheld variant abilities are a seeded draw from
-   `[VariantWithholdMin, VariantWithholdMax]`. Every `Mercenary.AffinityStep` points returns one of them:
-   `withheld = max(draw - steps, 0)`, and `steps` is clamped to `VariantWithholdMax`, so affinity
-   can never conjure abilities the spec's variant pool does not have. `MercenaryMgr::IsSpellForbidden`
-   uses the same function, so the spell gate and the build stay in agreement.
-2. **It arrives better geared at its next build.** The gear-score ceiling in `ApplyMercenary` is
+1. **It arrives better geared at its next build.** The gear-score ceiling in `ApplyMercenary` is
    `owner_gear_score * ratio / 100`; affinity adds `steps * Mercenary.AffinityGearPercent` to the ratio,
-   capped at `Mercenary.GearCapPercent`. The **fee** keeps using the base ratio: a veteran mercenary is geared
-   better than its price suggests, which is the reward, not a tax.
+   capped at `Mercenary.GearCapPercent`, and `steps` is clamped to `Mercenary.AffinityMaxSteps` (default 2)
+   so the bond shown on the party row cannot run past its own reward. The **fee** keeps using the base
+   ratio: a veteran mercenary is geared better than its price suggests, which is the reward, not a tax.
+
+The variant half of this feature - a step handing back a withheld ability - went with the spellbook
+restriction it paid back, when that was removed for reading as broken at low levels. The point counter,
+the step, the cap and the gear lift are what is left, and they are what is built.
 
 **Points.** A kill credits `Mercenary.AffinityKillPoints`, a completed quest `Mercenary.AffinityQuestPoints`,
 to **every recruited mercenary of the owner** — the mercenaries are the party. The award happens in exactly one
@@ -200,12 +200,12 @@ uint32 AffinitySteps(MercenaryRosterRow const& row) const;   // points / step, c
 void AwardAffinity(Player* player, uint32 points);      // every recruited mercenary of this player
 ```
 
-**UI.** The party row and the mercenary page show the bond: `bonded 2/2` when every variant has been
-returned, `bonded 1/2` at one step.
+**UI.** The party row and the mercenary page show the bond: `bonded 2/2` at the cap,
+`bonded 1/2` at one step.
 
 **Acceptance.** Kill ten creatures with two mercenaries in the party: both rows gain
-`10 * AffinityKillPoints` in memory, and at 100 points the withheld list on the mercenary page shrinks by
-one entry and the mercenary learns that ability on its next login (the spell gate no longer refuses it).
+`10 * AffinityKillPoints` in memory, and at 100 points the bond moves to `bonded 1/2` and the next build
+of that mercenary is geared one `Mercenary.AffinityGearPercent` higher.
 
 ## Feature 6 — voice lines
 
@@ -265,7 +265,7 @@ conf keys and the installer/checker wiring before the units start, then verifies
 | P2 | restock | U | `MercenaryInnkeeper.cpp` | one restock row with its fee and confirmation |
 | P3 | retrain | M | `MercenaryMgr.cpp` | `OfferFor`, `Retrain` |
 | P3 | retrain | U | `MercenaryInnkeeper.cpp` | one retrain row, level and fee in the label |
-| P4 | affinity | M | `MercenaryMgr.cpp` | schema, roster I/O, `AffinitySteps`, `AwardAffinity`, withheld and gear ceiling |
+| P4 | affinity | M | `MercenaryMgr.cpp` | schema, roster I/O, `AffinitySteps`, `AwardAffinity` and the gear ceiling |
 | P4 | affinity | S | `MercenaryScripts.cpp` | `OnPlayerCreatureKill`, `OnPlayerCreatureKillCredit`, `OnPlayerCompleteQuest` |
 | P4 | affinity | U | `MercenaryInnkeeper.cpp` | bond on the party row and the mercenary page |
 | P5 | voice | P | `MercenaryPersonality.h/.cpp` | line pools, `Line`, `SayLine` |

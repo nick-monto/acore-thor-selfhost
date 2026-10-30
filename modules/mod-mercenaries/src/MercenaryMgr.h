@@ -60,9 +60,10 @@ public:
     bool Dismiss(Player* player, ObjectGuid bot, std::string& message);
 
     // Forwards one order to an online mercenary of this player. The verb is the whisper
-    // vocabulary playerbots already implements - follow, stay, attack, flee - and is
-    // handed to the same entry point a whisper reaches, so a click at the innkeeper and
-    // a typed whisper cannot diverge. Anything else is refused here rather than sent.
+    // vocabulary playerbots already implements - follow, flee - and is handed to the same
+    // entry point a whisper reaches, so a click at the innkeeper and a typed whisper cannot
+    // diverge. Anything else is refused here rather than sent. The two are recall orders:
+    // how a mercenary engages is its temperament's business, not the player's.
     bool Order(Player* player, ObjectGuid bot, char const* verb, std::string& message);
 
     // Copper a repair-and-restock of one mercenary costs this player: a percentage of
@@ -86,13 +87,12 @@ public:
     bool Retrain(Player* player, ObjectGuid bot, std::string& message);
 
     // How many whole steps of affinity this mercenary has earned, clamped to the most it can
-    // use: one step returns one withheld variant, and a mercenary cannot be handed back more
-    // than the draw could have withheld. The step count is the same function everywhere
-    // it matters - the build, the spell gate and the picker - so they cannot disagree.
+    // use. The step count is the same function everywhere it matters - the build and the
+    // picker - so the bond shown and the gear granted cannot disagree.
     [[nodiscard]] uint32 AffinitySteps(MercenaryRosterRow const& row) const;
 
-    // The most steps a mercenary can use: the configured withhold maximum, because that is the
-    // largest number of variants a draw can take away. The picker shows the bond against it.
+    // The most steps a mercenary can use, Mercenary.AffinityMaxSteps. The picker shows the
+    // bond against it.
     [[nodiscard]] uint32 AffinityCap() const;
 
     // Credits affinity points to every mercenary this owner has in the party. Called from the
@@ -104,15 +104,6 @@ public:
     // The owner of this mercenary, or an empty guid when the character is not one. The hooks
     // need it to credit a kill a mercenary landed to the player it follows.
     [[nodiscard]] ObjectGuid OwnerOf(ObjectGuid mercenary) const;
-
-    [[nodiscard]] bool IsSpellForbidden(Player* bot, uint32 spellId) const;
-
-    // The variant abilities this mercenary is missing: a bounded, deterministic
-    // subset of its spec's variant pool, drawn from the same seed as its level,
-    // spec and gear ratio, so two mercenaries of one spec differ and one mercenary does not
-    // change under its owner.
-    [[nodiscard]] std::vector<MercenaryVariantSpell> WithheldVariants(ObjectGuid owner, ObjectGuid bot,
-                                                                uint8 cls, uint8 spec) const;
 
 private:
     [[nodiscard]] uint8 DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLevel, uint8 cls) const;

@@ -151,6 +151,10 @@ installer and the module carry the rename over rather than leaving two of everyt
 - `modules/mod-mercenaries` is what the build looks for, and the loader symbol follows the directory
   name (`Addmod_mercenariesScripts`), so an artifact built before the rename cannot load the module
   from the new directory and vice versa: reinstall the artifact and the module sources together.
+- A mercenary hired while the module still pruned its spellbook (`Mercenary.Blacklist.*`,
+  `Mercenary.Variant.*`) keeps those pruned spells in its book until something re-teaches them. The
+  installer drops the dead blocks from the live conf, and each mercenary re-learns what its class and
+  level allow on its next login; a retrain does the same in one step.
 
 ## Part 3 — Database
 
@@ -387,7 +391,7 @@ mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_charact
   -e "SHOW COLUMNS FROM mercenary_roster;
       SELECT COUNT(*) AS rows_total, SUM(state = 1) AS in_party FROM mercenary_roster;"
 
-# 4. the module registered itself, read the pool and resolved every archetype blacklist name
+# 4. the module registered itself and read the pool
 grep -i "module.mercenary" /opt/acore/logs/Server.log | tail -10
 ```
 
@@ -405,7 +409,7 @@ grep -i "module.mercenary" /opt/acore/logs/Server.log | tail -10
   boot after the pool was widened (the log line `Creating random bot characters for account` marks
   it, and it is a one-time cost). `Mercenary: pool: N offline characters, next roll in M min` in (4)
   repeats the same number from the module's own view.
-- (3) prints the ten columns and `0` rows on a fresh realm. `built` is `1` once a mercenary has been
+- (3) prints the columns and `0` rows on a fresh realm. `built` is `1` once a mercenary has been
   equipped for its pinned spec, which is what keeps a returning mercenary's gear untouched; `paid` is `1`
   once that owner has paid its hire fee at the level in `target_level`, which is what makes a re-hire
   at that level free. A non-zero `in_party` is a mercenary currently in someone's party.
@@ -413,14 +417,15 @@ grep -i "module.mercenary" /opt/acore/logs/Server.log | tail -10
   or error anywhere:
 
   ```
-  Mercenary: archetypes: 33 specs named, 33 PvE specs offerable, N blacklisted ids, V variant abilities over S specs, 0 names unresolved
-  Mercenary: personality: 33 temperament pools over 33 temperament keys, 2 voices
+  Mercenary: archetypes: 33 specs named, 33 PvE specs offerable
+  Mercenary: personality: 33 temperament pools over 33 temperament keys, 2 voices, 2 voice-line blocks, N lines
   ```
 
-  `names unresolved` above zero, or any `Mercenary.Blacklist.<class>.<spec>: no spell is named '...'`
-  or `Mercenary.Variant.<class>.<spec>: no spell is named '...'` line, is an ERROR and means that
-  restriction or variation does nothing — fix the name in `/opt/acore/etc/modules/mod-mercenaries.conf` and
-  restart; the config is read at load, not per use. `Config: Missing property Mercenary.Temperament...`
+  Any `Mercenary: Mercenary.Temperament...` ERROR means a pool is unusable as written — a profile with
+  no label, a token that is not `+strategy` or `-strategy`, or a strategy name playerbots does not
+  register — and that trait does nothing until it is fixed in
+  `/opt/acore/etc/modules/mod-mercenaries.conf` and the server restarted; the config is read at load,
+  not per use. `Config: Missing property Mercenary.Temperament...`
   means the module and the conf disagree about which keys exist: the loaders enumerate the keys the
   conf defines, so that line only appears from a build older than the enumeration. And
   `Script named 'npc_mercenary_innkeeper' is not assigned in the database.` means the picker is a
@@ -434,11 +439,12 @@ Then talk to any innkeeper - the capital inns and the town inns all carry the li
 "Recruit companions". What needs a client session, and has not been run on the Thor: the line
 appearing next to "make this inn your home" with the bind option still working, the paged menu, that
 two openings show different 10-15 subsets, the level and spec each row advertises, that the recruited
-mercenary arrives at that level with that spec and without the abilities its row says it lacks, that two
-mercenaries of one spec differ in those abilities, that a third recruit is refused, that a blacklisted spell
-is refused when the mercenary tries to learn it, that both mercenaries pass on a drop, that a mercenary stays at its
-hired level when the player levels past it (no XP, and `fallen behind` in the party row), and that the
-party comes back after a relog and a world-server restart.
+mercenary arrives at that level with that spec and with the abilities its class and level give it, that
+two mercenaries of one spec differ in temperament and voice, that the mercenary page carries only the
+two recall orders and no "hold here" or "attack my target", that a third recruit is refused, that both
+mercenaries pass on a drop, that a mercenary stays at its hired level when the player levels past it
+(no XP, and `fallen behind` in the party row), and that the party comes back after a relog and a
+world-server restart.
 
 ## Part 6 — Prove it with a client before touching the launcher
 

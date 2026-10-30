@@ -11,8 +11,6 @@
 #include "Player.h"
 #include "PlayerbotFactory.h"
 #include "SharedDefines.h"
-#include "SpellInfo.h"
-#include "SpellMgr.h"
 
 #include <algorithm>
 #include <cctype>
@@ -30,36 +28,6 @@ namespace
     // Premade spec numbers are contiguous from 0 in the shipped configuration
     // (warrior 0-5, druid 0-6). Eight is a hard ceiling, not a guess.
     constexpr uint8 kMaxSpecs = 8;
-
-    std::string Trim(std::string s)
-    {
-        auto const notSpace = [](unsigned char c) { return !std::isspace(c); };
-        s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));
-        s.erase(std::find_if(s.rbegin(), s.rend(), notSpace).base(), s.end());
-        return s;
-    }
-
-    std::vector<std::string> SplitNames(std::string const& list)
-    {
-        std::vector<std::string> out;
-        std::string current;
-        for (char c : list)
-        {
-            if (c == ',')
-            {
-                std::string name = Trim(current);
-                if (!name.empty())
-                    out.push_back(name);
-                current.clear();
-                continue;
-            }
-            current.push_back(c);
-        }
-        std::string name = Trim(current);
-        if (!name.empty())
-            out.push_back(name);
-        return out;
-    }
 
     std::string Lower(std::string s)
     {
@@ -136,76 +104,6 @@ namespace
         }
         return false;
     }
-
-    std::string Fold(std::string name)
-    {
-        std::transform(name.begin(), name.end(), name.begin(),
-                       [](unsigned char c) { return char(std::tolower(c)); });
-        return name;
-    }
-
-    // Spell names are the only reviewable key the configuration can carry: the
-    // server keeps no name -> id table, so build one once. SpellName[0] is enUS
-    // and is what the .dist comments are written against.
-    //
-    // The folded index is the second chance for a hand-typed name: the table's own
-    // spelling is title case ("Hunger For Blood"), and a name that differs only in
-    // case is a misspelling of a spell that exists, not a different spell.
-    struct NameIndex
-    {
-        std::unordered_map<std::string, std::vector<uint32>> exact;
-        std::unordered_map<std::string, std::vector<std::string>> folded;
-    };
-
-    NameIndex BuildNameIndex()
-    {
-        NameIndex index;
-        uint32 const count = sSpellMgr->GetSpellInfoStoreSize();
-        for (uint32 id = 1; id < count; ++id)
-        {
-            SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
-            if (!info || !info->SpellName[0] || !info->SpellName[0][0])
-                continue;
-            index.exact[info->SpellName[0]].push_back(id);
-        }
-
-        for (auto const& entry : index.exact)
-            index.folded[Fold(entry.first)].push_back(entry.first);
-        return index;
-    }
-
-    // The ids a configured name resolves to, or nullptr with the reason logged. `kind`,
-    // `cls` and `spec` are the block the name came from, for the log line.
-    std::vector<uint32> const* ResolveName(NameIndex const& index, std::string const& name,
-                                           char const* kind, uint32 cls, uint32 spec)
-    {
-        auto const exact = index.exact.find(name);
-        if (exact != index.exact.end())
-            return &exact->second;
-
-        auto const folded = index.folded.find(Fold(name));
-        if (folded == index.folded.end())
-        {
-            LOG_ERROR("module", "Mercenary: {} {}.{}: no spell is named '{}'; that restriction does nothing",
-                      kind, cls, spec, name);
-            return nullptr;
-        }
-
-        if (folded->second.size() > 1)
-        {
-            std::string candidates;
-            for (std::string const& candidate : folded->second)
-                candidates += (candidates.empty() ? "'" : ", '") + candidate + "'";
-            LOG_ERROR("module", "Mercenary: {} {}.{}: '{}' is not a spell name, and {} spells differ only in case ({}); spell one of them exactly",
-                      kind, cls, spec, name, uint32(folded->second.size()), candidates);
-            return nullptr;
-        }
-
-        std::string const& real = folded->second.front();
-        LOG_WARN("module", "Mercenary: {} {}.{}: '{}' is spelled '{}' in the spell table; using that",
-                 kind, cls, spec, name, real);
-        return &index.exact.find(real)->second;
-    }
 }
 
 MercenaryArchetype& MercenaryArchetype::instance()
@@ -216,8 +114,6 @@ MercenaryArchetype& MercenaryArchetype::instance()
 
 void MercenaryArchetype::Load()
 {
-    _forbidden.clear();
-    _variants.clear();
     _specNames.clear();
     _pveSpecs.clear();
 
@@ -257,74 +153,8 @@ void MercenaryArchetype::Load()
         }
     }
 
-    auto const nameIndex = BuildNameIndex();
-    uint32 blacklisted = 0;
-    uint32 missing = 0;
-
-    std::string const blacklistPrefix = "Mercenary.Blacklist.";
-    for (std::string const& key : sConfigMgr->GetKeysByString(blacklistPrefix))
-    {
-        uint32 cls = 0;
-        uint32 spec = 0;
-        if (!ParseGridKey(blacklistPrefix, key, cls, spec))
-            continue;
-
-        std::string const list = sConfigMgr->GetOption<std::string>(key, "", false);
-        if (list.empty())
-            continue;
-
-        std::vector<uint32>& ids = _forbidden[Key(uint8(cls), uint8(spec))];
-        for (std::string const& name : SplitNames(list))
-        {
-            std::vector<uint32> const* spells = ResolveName(nameIndex, name, "blacklist", cls, spec);
-            if (!spells)
-            {
-                ++missing;
-                continue;
-            }
-
-            ids.insert(ids.end(), spells->begin(), spells->end());
-        }
-
-        std::sort(ids.begin(), ids.end());
-        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-        blacklisted += uint32(ids.size());
-    }
-
-    // The variant pools: abilities a mercenary of the spec may or may not arrive with,
-    // kept as name + every id it resolves to, because the picker names them and
-    // the learn gate has to match the ids.
-    uint32 variantNames = 0;
-    std::string const variantPrefix = "Mercenary.Variant.";
-    for (std::string const& key : sConfigMgr->GetKeysByString(variantPrefix))
-    {
-        uint32 cls = 0;
-        uint32 spec = 0;
-        if (!ParseGridKey(variantPrefix, key, cls, spec))
-            continue;
-
-        std::string const list = sConfigMgr->GetOption<std::string>(key, "", false);
-        if (list.empty())
-            continue;
-
-        std::vector<MercenaryVariantSpell>& pool = _variants[Key(uint8(cls), uint8(spec))];
-        for (std::string const& name : SplitNames(list))
-        {
-            std::vector<uint32> const* spells = ResolveName(nameIndex, name, "variant", cls, spec);
-            if (!spells)
-            {
-                ++missing;
-                continue;
-            }
-
-            pool.push_back(MercenaryVariantSpell{name, *spells});
-            ++variantNames;
-        }
-    }
-
-    LOG_INFO("module", "Mercenary: archetypes: {} specs named, {} PvE specs offerable, {} blacklisted ids, {} variant abilities over {} specs, {} names unresolved",
-             uint32(_specNames.size()), pveSpecs, blacklisted, variantNames,
-             uint32(_variants.size()), missing);
+    LOG_INFO("module", "Mercenary: archetypes: {} specs named, {} PvE specs offerable",
+             uint32(_specNames.size()), pveSpecs);
 }
 
 std::vector<uint8> const& MercenaryArchetype::PveSpecs(uint8 cls) const
@@ -357,49 +187,10 @@ MercenaryRole MercenaryArchetype::RoleFor(uint8 cls, uint8 spec) const
     return MERCENARY_ROLE_DPS;
 }
 
-std::vector<MercenaryVariantSpell> const& MercenaryArchetype::Variants(uint8 cls, uint8 spec) const
-{
-    static std::vector<MercenaryVariantSpell> const empty;
-    auto it = _variants.find(Key(cls, spec));
-    return it == _variants.end() ? empty : it->second;
-}
-
-bool MercenaryArchetype::IsForbidden(uint8 cls, uint8 spec, uint32 spellId) const
-{
-    auto it = _forbidden.find(Key(cls, spec));
-    if (it == _forbidden.end())
-        return false;
-    return std::binary_search(it->second.begin(), it->second.end(), spellId);
-}
-
-void MercenaryArchetype::Apply(Player* bot, uint8 cls, uint8 spec, std::vector<MercenaryVariantSpell> const& withheld) const
+void MercenaryArchetype::Apply(Player* bot, uint8 spec) const
 {
     if (!bot)
         return;
 
     PlayerbotFactory::InitTalentsBySpecNo(bot, spec, true);
-
-    uint32 pruned = 0;
-    auto const prune = [&](std::vector<uint32> const& ids)
-    {
-        for (uint32 spellId : ids)
-        {
-            if (!bot->HasSpell(spellId))
-                continue;
-            bot->removeSpell(spellId, SPEC_MASK_ALL, false, true);
-            ++pruned;
-        }
-    };
-
-    if (auto it = _forbidden.find(Key(cls, spec)); it != _forbidden.end())
-        prune(it->second);
-
-    // The mercenary's own withheld variants, so a rebuild does not leave one behind:
-    // the learn gate would refuse it anyway, but a spell already in the book is
-    // not a learn attempt.
-    for (MercenaryVariantSpell const& variant : withheld)
-        prune(variant.Ids);
-
-    LOG_DEBUG("module", "Mercenary: mercenary {}: spec {} applied, {} spells pruned ({} variant{})", bot->GetName(),
-              uint32(spec), pruned, uint32(withheld.size()), withheld.size() == 1 ? "" : "s");
 }

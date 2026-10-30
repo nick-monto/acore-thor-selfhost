@@ -92,21 +92,20 @@ namespace
     // A mercenary action is the one code that is not page-local: the mercenary page holds a
     // single mercenary, so its rows carry that mercenary's roster index and a verb rather
     // than a position on a page. Mercenary.MaxMercenaries is clamped to 4
-    // (MercenaryMgr.cpp:160), which is ten verbs for each of four mercenaries - 1300..1339 -
+    // (MercenaryMgr.cpp:162), which is ten verbs for each of four mercenaries - 1300..1339 -
     // and the base sits above the recruit span so no party row can be read as a
     // hire. Every verb below has a row on the mercenary page: 0 retrain, 1 restock,
-    // 2 follow, 3 stay, 4 attack, 5 dismiss, 6 back and 7 break off.
+    // 2 follow, 3 break off, 4 dismiss and 5 back. The two rows that remain are recall
+    // orders; how the mercenary engages is its temperament's business.
     constexpr uint32 MERCENARY_ACTION_MERCENARY      = 1300;
     constexpr uint32 MERCENARY_ACTION_MERCENARY_SPAN = 40;
 
     constexpr uint32 MERCENARY_VERB_RETRAIN  = 0;
     constexpr uint32 MERCENARY_VERB_RESUPPLY = 1;
     constexpr uint32 MERCENARY_VERB_FOLLOW   = 2;
-    constexpr uint32 MERCENARY_VERB_STAY     = 3;
-    constexpr uint32 MERCENARY_VERB_ATTACK   = 4;
-    constexpr uint32 MERCENARY_VERB_DISMISS  = 5;
-    constexpr uint32 MERCENARY_VERB_BACK     = 6;
-    constexpr uint32 MERCENARY_VERB_FLEE     = 7;
+    constexpr uint32 MERCENARY_VERB_FLEE     = 3;
+    constexpr uint32 MERCENARY_VERB_DISMISS  = 4;
+    constexpr uint32 MERCENARY_VERB_BACK     = 5;
 
     // The options this AI answers. Everything else belongs to the innkeeper - its
     // bind, its quests, its vendor rows - and is left alone: the core dispatches
@@ -437,20 +436,6 @@ private:
             if (!offer.VoiceLabel.empty())
                 text += ", " + offer.VoiceLabel;
 
-            // What this mercenary of that spec does not bring. Two fury warriors are
-            // different companions partly by which of these they are missing, and
-            // the player is buying the difference, so it is on the row.
-            if (!offer.Withheld.empty())
-            {
-                text += ", no ";
-                for (size_t i = 0; i < offer.Withheld.size(); ++i)
-                {
-                    if (i)
-                        text += "/";
-                    text += offer.Withheld[i].Name;
-                }
-            }
-
             text += " - " + (fee ? FormatMoney(fee) : std::string("free"));
 
             // The price is in the row so offers can be compared before clicking,
@@ -523,20 +508,15 @@ private:
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, retrainLabel,
                          GOSSIP_SENDER_MAIN, base + MERCENARY_VERB_RETRAIN, retrainPopup, 0, false);
 
-        // The four orders are playerbots' own whisper words
-        // (ChatCommandHandlerStrategy.cpp); the picker only spares the player the
-        // syntax. None of them needs a confirmation box - an order can be given
-        // again - so only the rows that spend something (the retrain above, the
-        // restock below and the dismissal) ask before they act.
+        // The two orders are playerbots' own whisper words (ChatCommandHandlerStrategy.cpp)
+        // and both of them recall the mercenary: how it engages is its temperament's
+        // business, drawn from Mercenary.Temperament.<class>.<spec_no>, so there is no
+        // "hold here" and no "attack my target" to fight the manner it was hired with.
+        // Neither needs a confirmation box - an order can be given again - so only the
+        // rows that spend something (the retrain above, the restock below and the
+        // dismissal) ask before they act.
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": follow me", GOSSIP_SENDER_MAIN,
                          base + MERCENARY_VERB_FOLLOW);
-        AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": hold here", GOSSIP_SENDER_MAIN,
-                         base + MERCENARY_VERB_STAY);
-        AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": attack my target", GOSSIP_SENDER_MAIN,
-                         base + MERCENARY_VERB_ATTACK);
-        // Breaking off sits next to the attack row because it is the same order
-        // pointed the other way: the player sends the mercenary in, and this is how it
-        // is called back out without a dismiss in between.
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, name + ": break off", GOSSIP_SENDER_MAIN,
                          base + MERCENARY_VERB_FLEE);
 
@@ -592,18 +572,12 @@ private:
                 Notify(player, message);
                 break;
             case MERCENARY_VERB_FOLLOW:
-            case MERCENARY_VERB_STAY:
-            case MERCENARY_VERB_ATTACK:
             case MERCENARY_VERB_FLEE:
             {
                 // The strings are the whisper words playerbots already
                 // implements; MercenaryMgr::Order refuses anything else rather than
                 // sending it, so the verb and the row cannot drift apart silently.
-                char const* const order = verb == MERCENARY_VERB_FOLLOW ? "follow"
-                                        : verb == MERCENARY_VERB_STAY   ? "stay"
-                                        : verb == MERCENARY_VERB_ATTACK ? "attack"
-                                                                   : "flee";
-                sMercenaryMgr.Order(player, bot, order, message);
+                sMercenaryMgr.Order(player, bot, verb == MERCENARY_VERB_FOLLOW ? "follow" : "flee", message);
                 Notify(player, message);
                 break;
             }

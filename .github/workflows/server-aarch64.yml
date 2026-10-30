@@ -179,13 +179,12 @@ jobs:
           # shipped value, so a build that dropped the module is caught here rather than in game.
           test -f "$PREFIX/etc/modules/mod-survivor.conf.dist"
           grep -q '^Survivor.Enable = 1$' "$PREFIX/etc/modules/mod-survivor.conf.dist"
-          # And for the mercenary module: its conf is installed and carries a switch, an archetype
-          # blacklist, the picker's pool keys and the expansion's three headline defaults, so a
-          # build that dropped the module, its conf or one of the new keys fails here.
+          # And for the mercenary module: its conf is installed and carries a switch, a temperament
+          # pool, the picker's pool keys and the expansion's headline defaults, so a build that
+          # dropped the module, its conf or one of the new keys fails here.
           test -f "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
           grep -q '^Mercenary.Enable = 1$' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
-          grep -q '^Mercenary.Blacklist.1.2 = ' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
-          grep -q '^Mercenary.Variant.1.1 = ' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
+          grep -q '^Mercenary.Temperament.1.2 = ' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
           grep -q '^Mercenary.FeaturedMin = 10$' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
           grep -q '^Mercenary.ResupplyFeePercent = 100$' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
           grep -q '^Mercenary.AffinityStep = 100$' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"

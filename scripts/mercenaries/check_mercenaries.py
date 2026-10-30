@@ -122,9 +122,9 @@ def check_config_keys() -> dict[str, str]:
         if key not in keys:
             fail(f"conf: {key} is read by the code but not defined in mod-mercenaries.conf.dist")
 
-    # Blacklist keys: class must be playable, spec inside the premade spec table.
+    # Temperament keys: class must be playable, spec inside the premade spec table.
     for key in sorted(keys):
-        match = re.fullmatch(r"Mercenary\.(?:Blacklist|Variant|Temperament)\.(\d+)\.(\d+)", key)
+        match = re.fullmatch(r"Mercenary\.Temperament\.(\d+)\.(\d+)", key)
         if not match:
             continue
         cls, spec = int(match.group(1)), int(match.group(2))
@@ -136,8 +136,6 @@ def check_config_keys() -> dict[str, str]:
             fail(f"conf: {key} is empty")
 
     notes.append(f"conf: {len(keys)} keys, {len(used)} read by the code, "
-                 f"{sum(1 for k in keys if k.startswith('Mercenary.Blacklist.'))} blacklist blocks, "
-                 f"{sum(1 for k in keys if k.startswith('Mercenary.Variant.'))} variant blocks, "
                  f"{sum(1 for k in keys if k.startswith('Mercenary.Temperament.'))} temperament blocks")
     return keys
 
@@ -167,8 +165,7 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
     # per-class pools and the per-voice lines are deliberately absent: they are long, they change
     # with balance, and the player is meant to edit them, so a repair leaves them alone.
     for key in sorted(keys):
-        if key.startswith(("Mercenary.Blacklist.", "Mercenary.Variant.", "Mercenary.Temperament.",
-                           "Mercenary.VoiceLine.")):
+        if key.startswith(("Mercenary.Temperament.", "Mercenary.VoiceLine.")):
             continue
         if key not in defaults:
             fail(f"installer: {key} is in the conf but not in MERCENARY_CONF_DEFAULTS; a repair "
@@ -442,8 +439,7 @@ def check_personality(keys: dict[str, str]) -> None:
         return
 
     # Every PvE spec the module offers must have a pool, because an offer with no temperament
-    # rolls a mercenary that behaves like every other mercenary of its class. Blacklist and variant blocks
-    # are not held to this: 6.3 and 8.3 never had one, and that gap is not this check's to close.
+    # rolls a mercenary that behaves like every other mercenary of its class.
     # `covered` only holds blocks that parsed to at least one profile: a block that is present
     # but empty is dropped by the loader and would leave the spec with no temperament at all.
     pve = {pair: name for pair, name in specs.items() if name.endswith("pve")}
@@ -787,21 +783,19 @@ def check_startup_tables() -> None:
         return
 
     if "sMercenaryArchetype.Load()" not in method_body(cpp, "OnStartup"):
-        fail("startup: sMercenaryArchetype.Load() is not in the OnStartup body; the first config "
-             "pass runs before sSpellMgr->LoadSpellInfoStore (World.cpp:302 and World.cpp:407), "
-             "so the archetype and variant tables build against an empty spell store and every "
-             "blacklist and variant spell name fails to resolve")
+        fail("startup: sMercenaryArchetype.Load() is not in the OnStartup body; it reads "
+             "Playerbots.PremadeSpecName.* from the config manager, and hook order between modules "
+             "is not guaranteed, so the table has to be built after every conf is parsed")
 
     config = method_body(cpp, "OnAfterConfigLoad")
     guarded = re.search(r"if\s*\(\s*reload\s*\)\s*\{[^}]*sMercenaryArchetype\.Load\(\)", config)
     if not guarded:
         fail("startup: the rebuild in the OnAfterConfigLoad body is not guarded by "
-             "`if (reload)`; the first pass runs before the spell store is loaded, so an "
-             "unguarded build leaves every blacklist and variant spell name unresolved")
+             "`if (reload)`; the first pass can run before this module's conf is parsed, so an "
+             "unguarded build would read an empty spec table")
     elif config.count("sMercenaryArchetype.Load()") != 1:
         fail("startup: the OnAfterConfigLoad body builds the archetype table more than once, "
-             "so a call sits outside the `if (reload)` guard; the first pass runs before the "
-             "spell store is loaded and that call resolves nothing")
+             "so a call sits outside the `if (reload)` guard and runs against a half-parsed conf")
 
     # The same trap catches anything else that reads a store the core fills after the config:
     # a manager reached from this body reads a half-built world. Only sConfigMgr is safe here.
@@ -817,7 +811,7 @@ def check_startup_tables() -> None:
              f"config in its own hook, in no guaranteed order); read it from OnStartup instead")
 
     notes.append("startup: the archetype and personality tables are built in OnStartup, after "
-                 "the spell store, and a reload-only rebuild is guarded by `if (reload)`")
+                 "every conf is parsed, and a reload-only rebuild is guarded by `if (reload)`")
 
 
 def check_temperament_keys() -> None:

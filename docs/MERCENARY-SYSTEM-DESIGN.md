@@ -219,9 +219,8 @@ verified, and the work is a module (`modules/mod-mercenaries`) instead:
   library (`modules/CMakeLists.txt:270-300`, `-DMODULES=static` in `server-aarch64.yml:132`), so
   `#include "Bot/PlayerbotMgr.h"` resolves from another module.
 - Nothing needs to be *inside* a playerbots function: `PlayerScript::OnPlayerLogin` fires for bot sessions
-  (`CharacterHandler.cpp:1126`), `PlayerScript::OnPlayerCanLearnSpell` refuses a spell at the top of
-  `Player::learnSpell` (`Player.cpp:3428-3431`), and `PlayerbotWorldThreadProcessor::QueueOperation`
-  is a public API for deferred world-thread work.
+  (`CharacterHandler.cpp:1126`) and `PlayerbotWorldThreadProcessor::QueueOperation` is a public API for
+  deferred world-thread work.
 
 The patch is untouched by the mercenary work.
 
@@ -268,8 +267,9 @@ how many strangers are around while the mercenaries are in the party.
 6. **Level window** — mercenaries are offered within `Mercenary.LevelWindow` (default ±2) levels of the player,
    instead of snapping to the player's exact level, and the same window decides when a hired mercenary has
    fallen behind and wants exchanging.
-7. **Archetypes** — each mercenary is one premade PvE spec plus a blacklist of the other specs' signature
-   abilities, so the toolkit is the reason to swap mercenaries.
+7. **Archetypes** — each mercenary is one premade PvE spec, pinned so it is geared for that role and
+   fights it. An earlier build also restricted the spellbook; that was removed (it took away abilities
+   a player expects a companion to have at low levels) and is deferred.
 8. **Party cap** — the player plus two mercenaries; a third needs strangers from the world, which are not
    pool mercenaries and are not counted.
 9. **Temperament and voice** — two more per-mercenary draws from the same `(owner, bot)` seed, so two
@@ -322,11 +322,11 @@ What was built, against the plan's phases:
 | 1 | Prove the model in game with `.playerbots bot addclass` (no code) | **done in game**: `.playerbots bot addclass warrior` recruits, levels and gears a pool mercenary |
 | 2 | Roster: schema, load, recruit/dismiss, relog persistence | **built** in `modules/mod-mercenaries/src/MercenaryMgr.cpp` |
 | 3 | Picker: a paged gossip menu on every innkeeper | **built** as two `AllCreatureScript` gossip hooks in `src/MercenaryInnkeeper.cpp`; the gameobject route described above was dropped because the line needs no template, spawn or `ScriptName`, a named `CreatureScript` was dropped in turn because it is database-bound and gossip follows the creature's own script id, and a `CreatureAI` handed out by `GetCreatureAI` was dropped because it has to skip every innkeeper that carries an AI of its own (65 of the 125 innkeeper templates are `SmartAI`) |
-| 4 | Level window and archetypes: spec pinning, spellbook blacklist, learn gate | **built** in `src/MercenaryArchetype.cpp` and `src/MercenaryScripts.cpp` |
+| 4 | Level window and archetypes: spec pinning | **built** in `src/MercenaryArchetype.cpp`; the spellbook blacklist and learn gate that shipped with it are removed |
 | 5 | Config keys, installer and workflow wiring, runbook | **built** |
 | 6 | `MERCENARY` addon channel and a `Mercenary` addon for the launcher | **not built**: the gossip picker is the complete doorway, and the addon was never requested |
 
 The feature is feasible and now implemented server-side. What remains unverified is the same thing
-the study named: the in-game feel - the menu, the level window, the archetype restrictions and the
+the study named: the in-game feel - the menu, the level window, the archetypes and the
 loot behaviour all need a client session on the Thor. The offline checks and the arm64 compile gate
 are the only verification that exists without one; see the plan's verification section.

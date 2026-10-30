@@ -18,7 +18,7 @@ Every claim about existing behaviour carries a `path:line` reference against
 |---|---|---|
 | D1 | Mercenaries are offered at **player level ± 2** | A mercenary you cannot use at your level is noise; a mercenary that snaps to your exact level erases the choice. |
 | D2 | A party holds **the player plus two mercenaries**; a third requires strangers from the world | Keeps the mercenaries special and makes the ambient crowd useful. |
-| D3 | Each mercenary is a **restricted archetype**: one premade PvE spec plus a hard spellbook blacklist, plus a per-mercenary variant of its own spec's situational abilities | The player must swap mercenaries to get a toolkit, not just a body, and two mercenaries of one spec are different companions. |
+| D3 | Each mercenary is a **pinned archetype**: one premade PvE spec, and nothing else restricted | The spec is what the gear pass and the role read from. The spellbook blacklist and the per-mercenary variant that were built with it are **removed** — see "The spellbook restriction" below — because at low levels they took away abilities a player expects a companion to have. |
 | D4 | Mercenaries **never compete for loot**: they pass on every roll and never loot a free-for-all corpse | Loot bags are this realm's progression system. |
 | D5 | The mercenary doorway is the **innkeeper line only**: `Playerbots.AddClassCommand = 0` | Makes D2 strict by construction, with no patch to the command. The pool is read directly for the same reason. |
 | D6 | The mercenary layer is a **new module**, `modules/mod-mercenaries`, not an extension of the playerbots patch | See "Route" below: the two facts the study called unverified are now verified. |
@@ -49,7 +49,6 @@ exist:
 |---|---|---|
 | Know when a mercenary logs in | `PlayerScript::OnPlayerLogin` — bots log in through the normal path | `botSession->HandlePlayerLoginFromDB(holder)` at `PlayerbotMgr.cpp:256` → `sScriptMgr->OnPlayerLogin(pCurrChar)` at `CharacterHandler.cpp:1126` |
 | Defer work until the bot is in the world | `PlayerbotWorldThreadProcessor::QueueOperation(std::unique_ptr<PlayerbotOperation>)`, a public API over an abstract `PlayerOperation::Execute()` | `PlayerbotWorldThreadProcessor.h:62`, `PlayerbotOperation.h:26-39` |
-| Refuse a spell | `PlayerScript::OnPlayerCanLearnSpell` is checked at the top of `Player::learnSpell` and returns bool | `Player.cpp:3428-3431` |
 | Recruit and dismiss | `PlayerbotHolder::AddPlayerBot(guid, masterAccountId)` / `LogoutPlayerBot(guid)` | `PlayerbotMgr.cpp:88-150`, `:394` |
 
 The player-centric patch is untouched by this work.
@@ -58,12 +57,12 @@ The player-centric patch is untouched by this work.
 
 | File | Responsibility |
 |---|---|
-| `modules/mod-mercenaries/conf/mod-mercenaries.conf.dist` | `Mercenary.*` keys: master switch, cap, level window, page size, featured count and pool refresh, per-archetype blacklists and per-spec variant pools |
+| `modules/mod-mercenaries/conf/mod-mercenaries.conf.dist` | `Mercenary.*` keys: master switch, cap, level window, page size, featured count and pool refresh, and one temperament pool per spec |
 | `modules/mod-mercenaries/src/mercenary_common.h` | Config struct, role enum, shared types |
-| `modules/mod-mercenaries/src/MercenaryArchetype.h/.cpp` | Spec choice, blacklist name→id resolution, apply and prune |
+| `modules/mod-mercenaries/src/MercenaryArchetype.h/.cpp` | The premade spec table, the role read off a spec name, and pinning a spec's talents |
 | `modules/mod-mercenaries/src/MercenaryMgr.h/.cpp` | Config load, pool refresh, featured draw, roster I/O, offer derivation, recruit/dismiss, login queue |
 | `modules/mod-mercenaries/src/MercenaryInnkeeper.cpp` | the two `AllCreatureScript` gossip hooks, with the paged gossip picker on every innkeeper |
-| `modules/mod-mercenaries/src/MercenaryScripts.cpp` | `PlayerScript` login queue, spell gate; `WorldScript` that drains the queue |
+| `modules/mod-mercenaries/src/MercenaryScripts.cpp` | `PlayerScript` login queue; `WorldScript` that drains the queue |
 | `modules/mod-mercenaries/src/mercenary_loader.cpp` | `Addmod_mercenariesScripts()`, the symbol the loader generator looks up |
 | `modules/mod-mercenaries/README.md` | What it does, how to configure it |
 
@@ -115,17 +114,22 @@ Mercenary.PoolRefreshMinMinutes = 40    # pool re-read, random inside the range
 Mercenary.PoolRefreshMaxMinutes = 60
 Mercenary.Debug = 0
 
-# Archetype blacklists: the signature abilities of the *other* specs of the same class,
-# by spell name. <class> is the ChrClasses id (1 warrior, 2 paladin, 3 hunter, 4 rogue,
-# 5 priest, 6 death knight, 7 shaman, 8 mage, 9 warlock, 11 druid); <spec_no> is the
-# Playerbots.PremadeSpecLink number. Names are resolved against the spell table at startup and
-# an unresolved name is logged, never silently ignored.
-Mercenary.Blacklist.1.0 = Shield Wall, Last Stand, Taunt, Devastate, Shield Slam
+# Temperaments: how a mercenary of this spec fights, by playerbots strategy name. <class> is the
+# ChrClasses id (1 warrior, 2 paladin, 3 hunter, 4 rogue, 5 priest, 6 death knight, 7 shaman,
+# 8 mage, 9 warlock, 11 druid); <spec_no> is the Playerbots.PremadeSpecLink number.
+Mercenary.Temperament.1.0 = Relentless: +aggressive,+close | Patient: +wait for attack | Wary: +avoid aoe
 ```
 
-Spell names, not ids: the server has no name→id table, but `SpellMgr::GetSpellInfo` and
-`GetSpellInfoStoreSize()` (`SpellMgr.h:742`) make one scan at startup cheap, and a name is
-reviewable in a config file where a bare id is not.
+### The spellbook restriction
+
+The first build also carried `Mercenary.Blacklist.<class>.<spec>` — the other specs' signature
+abilities, refused at `Player::learnSpell` and pruned from the book on every build — and
+`Mercenary.Variant.<class>.<spec>`, a pool from which each mercenary was dealt a subset it was
+missing. Both were removed. At a low level the restriction took away abilities a player expects a
+companion to have (a level-10 hunter missing Concussive Shot), so a mercenary read as broken rather
+than as different, and the spec alone is what the module pins now. The names resolved against the
+spell table once at startup, which is why the check script still looks for an `archetypes:` line
+with no unresolved names. Varying a toolkit without taking abilities away is deferred.
 
 ## Behaviour
 
@@ -184,19 +188,10 @@ fires on login when the mercenary is more than three levels from its master
    `PLAYER_FLAGS_NO_XP_GAIN` unless `Mercenary.GainXP`, so the level cannot drift between logins.
 2. `PlayerbotFactory::InitTalentsBySpecNo(bot, spec_no, true)` — the archetype's spec, pinned
    (`PlayerbotFactory.cpp:1802`).
-3. Prune every blacklisted spell the mercenary still has (`Player::removeSpell`), and the variant
-   abilities this mercenary was not dealt.
-4. `bot->SaveToDB(false, false)` so the next login starts from the right state.
+3. `bot->SaveToDB(false, false)` so the next login starts from the right state.
 
 The player's own login restores `state = 1` rows by calling `AddPlayerBot` for each, which is what
 makes a party survive a relog and a restart.
-
-### Spell gate
-
-`OnPlayerCanLearnSpell` returns false for a blacklisted spell on a mercenary. That one gate covers every
-learn path — factory initialisation (`PlayerbotFactory.cpp:899-923`), trainer
-(`TrainerAction.cpp:166`), level-up maintenance (`AutoMaintenanceOnLevelupAction.cpp:50-68`) and
-quest rewards — so a restriction cannot be undone by any of them.
 
 ### Gear
 
@@ -205,7 +200,7 @@ factory rolled for a spec it no longer has. The order in `MercenaryMgr::ApplyMer
 
 1. `PlayerbotFactory::Randomize` — on the first build and on a re-level (level, spells, talents,
    gear for whatever spec it happened to roll, bags, food, reagents);
-2. `MercenaryArchetype::Apply` — the pinned spec's talents, and the blacklist;
+2. `MercenaryArchetype::Apply` — the pinned spec's talents;
 3. `PlayerbotAI::ResetStrategies(false)` — the weight calculator's role test (`IsTank`/`IsHeal`/
    `IsCaster` with `bySpec=false`) reads `STRATEGY_TYPE_*` on the AI's engines, not the talent tab,
    and those strategies still describe the spec step 1 rolled. This is the same call `Randomize`
@@ -335,18 +330,17 @@ pool mercenaries and are not counted, which is exactly the intended second route
 | Phase | Work | Acceptance |
 |---|---|---|
 | P1 | Module skeleton: conf, loader, config struct, `MercenaryMgr` roster I/O and schema creation | module directory complete; loader symbol `Addmod_mercenariesScripts` present; the roster table is created on first boot |
-| P2 | Archetypes: spec choice, name resolution, apply and prune | blacklist names resolve; an unresolved name logs an error at startup |
+| P2 | Archetypes: spec choice and pinning | the spec table resolves and every PvE spec the picker may offer has a name at startup |
 | P3 | Picker: the innkeeper line, gossip pages, recruit and dismiss | the line appears on an innkeeper beside the bind option, pages, recruits and dismisses |
-| P4 | Login queue, level window, spell gate, party restore | a recruited mercenary returns after relog and after a restart |
+| P4 | Login queue, level window, party restore | a recruited mercenary returns after relog and after a restart |
 | P5 | Installer and CI wiring, pins, docs | workflow copies and asserts the module; installer writes the keys |
-| P6 | Offline checks | `scripts/mercenaries/check_mercenaries.py` passes: config keys used in code exist in the `.dist`, the installer's defaults and the conf agree both ways, the picker is an `AllCreatureScript` answering the two gossip hooks, gated on the innkeeper flag, with actions clear of the core's range and no `GetCreatureAI` left in it, no module class derives from a database-bound script type, the spell-derived tables are built in `OnStartup` and only rebuilt under `if (reload)`, the temperament keys are enumerated rather than probed, the pool reads the playerbots account table, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
+| P6 | Offline checks | `scripts/mercenaries/check_mercenaries.py` passes: config keys used in code exist in the `.dist`, the installer's defaults and the conf agree both ways, the picker is an `AllCreatureScript` answering the two gossip hooks, gated on the innkeeper flag, with actions clear of the core's range and no `GetCreatureAI` left in it, no module class derives from a database-bound script type, the spec and temperament tables are built in `OnStartup` and only rebuilt under `if (reload)`, the temperament keys are enumerated rather than probed, the pool reads the playerbots account table, the roster schema matches the columns written, the loader symbol matches the directory name, and pins/workflow/installer mention the module |
 
 ## Verification
 
-The compile gate is the arm64 workflow, as it is for every other module in this repository: this
-host has no Boost headers, so no AzerothCore translation unit can be compiled locally
-(`boost/version.hpp` is absent; the build tree at `azerothcore-wotlk/build` cannot compile). What is
-verifiable offline is checked by `scripts/mercenaries/check_mercenaries.py`, which the workflow runs before it
+The compile gate is the arm64 workflow, as it is for every other module in this repository, and
+`scripts/syntax-check.sh` gives the same answer locally from the recorded flags. What is verifiable
+offline is checked by `scripts/mercenaries/check_mercenaries.py`, which the workflow runs before it
 builds - the roster schema, the conf, the installer's defaults and the picker's own invariants are
 cross-checked before the 40-minute build rather than after it. The in-game steps are:
 
@@ -356,8 +350,9 @@ cross-checked before the 40-minute build rather than after it. The in-game steps
 2. Recruit one: it appears in the party, at the level the menu showed, with the spec the menu named.
 3. Recruit a second; a third recruit is refused and the message names the two exits.
 4. `.playerbots bot addclass warrior` as a non-GM is refused.
-5. Whisper the mercenary `train`-level abilities it should not have: it never learns a blacklisted spell
-   (`OnPlayerCanLearnSpell` refuses), and the spell is absent from its spellbook.
+5. Whisper the mercenary a `train`-level ability it should not have and check it is refused by the
+   core's own level gate: the module no longer refuses anything, so its spellbook is exactly what its
+   class and level give it.
 6. Kill something with a drop: both mercenaries pass; the corpse is the player's under free-for-all.
 7. Relog, then restart the world server: both mercenaries return without being re-recruited.
 8. Level past the window with a mercenary in the party: it stays at its hired level, the inn marks it

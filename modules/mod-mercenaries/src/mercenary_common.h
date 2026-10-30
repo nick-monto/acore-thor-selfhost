@@ -47,25 +47,18 @@ struct MercenaryConfig
     // mercenary that levels with its owner never needs exchanging, and the roster is
     // meant to be a set of contracts that expire as the player outgrows them.
     bool   GainXP               = false;
-    // How many of a spec's variant abilities a mercenary may be missing, drawn from
-    // [VariantWithholdMin, VariantWithholdMax] out of Mercenary.Variant.<class>.<spec>.
-    // This is the per-mercenary half of the archetype: two fury warriors differ by
-    // which of theirs are withheld. A minimum of 0 lets two mercenaries of one spec
-    // arrive identical, which is the case the pools exist to avoid; a maximum of
-    // 0 switches the variation off.
-    uint8  VariantWithholdMin   = 1;
-    uint8  VariantWithholdMax   = 2;
     // Affinity is what a mercenary earns by fighting beside its owner: a point count per
-    // (owner, mercenary) that returns the variant abilities the mercenary was not dealt and
-    // lifts the gear it is built to at its next build. It is the one axis of a mercenary
-    // that is not fixed at hire time.
+    // (owner, mercenary) that lifts the gear it is built to at its next build. It is the
+    // one axis of a mercenary that is not fixed at hire time.
     bool   AffinityEnabled      = true;
     uint32 AffinityKillPoints   = 10;
     uint32 AffinityQuestPoints  = 25;
-    // Points per step: one withheld variant comes back, and the gear ceiling rises by
-    // AffinityGearPercent, at every whole step.
+    // Points per step: the gear ceiling rises by AffinityGearPercent at every whole step,
+    // up to AffinityMaxSteps steps. The cap is what the picker shows as the denominator
+    // of "bonded n/N", so it is also what stops a bond running past its own reward.
     uint32 AffinityStep         = 100;
     uint32 AffinityGearPercent  = 5;
+    uint8  AffinityMaxSteps     = 2;
     uint8  OfferedPerPage       = 12;
     // A picker shows a selection of the pool, not the pool: the count is drawn
     // from [FeaturedMin, FeaturedMax] when the selection is dealt, once per pool
@@ -92,15 +85,6 @@ struct MercenaryPoolChar
     uint8       Level = 0;
 };
 
-// One entry of a spec's variant pool: an ability a mercenary of that spec may or may
-// not arrive with. The name is the configured one (the reviewable key); Ids is
-// every spell id that name resolves to, so ranks move together.
-struct MercenaryVariantSpell
-{
-    std::string         Name;
-    std::vector<uint32> Ids;
-};
-
 // One row of the picker: a pool mercenary the player may recruit, with the level and
 // the spec it will have if they do. Both are derived from the two guids, so the
 // same pair always produces the same offer.
@@ -122,9 +106,6 @@ struct MercenaryOffer
     // the level, so a mercenary is always offered at the same strength for the same
     // player, and the hire fee is this ratio applied to the level-cubed baseline.
     uint16      GearRatio = 100;
-    // The variant abilities this mercenary does *not* arrive with, drawn from its
-    // spec's variant pool. Empty when the pool is empty or the feature is off.
-    std::vector<MercenaryVariantSpell> Withheld;
 };
 
 // One row of mercenary_roster.
@@ -137,9 +118,8 @@ struct MercenaryRosterRow
     bool       Recruited   = false;
     uint8      TargetLevel = 0;
     // Affinity points earned while the mercenary was in the party. Every whole
-    // AffinityStep returns one of the variant abilities the mercenary was not dealt and
-    // lifts the gear ceiling of its next build; the roster is the only place it
-    // lives, so it survives a relog and a restart with everything else.
+    // AffinityStep lifts the gear ceiling of its next build; the roster is the only place
+    // it lives, so it survives a relog and a restart with everything else.
     uint32     Affinity    = 0;
     // Set once the mercenary has been equipped for its pinned spec at its level. A
     // fresh pool character is level 1 in a start outfit, so "not built yet" is

@@ -164,12 +164,6 @@ void MercenaryMgr::LoadConfig()
     _config.HireFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.HireFeePercent", 100), 0, 10000));
     _config.HireFeeHeldPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.HireFeeHeldPercent", 100), 0, 1000));
     _config.GainXP = sConfigMgr->GetOption<bool>("Mercenary.GainXP", false);
-    _config.VariantWithholdMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.VariantWithholdMin", 1), 0, 5));
-    _config.VariantWithholdMax = uint8(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.VariantWithholdMax", 2), 0, 5));
-    // A minimum above the maximum would make the draw empty; the maximum wins,
-    // because it is the one that can switch the variation off.
-    if (_config.VariantWithholdMin > _config.VariantWithholdMax)
-        _config.VariantWithholdMin = _config.VariantWithholdMax;
     _config.GearFloorPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.GearFloorPercent", 85), 25, 100));
     _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.GearCapPercent", 150), 100, 300));
     // The affinity keys sit beside the gear band because they move it: a step of
@@ -181,6 +175,7 @@ void MercenaryMgr::LoadConfig()
     _config.AffinityQuestPoints = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.AffinityQuestPoints", 25), 0, 1000));
     _config.AffinityStep = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.AffinityStep", 100), 1, 100000));
     _config.AffinityGearPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.AffinityGearPercent", 5), 0, 100));
+    _config.AffinityMaxSteps = uint8(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.AffinityMaxSteps", 2), 0, 20));
     _config.ResupplyFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.ResupplyFeePercent", 100), 0, 10000));
     _config.OfferedPerPage = uint8(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.OfferedPerPage", 12), 1, 14));
     _config.FeaturedMin = uint8(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.FeaturedMin", 10), 1, 50));
@@ -194,14 +189,14 @@ void MercenaryMgr::LoadConfig()
     if (_config.PoolRefreshMaxMinutes < _config.PoolRefreshMinMinutes)
         std::swap(_config.PoolRefreshMaxMinutes, _config.PoolRefreshMinMinutes);
 
-    LOG_INFO("module", "Mercenary: config: enabled={} maxMercenaries={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/mercenary gear={}-{}% resupply={}% affinity={}pt/step+{}%",
+    LOG_INFO("module", "Mercenary: config: enabled={} maxMercenaries={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/mercenary gear={}-{}% resupply={}% affinity={}pt/step+{}%x{}",
              _config.Enabled, uint32(_config.MaxMercenaries), uint32(_config.LevelWindow),
              uint32(_config.OfferedPerPage), uint32(_config.FeaturedMin), uint32(_config.FeaturedMax),
              uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes),
              _config.HireFeePercent, _config.HireFeeHeldPercent,
              _config.GearFloorPercent, _config.GearCapPercent,
              _config.ResupplyFeePercent,
-             _config.AffinityStep, _config.AffinityGearPercent);
+             _config.AffinityStep, _config.AffinityGearPercent, uint32(_config.AffinityMaxSteps));
 }
 
 void MercenaryMgr::RefreshPool()
@@ -467,59 +462,6 @@ uint8 MercenaryMgr::DeriveLevel(ObjectGuid owner, ObjectGuid bot, uint8 ownerLev
     return uint8(level);
 }
 
-std::vector<MercenaryVariantSpell> MercenaryMgr::WithheldVariants(ObjectGuid owner, ObjectGuid bot, uint8 cls, uint8 spec) const
-{
-    std::vector<MercenaryVariantSpell> withheld;
-    if (!_config.VariantWithholdMax)
-        return withheld;
-
-    auto const& pool = sMercenaryArchetype.Variants(cls, spec);
-    if (pool.empty())
-        return withheld;
-
-    uint64 const seed = owner.GetCounter() ^ (bot.GetCounter() * 2654435761u);
-
-    // How many of the pool this mercenary is missing: bounded by the configuration and
-    // by the pool, drawn from the same seed as everything else about the mercenary.
-    // The floor is what stops two mercenaries of one spec arriving with identical kits,
-    // so it is clamped to the pool rather than to the ceiling: a pool of two with
-    // a floor of three still withholds both.
-    uint64 state = seed;
-    uint32 const floor = std::min<uint32>(_config.VariantWithholdMin, uint32(pool.size()));
-    uint32 const ceiling = std::min<uint32>(_config.VariantWithholdMax, uint32(pool.size()));
-    uint32 const span = ceiling > floor ? ceiling - floor + 1 : 1;
-    uint32 count = floor + (span > 1 ? uint32(Mix(state) % span) : 0);
-
-    // Affinity is the only thing that moves this draw after hire: a mercenary that has
-    // fought beside its owner for enough steps is handed back what it was not
-    // dealt. IsSpellForbidden reads this same function, so the gate that lets the
-    // ability through and the build that grants it cannot disagree.
-    if (auto it = _rows.find(bot.GetCounter()); it != _rows.end())
-    {
-        uint32 const earned = AffinitySteps(it->second);
-        count = earned >= count ? 0 : count - earned;
-    }
-
-    // Which ones: the entries with the lowest hash of their own first id, so the
-    // choice is independent per ability rather than "the first N of the list" -
-    // a pool is a set, not an order the configuration means to imply.
-    std::vector<std::pair<uint64, size_t>> ranked;
-    ranked.reserve(pool.size());
-    for (size_t i = 0; i < pool.size(); ++i)
-    {
-        uint64 rank = seed ^ (uint64(pool[i].Ids.front()) * 0x9E3779B97F4A7C15ull);
-        ranked.emplace_back(Mix(rank), i);
-    }
-
-    std::partial_sort(ranked.begin(), ranked.begin() + count, ranked.end());
-
-    withheld.reserve(count);
-    for (uint32 i = 0; i < count; ++i)
-        withheld.push_back(pool[ranked[i].second]);
-
-    return withheld;
-}
-
 uint16 MercenaryMgr::GearRatio(ObjectGuid owner, ObjectGuid bot) const
 {
     // A third slice of the same seed the level and the spec use, so a mercenary's
@@ -543,16 +485,15 @@ uint32 MercenaryMgr::AffinitySteps(MercenaryRosterRow const& row) const
     if (!_config.AffinityEnabled)
         return 0;
 
-    // Clamped to the cap because a step exists to hand back one withheld variant,
-    // and a mercenary cannot be handed back more variants than a draw could withhold:
-    // without the clamp the bond shown to the player would run past its own
-    // denominator and the last steps would buy nothing.
+    // Clamped to the cap because the cap is the denominator the picker shows: without
+    // the clamp the bond would run past its own denominator and the last steps would
+    // buy nothing.
     return std::min(row.Affinity / std::max(1u, _config.AffinityStep), AffinityCap());
 }
 
 uint32 MercenaryMgr::AffinityCap() const
 {
-    return _config.VariantWithholdMax;
+    return _config.AffinityMaxSteps;
 }
 
 MercenaryOffer MercenaryMgr::MakeOffer(MercenaryPoolChar const& poolChar, ObjectGuid owner, uint8 ownerLevel) const
@@ -571,7 +512,6 @@ MercenaryOffer MercenaryMgr::MakeOffer(MercenaryPoolChar const& poolChar, Object
         offer.SpecNo = specs[(seed >> 8) % specs.size()];
         offer.SpecName = sMercenaryArchetype.SpecName(poolChar.Class, offer.SpecNo);
         offer.Role = sMercenaryArchetype.RoleFor(poolChar.Class, offer.SpecNo);
-        offer.Withheld = WithheldVariants(owner, poolChar.Bot, poolChar.Class, offer.SpecNo);
 
         // The temperament is a per-spec profile, so it can only be drawn once the
         // spec is; the voice is not spec-scoped and is drawn either way.
@@ -626,7 +566,6 @@ MercenaryOffer MercenaryMgr::OfferFor(Player* player, MercenaryRosterRow const& 
     offer.SpecNo = row.SpecNo;
     offer.SpecName = sMercenaryArchetype.SpecName(poolChar.Class, row.SpecNo);
     offer.Role = sMercenaryArchetype.RoleFor(poolChar.Class, row.SpecNo);
-    offer.Withheld = WithheldVariants(row.Owner, row.Bot, poolChar.Class, row.SpecNo);
 
     // The temperament is spec-scoped, so the one MakeOffer set belongs to the
     // seed's spec and cannot be kept. Cleared when this spec has no profile, so
@@ -975,8 +914,7 @@ void MercenaryMgr::ApplyMercenary(Player* bot)
         // bot's spec, so anything equipped before the pin is gear for whatever
         // spec Randomize rolled - a prot mercenary in a fury warrior's two-hander and
         // no shield.
-        sMercenaryArchetype.Apply(bot, bot->getClass(), row->SpecNo,
-                             WithheldVariants(row->Owner, row->Bot, bot->getClass(), row->SpecNo));
+        sMercenaryArchetype.Apply(bot, row->SpecNo);
 
         // The weight calculator does not read the talent tab: IsTank/IsHeal/
         // IsCaster with bySpec=false test STRATEGY_TYPE_* on the AI's engines,
@@ -1039,8 +977,16 @@ void MercenaryMgr::ApplyMercenary(Player* bot)
         }
     }
     else
-        sMercenaryArchetype.Apply(bot, bot->getClass(), row->SpecNo,
-                             WithheldVariants(row->Owner, row->Bot, bot->getClass(), row->SpecNo));
+    {
+        // Nothing restricts the spellbook any more, but a mercenary hired by a build that did
+        // still carries that build's pruning until something re-teaches it: a spell in the book
+        // is not a learn attempt, so nothing else will. This is the trainer pass Randomize runs
+        // for a fresh build, and it teaches only what the class and level already allow, so it
+        // restores what was taken away and grants nothing else. It is idempotent, and it runs
+        // on a mercenary's login rather than on the player's.
+        PlayerbotFactory(bot, bot->GetLevel()).InitAvailableSpells();
+        sMercenaryArchetype.Apply(bot, row->SpecNo);
+    }
 
     // The trait has to be applied after every ResetStrategies, because that call
     // rebuilds the role defaults (tank face, behind, save mana for healers) and
@@ -1310,7 +1256,8 @@ bool MercenaryMgr::Dismiss(Player* player, ObjectGuid bot, std::string& message)
 // whisper from its owner uses. The verb is whitelisted instead of forwarded as
 // given: whatever arrives here is handed to playerbots' command parser, and a
 // string that came out of a gossip menu would otherwise be a second way into
-// that parser which nobody has reviewed.
+// that parser which nobody has reviewed. Only the recall words are whitelisted -
+// follow and flee - because how a mercenary engages is its temperament's business.
 bool MercenaryMgr::Order(Player* player, ObjectGuid bot, char const* verb, std::string& message)
 {
     if (!_config.Enabled)
@@ -1346,10 +1293,6 @@ bool MercenaryMgr::Order(Player* player, ObjectGuid bot, char const* verb, std::
     std::string reply;
     if (order == "follow")
         reply = " falls in behind you.";
-    else if (order == "stay")
-        reply = " holds here.";
-    else if (order == "attack")
-        reply = " takes your target.";
     else if (order == "flee")
         reply = " breaks off.";
     else
@@ -1571,28 +1514,6 @@ bool MercenaryMgr::Retrain(Player* player, ObjectGuid bot, std::string& message)
              name, uint32(oldLevel), uint32(offer.Level),
              fee ? FormatMoney(fee) : std::string("free"));
     return true;
-}
-
-bool MercenaryMgr::IsSpellForbidden(Player* bot, uint32 spellId) const
-{
-    if (!bot)
-        return false;
-
-    auto it = _rows.find(bot->GetGUID().GetCounter());
-    if (it == _rows.end())
-        return false;
-
-    if (sMercenaryArchetype.IsForbidden(bot->getClass(), it->second.SpecNo, spellId))
-        return true;
-
-    // The mercenary's own variant: an ability the spec may have but this mercenary was not
-    // dealt. Deterministic, so the gate and the build always agree.
-    for (MercenaryVariantSpell const& variant : WithheldVariants(it->second.Owner, it->second.Bot,
-                                                            bot->getClass(), it->second.SpecNo))
-        if (std::find(variant.Ids.begin(), variant.Ids.end(), spellId) != variant.Ids.end())
-            return true;
-
-    return false;
 }
 
 void MercenaryMgr::Upsert(MercenaryRosterRow const& row)
