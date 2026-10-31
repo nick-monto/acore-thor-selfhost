@@ -89,6 +89,9 @@ DB_PROBE_TIMEOUT="${DB_PROBE_TIMEOUT:-30}"              # seconds a write probe 
 
 ROOT="$ROOT_DEFAULT"
 BOTS=50
+# Horde share of the randombot accounts, as last set through the start script's --horde-ratio (or the
+# installer's own value). Empty on installs that never used it, so nothing is compared or rewritten.
+HORDE_RATIO=""
 # Solo default: only a handful of the random bots stay in the real player's zone; the rest keep the
 # normal world-wide distribution, so the total population is unchanged without crowding the player.
 # The zone group also churns: bots visit for 15-40 minutes, then leave for 4-10 and come back.
@@ -527,6 +530,7 @@ DB_PASS="$DB_PASS"
 ACCOUNT="$ACCOUNT"
 ACCOUNT_PASS="$ACCOUNT_PASS"
 BOTS="$BOTS"
+HORDE_RATIO="$HORDE_RATIO"
 LAN_IP="$LAN_IP"
 DATA_SRC="$DATA_SRC"
 GH_TOKEN_OPT="$GH_TOKEN_OPT"
@@ -797,23 +801,45 @@ write_host_wrappers() {
     umask 077
     cat > "$HOME/start-wow-server.sh" <<WRAP
 #!/data/data/com.termux/files/usr/bin/bash
-# Start the realm. --bots N sets the random bot count before the world reads it.
+# Start the realm. --bots N sets the random bot count and --horde-ratio PCT the randombot faction
+# split before the world reads them; both are written to the configs first.
 set -uo pipefail
 STATE="$HOST_STATE/state.env"
 # state.env writes values as KEY="value"; strip the quotes, or the path itself contains them.
 state() { [ -f "\$STATE" ] || return 0; sed -n "s/^\$1=//p" "\$STATE" | tail -1 | sed -E 's/^"(.*)"\$/\1/'; }
 root="\$(state ROOT)"; [ -n "\$root" ] || root="$ROOT"
 conf_dir="\$(state CONF_DIR)"; [ -n "\$conf_dir" ] || conf_dir="$ROOT/etc"
-if [ "\${1:-}" = "--bots" ]; then
-    [ "\$#" -eq 2 ] || { echo "usage: start-wow-server.sh [--bots N]" >&2; exit 2; }
-    n="\$2"
-    proot-distro login $ROOTFS_NAME -- "\$root/set-bots.sh" "\$conf_dir/modules/playerbots.conf" "\$n" "\$root/.thor-state/state.env" || exit \$?
-    [ -f "\$STATE" ] && sed -i -E "s|^BOTS=.*|BOTS=\$n|" "\$STATE"
-    shift 2
-elif [ "\$#" -ne 0 ]; then
-    echo "usage: start-wow-server.sh [--bots N]" >&2
-    exit 2
-fi
+usage="usage: start-wow-server.sh [--bots N] [--horde-ratio PCT]"
+record() {   # record KEY VALUE - keep the installer's state file in step with the config
+    [ -f "\$STATE" ] || return 0
+    if grep -q "^\$1=" "\$STATE"; then
+        sed -i -E "s|^\$1=.*|\$1=\$2|" "\$STATE"
+    else
+        printf '%s=%s\\n' "\$1" "\$2" >> "\$STATE"
+    fi
+}
+while [ "\$#" -gt 0 ]; do
+    case "\$1" in
+        --bots)
+            [ "\$#" -ge 2 ] || { echo "\$usage" >&2; exit 2; }
+            n="\$2"
+            proot-distro login $ROOTFS_NAME -- "\$root/set-bots.sh" "\$conf_dir/modules/playerbots.conf" "\$n" "\$root/.thor-state/state.env" || exit \$?
+            record BOTS "\$n"
+            shift 2 ;;
+        --horde-ratio)
+            [ "\$#" -ge 2 ] || { echo "\$usage" >&2; exit 2; }
+            r="\$2"
+            proot-distro login $ROOTFS_NAME -- "\$root/set-ratio.sh" "\$conf_dir/modules/playerbots.conf" "\$r" "\$root/.thor-state/state.env" || exit \$?
+            record HORDE_RATIO "\$r"
+            shift 2 ;;
+        -h|--help)
+            echo "\$usage"
+            exit 0 ;;
+        *)
+            echo "\$usage" >&2
+            exit 2 ;;
+    esac
+done
 # The wake lock is what keeps Android from freezing the server; it comes from the Termux:API app.
 command -v termux-wake-lock >/dev/null && termux-wake-lock
 exec proot-distro login $ROOTFS_NAME -- "\$root/run.sh"
@@ -2119,8 +2145,44 @@ if [ -n "\$state" ] && [ -f "\$state" ]; then
 fi
 echo "min=\$(read_key MinRandomBots) max=\$(read_key MaxRandomBots)"
 EOF
-    chmod +x "$ROOT/run.sh" "$ROOT/stop.sh" "$ROOT/start-db.sh" "$ROOT/stop-db.sh" "$ROOT/set-bots.sh"
-    log "wrote $ROOT/run.sh, $ROOT/stop.sh, $ROOT/set-bots.sh (and the two database helpers)"
+    cat > "$ROOT/set-ratio.sh" <<EOF
+#!/usr/bin/env bash
+# set-ratio.sh CONF [HORDE_PCT] [STATE] - read or set the randombot faction split.
+# The two keys are one decision, so only the Horde side is given and Alliance is the remainder: the
+# pair can never be left summing to something other than 100. STATE is the installer's state file,
+# updated so --status and --repair agree with the config; the world reads it at its next start.
+set -euo pipefail
+conf="\${1:?usage: set-ratio.sh CONF [HORDE_PCT] [STATE]}"
+pct="\${2:-}"
+state="\${3:-}"
+[ -f "\$conf" ] || { echo "no \$conf: the artifact was built without the module" >&2; exit 1; }
+read_key() { grep -E "^[[:space:]]*Playerbots\\.\$1[[:space:]]*=" "\$conf" | tail -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*#.*\$//'; }
+if [ -z "\$pct" ]; then
+    echo "alliance=\$(read_key RandomBotAllianceRatio) horde=\$(read_key RandomBotHordeRatio)"
+    exit 0
+fi
+case "\$pct" in *[!0-9]*) echo "refusing '\$pct': the ratio is a percentage" >&2; exit 2 ;; esac
+[ "\$pct" -le 100 ] || { echo "refusing \$pct: the ratio is 0-100" >&2; exit 2; }
+alliance=\$((100 - pct))
+for pair in "RandomBotHordeRatio=\$pct" "RandomBotAllianceRatio=\$alliance"; do
+    key="\${pair%%=*}"; val="\${pair#*=}"
+    if grep -qE "^[[:space:]]*#?[[:space:]]*Playerbots\\.\$key[[:space:]]*=" "\$conf"; then
+        sed -i -E "s|^[[:space:]]*#?[[:space:]]*(Playerbots\\.\$key)[[:space:]]*=.*|\\1 = \$val|" "\$conf"
+    else
+        printf 'Playerbots.%s = %s\\n' "\$key" "\$val" >> "\$conf"
+    fi
+done
+if [ -n "\$state" ] && [ -f "\$state" ]; then
+    if grep -q '^HORDE_RATIO=' "\$state"; then
+        sed -i -E "s|^HORDE_RATIO=.*|HORDE_RATIO=\$pct|" "\$state"
+    else
+        printf 'HORDE_RATIO=%s\\n' "\$pct" >> "\$state"
+    fi
+fi
+echo "alliance=\$(read_key RandomBotAllianceRatio) horde=\$(read_key RandomBotHordeRatio)"
+EOF
+    chmod +x "$ROOT/run.sh" "$ROOT/stop.sh" "$ROOT/start-db.sh" "$ROOT/stop-db.sh" "$ROOT/set-bots.sh" "$ROOT/set-ratio.sh"
+    log "wrote $ROOT/run.sh, $ROOT/stop.sh, $ROOT/set-bots.sh, $ROOT/set-ratio.sh (and the two database helpers)"
 }
 
 summary() {
@@ -2275,6 +2337,17 @@ run_checks() {   # run_checks FIX(0|1)
             set_conf "$ws" TaxiFlightSpeed    50.0
             ok "worldserver.conf travel keys set to InstantFlightPaths=2 AllFlightPaths=1 TaxiFlightSpeed=50.0"
         fi
+    fi
+    if [ -f "$pb" ] && [ -n "$HORDE_RATIO" ] && [ "$(conf_get "$pb" Playerbots.RandomBotHordeRatio)" != "$HORDE_RATIO" ]; then
+        bad "playerbots.conf horde ratio is $(conf_get "$pb" Playerbots.RandomBotHordeRatio), state says $HORDE_RATIO"
+        if [ "$fix" = 1 ]; then
+            FIXES=$((FIXES + 1))
+            set_conf "$pb" Playerbots.RandomBotHordeRatio "$HORDE_RATIO"
+            set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - HORDE_RATIO))"
+            ok "faction split set to $((100 - HORDE_RATIO))/$HORDE_RATIO (alliance/horde)"
+        fi
+    elif [ -f "$pb" ]; then
+        ok "playerbots.conf faction split = $(conf_get "$pb" Playerbots.RandomBotAllianceRatio)/$(conf_get "$pb" Playerbots.RandomBotHordeRatio) (alliance/horde)"
     fi
     if [ -f "$pb" ] && [ "$(conf_get "$pb" Playerbots.MaxRandomBots)" != "$BOTS" ]; then
         bad "playerbots.conf bots is $(conf_get "$pb" Playerbots.MaxRandomBots), state says $BOTS"
@@ -2457,7 +2530,7 @@ run_checks() {   # run_checks FIX(0|1)
 
     # 3. helper scripts
     local helper missing_helper=0
-    for helper in run.sh stop.sh start-db.sh stop-db.sh set-bots.sh; do
+    for helper in run.sh stop.sh start-db.sh stop-db.sh set-bots.sh set-ratio.sh; do
         if [ -x "$ROOT/$helper" ]; then
             ok "helper: $helper"
         else
