@@ -133,7 +133,13 @@ python3 scripts/item-dbc/patch_item_dbc.py \
   DBFilesClient\Item.dbc`. `StormLib` - the reference MPQ reader - reproduces
   both behaviours, which is how the bug was found and how the fix is checked.
 - It writes the patched `Item.dbc` back to the server's `data/dbc`, so
-  `sItemStore` agrees with the client.
+  `sItemStore` agrees with the client. Each record copies its `item_template`
+  row field for field — class 15, subclass 0, **SoundOverrideSubclass -1**,
+  material 0, InventoryType 0, SheatheType 0 — because the core compares the two
+  under `enforceDBCAttributes` and logs an error per field that disagrees. -1 is
+  the `item_template` column's own default, and a 0 there logged
+  `Item (Entry: 910xx) does not have a correct SoundOverrideSubclass (-1), must
+  be 0` for every bag at startup.
 - Re-running is safe: existing records in 91000-91063 are replaced, and the
   script refuses a stock file that already has ids above 91000.
 
@@ -236,7 +242,8 @@ economy without editing the SQL.
 | Weight/rank checks in MySQL | every rank table's group sums to 100; every creature row's chance matches the rank encoded in its table id; every loot id exists in `creature_template.lootid` |
 | Roll simulation | 50k rolls per representative bracket/rank reproduced the configured drop chances (10/20/35/50/100%) and tier mixes; bag opens always produced cloth, potions and 1-4 gear items whose required level was inside the bracket or at most four levels above it |
 | Generator `--check` | committed SQL matches a fresh run |
-| Item.dbc patch | run against a synthetic 54,000-record `Item.dbc`: 64 records appended in id order, the archive extracts byte-identically through an independent MPQ reader (`mpyq`), re-running on its own output is byte-identical, and a stock file with an id above 91000 or a wrong record layout is refused |
+| Item.dbc patch | run against a synthetic 54,000-record `Item.dbc`: 64 records appended in id order, the archive extracts byte-identically through two independent MPQ readers (`mpyq`, StormLib), re-running on its own output is byte-identical, and a stock file with an id above 91000 or a wrong record layout is refused |
+| DBC attributes | the written records read back as class 15, subclass 0, SoundOverrideSubclass -1, material 0, InventoryType 0, SheatheType 0, matching every `item_template` default the core compares under `enforceDBCAttributes` |
 | Patch name | against a `Data` directory holding `patch-4.MPQ` and `patch-5.MPQ`, the script writes `patch-9.MPQ`; three runs leave one archive, the second and third replacing it; a copy of ours under a launcher `patch-7` is moved to `patch-9` and the old one removed; `--verify` names the last archive in load order as the one the client reads, reports `bag ids MISSING` and exits 1 when a client update has put a stock `Item.dbc` back under that name, and reports `bag ids present` and exits 0 otherwise |
 | Worldserver / client | **not observed**: the regenerated files no longer contain the 24063 row or the 18 unreferenced tables, but no worldserver boot was performed here, and the patched `Item.dbc` has not been loaded by a real client |
 

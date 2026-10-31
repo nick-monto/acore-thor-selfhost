@@ -62,7 +62,10 @@ ITEM_DBC_MAGIC = b"WDBC"
 # The bag rows the SQL writes, mirrored here so the two cannot drift.
 BAG_CLASS = 15            # ITEM_CLASS_MISC, like the lockboxes
 BAG_SUBCLASS = 0
-BAG_SOUND_OVERRIDE = 0    # item_template leaves this at 0
+# -1, because that is what item_template's column defaults to and what the core compares this
+# field against: a 0 here made every bag log "does not have a correct SoundOverrideSubclass (-1),
+# must be 0" at startup, once per item. The client's own misc items carry -1 as well.
+BAG_SOUND_OVERRIDE = -1
 BAG_MATERIAL = 0          # item_template leaves this at 0
 BAG_INVENTORY_TYPE = 0    # not equippable, as in item_template
 BAG_SHEATHE = 0
@@ -162,7 +165,9 @@ def parse_dbc(data: bytes, label: str) -> tuple[list[tuple[int, ...]], bytes]:
 def write_dbc(records: list[tuple[int, ...]], strings: bytes) -> bytes:
     out = bytearray(struct.pack("<4sIIII", ITEM_DBC_MAGIC, len(records), ITEM_DBC_FIELDS, ITEM_DBC_RECORD_SIZE, len(strings)))
     for record in records:
-        out += struct.pack(f"<{ITEM_DBC_FIELDS}I", *record)
+        # -1 is written as 0xFFFFFFFF: every field is four bytes, and SoundOverrideSubclass is the
+        # one that is signed on the reading side.
+        out += struct.pack(f"<{ITEM_DBC_FIELDS}I", *[value & 0xFFFFFFFF for value in record])
     out += strings
     return bytes(out)
 
