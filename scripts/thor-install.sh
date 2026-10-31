@@ -1014,33 +1014,32 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
     ok "client: $CLIENT_DATA"
 }
 
-fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - the two python files, once
-    local base="$1" url tarball
-    if [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ] && [ "$FORCE" != 1 ]; then
+fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the two python files
+    local base="$1" rel dest
+    if [ "$CHECK" = 1 ]; then
+        note "fetch scripts/item-dbc/patch_item_dbc.py and scripts/loot-bags/gen_loot_bags.py from $SELF_REPO@$SELF_REF into $base"
         return 0
     fi
-    if [ "$CHECK" = 1 ]; then note "fetch $SELF_REPO@$SELF_REF scripts/item-dbc and scripts/loot-bags into $base"; return 0; fi
     if ! have curl; then
         warn "curl is missing, so the Item.dbc tools cannot be fetched"
-        return 1
+        [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ]
+        return
     fi
-    url="https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF"
-    tarball="$(mktemp)"
-    if ! curl_gh -fL --retry 3 -o "$tarball" "$url"; then
-        rm -f "$tarball"
-        warn "cannot download $url (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
-        return 1
-    fi
-    mkdir -p "$base"
-    # "<repo>-<ref>/scripts/item-dbc/..." becomes "$base/item-dbc/...", and the same for loot-bags:
-    # the patch script finds its generator as ../loot-bags/gen_loot_bags.py, so the two keep that
-    # shape instead of being flattened into one directory.
-    if ! tar -xzf "$tarball" --wildcards --strip-components=2 -C "$base" '*/scripts/item-dbc*' '*/scripts/loot-bags*'; then
-        rm -f "$tarball"
-        warn "cannot extract scripts/item-dbc and scripts/loot-bags out of $SELF_REPO@$SELF_REF (wrong SELF_REF?)"
-        return 1
-    fi
-    rm -f "$tarball"
+    # Two raw files rather than the repository tarball: small enough to fetch on every run, which is
+    # the point. Keeping a copy just because one exists is how a fixed tool never reaches a device
+    # that was installed before the fix - a --repair then rewrote the same broken archive.
+    for rel in scripts/item-dbc/patch_item_dbc.py scripts/loot-bags/gen_loot_bags.py; do
+        dest="$base/${rel#scripts/}"
+        mkdir -p "$(dirname "$dest")"
+        if ! curl_gh -fsSL --retry 3 -o "$dest.tmp" "https://raw.githubusercontent.com/$SELF_REPO/$SELF_REF/$rel"; then
+            rm -f "$dest.tmp"
+            warn "cannot fetch $rel from $SELF_REPO@$SELF_REF (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
+            # Offline or a wrong ref: an older copy still beats not running the step at all.
+            [ -f "$dest" ] || return 1
+            continue
+        fi
+        mv "$dest.tmp" "$dest"
+    done
     [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ]
 }
 
