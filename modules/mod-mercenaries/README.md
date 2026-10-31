@@ -147,8 +147,8 @@ universal speech. Two scalars pace it:
 
 The three call sites are `OnPlayerCreatureKill` (a mercenary landed the kill, event `kill`),
 `OnPlayerJustDied` (event `death`, said before the mercenary is released — the last moment it is a player
-in the world) and `MercenaryMgr::Dismiss` (event `dismiss`, before `LogoutPlayerBot` deletes the Player
-object). Only a mercenary speaks: a real player's kills are the player's to narrate. The dial and the lines
+in the world) and `MercenaryMgr::Dismiss` (event `dismiss`, said before the mercenary is released from the
+party and its AI is put back to the defaults). Only a mercenary speaks: a real player's kills are the player's to narrate. The dial and the lines
 are independent, so `Quiet` keeps its `death` line and says nothing on kills.
 
 ## What they ride
@@ -251,6 +251,16 @@ player came from at the same page index — the page keeps the offers page's cur
 is open — and a dismissal lands there too, because the mercenary the page was about is no longer in the
 party. A menu that outlived the party it was drawn for is re-checked against the live roster on the
 click, so a stale row goes back to the offers page instead of acting on a guid it no longer knows.
+
+**What a dismissal does.** The mercenary leaves the party and stops being one at once. `ReleaseMercenary`
+takes it out of the group, clears the playerbots master and rebuilds the engines on the default
+strategies: the group and the master are the two things that keep a bot at someone's heels
+(`PlayerbotAI::UpdateAIGroupMaster` re-derives the master from the group on every pass), and either one
+left behind is enough for a dismissed mercenary to corpse-run and then walk back to the player who sacked
+it. It then plays on as an ordinary bot for `Mercenary.DismissGraceSeconds` (default 300, `0` logs it out
+on the spot) and leaves the server at the end of it, so the dismissal reads as walking away rather than a
+despawn; re-recruiting it inside that window cancels the timer. The roster row is kept, so a mercenary
+that comes back is the same character, with its gear, its spec and the affinity it earned.
 
 The action code carries both the mercenary and the verb, `1300 + party_row * 10 + verb`, because the page
 is one mercenary rather than a position on a list; `Mercenary.MaxMercenaries` is clamped to four, so the whole range
@@ -392,6 +402,7 @@ the only thing the spec decides is its talents and the gear scored against them.
 ## Configuration
 
 `conf/mod-mercenaries.conf.dist`: `Mercenary.Enable`, `Mercenary.MaxMercenaries`, `Mercenary.LevelWindow`, `Mercenary.GainXP`,
+`Mercenary.DismissGraceSeconds`,
 `Mercenary.HireFeePercent`, `Mercenary.HireFeeHeldPercent`, `Mercenary.GearFloorPercent`, `Mercenary.GearCapPercent`,
 `Mercenary.ResupplyFeePercent`, `Mercenary.OfferedPerPage`, `Mercenary.FeaturedMin`/`FeaturedMax`,
 `Mercenary.PoolRefreshMinMinutes`/`PoolRefreshMaxMinutes`, `Mercenary.Debug`, the affinity scalars

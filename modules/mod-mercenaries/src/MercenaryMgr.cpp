@@ -164,6 +164,9 @@ void MercenaryMgr::LoadConfig()
     _config.HireFeePercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.HireFeePercent", 100), 0, 10000));
     _config.HireFeeHeldPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.HireFeeHeldPercent", 100), 0, 1000));
     _config.GainXP = sConfigMgr->GetOption<bool>("Mercenary.GainXP", false);
+    // The grace runs from 0 (leave now) to an hour: long enough for any taste, short enough
+    // that a dismissal cannot quietly become a permanent free companion.
+    _config.DismissGraceSeconds = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.DismissGraceSeconds", 300), 0, 3600));
     _config.GearFloorPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.GearFloorPercent", 85), 25, 100));
     _config.GearCapPercent = uint32(std::clamp(sConfigMgr->GetOption<int32>("Mercenary.GearCapPercent", 150), 100, 300));
     // The affinity keys sit beside the gear band because they move it: a step of
@@ -189,14 +192,15 @@ void MercenaryMgr::LoadConfig()
     if (_config.PoolRefreshMaxMinutes < _config.PoolRefreshMinMinutes)
         std::swap(_config.PoolRefreshMaxMinutes, _config.PoolRefreshMinMinutes);
 
-    LOG_INFO("module", "Mercenary: config: enabled={} maxMercenaries={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/mercenary gear={}-{}% resupply={}% affinity={}pt/step+{}%x{}",
+    LOG_INFO("module", "Mercenary: config: enabled={} maxMercenaries={} levelWindow={} offersPerPage={} featured={}-{} refresh={}-{}min fee={}%+{}%/mercenary gear={}-{}% resupply={}% affinity={}pt/step+{}%x{} dismissGrace={}s",
              _config.Enabled, uint32(_config.MaxMercenaries), uint32(_config.LevelWindow),
              uint32(_config.OfferedPerPage), uint32(_config.FeaturedMin), uint32(_config.FeaturedMax),
              uint32(_config.PoolRefreshMinMinutes), uint32(_config.PoolRefreshMaxMinutes),
              _config.HireFeePercent, _config.HireFeeHeldPercent,
              _config.GearFloorPercent, _config.GearCapPercent,
              _config.ResupplyFeePercent,
-             _config.AffinityStep, _config.AffinityGearPercent, uint32(_config.AffinityMaxSteps));
+             _config.AffinityStep, _config.AffinityGearPercent, uint32(_config.AffinityMaxSteps),
+             _config.DismissGraceSeconds);
 }
 
 void MercenaryMgr::RefreshPool()
@@ -740,6 +744,10 @@ void MercenaryMgr::Update(uint32 /*diff*/)
     if (_config.Enabled && getMSTime() >= _poolRefreshDue)
         RefreshPool();
 
+    // Dismissals run whether or not the module is enabled: a bot released before the config
+    // was switched off still has to leave.
+    ProcessDismissals();
+
     if (_pendingOwners.empty() && _pendingMercenaries.empty())
         return;
 
@@ -1198,6 +1206,27 @@ bool MercenaryMgr::Recruit(Player* player, MercenaryOffer const& offer, std::str
     Upsert(row);
     _rows[offer.Bot.GetCounter()] = row;
 
+    // Taking the same face back on cancels the dismissal it was walking off under: the
+    // timer would otherwise log out the mercenary the player just re-hired.
+    _dismissals.erase(offer.Bot.GetCounter());
+
+    // AddPlayerBot below returns early for a character that is already in the world, which is
+    // exactly the state a re-hire inside the dismissal grace finds it in: the master, the
+    // strategies and the archetype have to be put back here, or the roster would say "in your
+    // party" about a bot standing next to the player doing nothing until it relogs.
+    if (Player* botPlayer = ObjectAccessor::FindConnectedPlayer(offer.Bot))
+    {
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(botPlayer))
+        {
+            botAI->SetMaster(player);
+            botAI->ResetStrategies();
+            botAI->ChangeStrategy("+follow", BOT_STATE_NON_COMBAT);
+            ApplyMercenary(botPlayer);
+            LOG_INFO("module", "Mercenary: {} re-attached to {} while still in the world",
+                     botPlayer->GetName(), player->GetName());
+        }
+    }
+
     // The selection outlives the menu, so the mercenary has to leave it as well as the
     // page: otherwise the next open would offer a mercenary that is standing in the
     // party. It comes back with the next pool cycle, like any other face.
@@ -1228,27 +1257,142 @@ bool MercenaryMgr::Dismiss(Player* player, ObjectGuid bot, std::string& message)
         return false;
     }
 
-    // The farewell is said before the logout because this is the last moment
-    // the mercenary exists as a player in the world: LogoutPlayerBot deletes the
-    // Player object, and a line said after it would be said by nobody.
-    //
-    // LogoutPlayerBot deletes the Player object, so nothing may touch it after
-    // the call. The roster row is the only state that matters afterwards.
-    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bot);
-    if (botPlayer)
-    {
-        sMercenaryPersonality.SayLine(botPlayer, it->second.Owner, "dismiss");
-
-        if (PlayerbotHolder* mgr = GET_PLAYERBOT_MGR(player))
-            mgr->LogoutPlayerBot(bot);
-    }
-
+    // The roster stops saying "in your party" before anything touches the bot. Every later
+    // hook reads that flag - the login drain, the party restore, the archetype pass - so a
+    // mercenary marked recruited but dismissed would come straight back on its next login.
     it->second.Recruited = false;
     Upsert(it->second);
 
+    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bot);
+    if (botPlayer)
+    {
+        // The farewell is said first: this is the last moment the mercenary is still one.
+        sMercenaryPersonality.SayLine(botPlayer, it->second.Owner, "dismiss");
+
+        // Leaving the party is not enough on its own. A bot that stays in the group keeps
+        // following its leader through playerbots' own group pass, and a bot that keeps its
+        // master follows that player even outside a group - which is why a dismissed
+        // mercenary used to corpse-run and then walk back to the player who had just
+        // sacked it. Both have to go, and the AI has to be put back to the defaults.
+        ReleaseMercenary(botPlayer);
+
+        // The dismissal is not a despawn. The mercenary plays on as an ordinary bot for
+        // Mercenary.DismissGraceSeconds and leaves the server at the end of it, so the
+        // player watches it walk away rather than vanish.
+        if (_config.DismissGraceSeconds)
+        {
+            _dismissals[bot.GetCounter()] = { it->second.Owner,
+                                              getMSTime() + _config.DismissGraceSeconds * IN_MILLISECONDS };
+            LOG_INFO("module", "Mercenary: {} released {} ({}): ordinary bot AI, logout in {}s",
+                     player->GetName(), botPlayer->GetName(), bot.ToString(), _config.DismissGraceSeconds);
+        }
+        else
+        {
+            LogoutDismissed(botPlayer, it->second.Owner);
+            LOG_INFO("module", "Mercenary: {} dismissed {}", player->GetName(), bot.ToString());
+        }
+    }
+    else
+    {
+        LOG_INFO("module", "Mercenary: {} dismissed {} (offline)", player->GetName(), bot.ToString());
+    }
+
     message = "Your mercenary is dismissed.";
-    LOG_INFO("module", "Mercenary: {} dismissed {}", player->GetName(), bot.ToString());
+    if (_config.DismissGraceSeconds)
+    {
+        message += " It walks off on its own and leaves the realm in ";
+        if (_config.DismissGraceSeconds % 60 == 0)
+            message += std::to_string(_config.DismissGraceSeconds / 60)
+                     + (_config.DismissGraceSeconds == 60 ? " minute" : " minutes");
+        else
+            message += std::to_string(_config.DismissGraceSeconds) + " seconds";
+        message += ".";
+    }
     return true;
+}
+
+void MercenaryMgr::ReleaseMercenary(Player* bot)
+{
+    if (!bot)
+        return;
+
+    // The group is the party the mercenary was hired into. playerbots re-derives a bot's
+    // master from its group on every pass (PlayerbotAI::UpdateAIGroupMaster), so leaving it
+    // is the half that stops a dismissal from being undone by the next update.
+    if (bot->GetGroup())
+        bot->RemoveFromGroup();
+
+    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+    if (!botAI)
+        return;
+
+    // The master is the other half: a bot follows the player that added it whether or not
+    // the two share a group.
+    botAI->SetMaster(nullptr);
+
+    // The same reset playerbots applies to a randombot that has lost its group, which is
+    // what this bot now is: current state back to non-combat, targets dropped, and the
+    // engines rebuilt on the default strategies instead of the mercenary's temperament.
+    botAI->Reset(true);
+    botAI->ResetStrategies();
+
+    // The XP pin is part of the contract, not of the character: a mercenary that kept it
+    // would stop levelling as a normal bot.
+    bot->RemovePlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
+}
+
+void MercenaryMgr::LogoutDismissed(Player* bot, ObjectGuid owner)
+{
+    if (!bot)
+        return;
+
+    // The bot was added through the owner's holder (Recruit calls AddPlayerBot with the
+    // owner's account id), so that is the manager whose map knows it. LogoutPlayerBot
+    // deletes the Player object, so nothing may touch the bot after the call.
+    ObjectGuid const guid = bot->GetGUID();
+    if (Player* ownerPlayer = ObjectAccessor::FindConnectedPlayer(owner))
+    {
+        if (PlayerbotHolder* mgr = GET_PLAYERBOT_MGR(ownerPlayer))
+        {
+            mgr->LogoutPlayerBot(guid);
+            return;
+        }
+    }
+
+    // Owner gone: the bot is no longer in a player's holder, so the random manager is what
+    // is left to log it out with.
+    sRandomPlayerbotMgr.LogoutPlayerBot(guid);
+}
+
+void MercenaryMgr::ProcessDismissals()
+{
+    if (_dismissals.empty())
+        return;
+
+    uint32 const now = getMSTime();
+    for (auto it = _dismissals.begin(); it != _dismissals.end();)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid(HighGuid::Player, it->first));
+        if (!bot)
+        {
+            // Already gone: logged out by its owner, by the dismissal itself, or removed.
+            it = _dismissals.erase(it);
+            continue;
+        }
+
+        // Signed difference: the millisecond counter wraps every ~49 days, and a plain
+        // "now < due" would hold the dismissal for the rest of the cycle.
+        if (int32(now - it->second.Due) < 0)
+        {
+            ++it;
+            continue;
+        }
+
+        LOG_INFO("module", "Mercenary: {}: dismissal grace over, leaving the server", bot->GetName());
+        ObjectGuid const owner = it->second.Owner;
+        it = _dismissals.erase(it);
+        LogoutDismissed(bot, owner);
+    }
 }
 
 // The mercenary page turns the whisper vocabulary playerbots already implements into

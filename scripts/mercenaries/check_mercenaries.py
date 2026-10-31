@@ -74,6 +74,30 @@ def fail(message: str) -> None:
     failures.append(message)
 
 
+def function_body(text: str, name: str) -> str:
+    """The body of `MercenaryMgr::<name>`, by brace matching, or "" when it is absent.
+
+    Scoping a rule to one function is what keeps a deliberate call elsewhere from being read as
+    the same mistake: the build path applies the trait after its last ResetStrategies, and the
+    dismissal calls ResetStrategies itself.
+    """
+    start = text.find(f"MercenaryMgr::{name}(")
+    if start == -1:
+        return ""
+    open_brace = text.find("{", start)
+    if open_brace == -1:
+        return ""
+    depth = 0
+    for index in range(open_brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_brace:index + 1]
+    return ""
+
+
 def read(path: Path) -> str:
     if not path.is_file():
         fail(f"missing file: {path.relative_to(ROOT)}")
@@ -451,16 +475,32 @@ def check_personality(keys: dict[str, str]) -> None:
                  f"temperament")
 
     # The traits must land after the last ResetStrategies in the build path: that call rebuilds
-    # the role defaults, so a trait applied before it is wiped on the next login.
+    # the role defaults, so a trait applied before it is wiped on the next login. The comparison
+    # is scoped to ApplyMercenary: the dismissal calls ResetStrategies on purpose, to take the
+    # trait away again, and a whole-file "last occurrence" would read that as a build-path bug.
     mgr = read(SRC / "MercenaryMgr.cpp")
-    reset = mgr.rfind("ResetStrategies")
-    applied = mgr.rfind("sMercenaryPersonality.Apply")
-    if reset == -1 or applied == -1:
-        fail("personality: MercenaryMgr.cpp has no ResetStrategies or no sMercenaryPersonality.Apply; the "
+    build = function_body(mgr, "ApplyMercenary")
+    reset = build.rfind("ResetStrategies")
+    applied = build.rfind("sMercenaryPersonality.Apply")
+    if not build or reset == -1 or applied == -1:
+        fail("personality: ApplyMercenary has no ResetStrategies or no sMercenaryPersonality.Apply; the "
              "traits cannot be landing on a rebuilt engine")
     elif applied < reset:
         fail("personality: sMercenaryPersonality.Apply comes before the last ResetStrategies in "
-             "MercenaryMgr.cpp; that call rebuilds the role defaults, so the trait is wiped")
+             "ApplyMercenary; that call rebuilds the role defaults, so the trait is wiped")
+
+    # A dismissed mercenary is the mirror image: it has to lose the group, the master and the
+    # trait, or it goes on following and fighting like the companion it is no longer.
+    release = function_body(mgr, "ReleaseMercenary")
+    if not release:
+        fail("dismissal: MercenaryMgr.cpp has no ReleaseMercenary; a dismissed mercenary would keep "
+             "the group and the master it follows")
+    else:
+        for needle, why in (("SetMaster(nullptr)", "keeps its master, so it follows the player anyway"),
+                            ("ResetStrategies", "keeps the mercenary's strategies"),
+                            ("RemoveFromGroup", "stays in the party")):
+            if needle not in release:
+                fail(f"dismissal: ReleaseMercenary does not call {needle}; a dismissed mercenary {why}")
 
 
 VOICE_EVENTS = ("kill", "death", "dismiss")

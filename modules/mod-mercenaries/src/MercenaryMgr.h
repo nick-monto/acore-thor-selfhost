@@ -118,6 +118,17 @@ private:
     void ApplyMercenary(Player* bot);
     void Upsert(MercenaryRosterRow const& row);
 
+    // Takes a mercenary out of the owner's party and puts it back on ordinary bot AI: the
+    // group membership and the master both outlive a dismissal otherwise, and either one is
+    // enough to keep it following the player it was dismissed from.
+    void ReleaseMercenary(Player* bot);
+    // Logs a dismissed mercenary out for good. The owner's holder is the manager that knows
+    // it, because that is the one AddPlayerBot put it in.
+    void LogoutDismissed(Player* bot, ObjectGuid owner);
+    // The dismissal timer: a mercenary released from the party leaves the server once its
+    // grace has run out.
+    void ProcessDismissals();
+
     // A player's deck: the eligible pool in a random deal order, dealt without
     // replacement. It is dealt when the player's selection is dealt - once per
     // pool cycle - so no face comes round until the deck has been dealt out, and
@@ -146,6 +157,14 @@ private:
     // deck dealt them. Cleared with the decks when the pool is re-read, and never
     // by a menu: opening the picker again shows the same selection.
     std::unordered_map<uint32, std::vector<uint32>> _selections;   // player counter -> bot counters
+    // Mercenaries released from a party, keyed by bot counter, waiting out their grace.
+    // The owner is kept because the holder that has to log the bot out hangs off them.
+    struct MercenaryDismissal
+    {
+        ObjectGuid Owner;
+        uint32     Due = 0;   // getMSTime() when the bot leaves the server
+    };
+    std::unordered_map<uint32, MercenaryDismissal> _dismissals;
 };
 
 #define sMercenaryMgr MercenaryMgr::instance()

@@ -73,6 +73,17 @@ Mercenary.LevelWindow = 2
 # Default: 0 (a mercenary does not gain XP)
 Mercenary.GainXP = 0
 
+# What a dismissal does to the mercenary. It leaves the party and the AI at once - the
+# group and the master both go, and the engines are rebuilt on the default strategies,
+# so it stops following the player who sacked it and starts behaving like any other
+# bot - and then it stays in the world for this many seconds before it leaves the
+# server. The gap is what keeps a dismissal from looking like a despawn.
+#
+# 0 logs it out on the spot. The roster row is kept either way, so a mercenary that
+# comes back keeps its gear, its spec and the affinity it earned.
+# Default: 300 (five minutes)
+Mercenary.DismissGraceSeconds = 300
+
 # What a hire costs, in copper, as a percentage of the player's level cubed:
 #
 #   fee = player_level^3 * HireFeePercent / 100 * gear_ratio / 100

@@ -125,6 +125,7 @@ MERCENARY_CONF_DEFAULTS=(
     "Mercenary.MaxMercenaries=2"
     "Mercenary.LevelWindow=2"
     "Mercenary.GainXP=0"
+    "Mercenary.DismissGraceSeconds=300"
     "Mercenary.Voice=Talkative: +emote | Quiet: -emote"
     "Mercenary.VoiceKillChancePercent=10"
     "Mercenary.VoiceCooldownSeconds=120"

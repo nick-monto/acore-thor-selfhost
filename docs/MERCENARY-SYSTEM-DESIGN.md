@@ -156,9 +156,14 @@ Bots roll by config (`Playerbots.LootNeedRollLevel = 1`, `Playerbots.LootGreedRo
 the recommended defaults are: group loot set to free-for-all, `FreeMethodLoot = 0`, so mercenaries fight
 and do not compete for drops.
 
-**Dismissal.** `.playerbots bot remove` logs the bot out (`src/Bot/PlayerbotMgr.cpp:754-770`), the character
-saves itself, and the roster row is marked released. Re-recruiting later restores it as it was,
-including gear, because it is the same character.
+**Dismissal.** The mercenary leaves the party and the AI at once. `MercenaryMgr::ReleaseMercenary` takes it
+out of the group, clears the playerbots master and rebuilds the engines on the default strategies - the
+group and the master are the two things that keep a bot following someone, and
+`PlayerbotAI::UpdateAIGroupMaster` re-derives the master from the group on every pass, so either one left
+behind brings the dismissed mercenary back to the player who sacked it. It then plays on as an ordinary
+bot for `Mercenary.DismissGraceSeconds` (default 300, `0` logs it out on the spot) and leaves the server
+at the end of it; re-recruiting inside that window cancels the timer. The roster row is marked released,
+so re-recruiting later restores it as it was, including gear, because it is the same character.
 
 **Gearing a mercenary.** No new code: a mercenary is a player character, so the trade window works. The bot
 accepts a trade from its master or from a group member and refuses everyone else ("I'm kind of busy

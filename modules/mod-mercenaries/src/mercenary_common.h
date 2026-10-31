@@ -47,6 +47,11 @@ struct MercenaryConfig
     // mercenary that levels with its owner never needs exchanging, and the roster is
     // meant to be a set of contracts that expire as the player outgrows them.
     bool   GainXP               = false;
+    // What a dismissal does to the mercenary itself: it leaves the party and goes back to
+    // being an ordinary bot at once, and this many seconds later it leaves the server. The
+    // gap is what keeps a dismissal from looking like a despawn: the mercenary walks off and
+    // plays on for a while. 0 logs it out on the spot.
+    uint32 DismissGraceSeconds  = 300;
     // Affinity is what a mercenary earns by fighting beside its owner: a point count per
     // (owner, mercenary) that lifts the gear it is built to at its next build. It is the
     // one axis of a mercenary that is not fixed at hire time.
