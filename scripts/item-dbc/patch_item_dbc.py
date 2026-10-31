@@ -79,6 +79,8 @@ PATCH_NAMES = [f"patch-{n}.MPQ" for n in range(9, 3, -1)]
 
 MPQ_MAGIC = b"MPQ\x1a"
 MPQ_FILE_EXISTS = 0x80000000
+MPQ_FILE_COMPRESS = 0x00000200
+MPQ_FILE_SINGLE_UNIT = 0x01000000
 SECTOR_SIZE_SHIFT = 3                        # the client's sector size is 512 << shift
 SECTOR_SIZE = 512 << SECTOR_SIZE_SHIFT       # 4096 bytes
 MPQ_HASH_ENTRIES = 4
@@ -240,22 +242,22 @@ HASH_TABLE_KEY = mpq_hash("(hash table)", 3)
 BLOCK_TABLE_KEY = mpq_hash("(block table)", 3)
 
 
-def _sector_block(data: bytes) -> bytes:
-    """A stored file's sector offset table followed by its bytes.
+def _file_block(data: bytes) -> bytes:
+    r"""A stored file's bytes, exactly as they are.
 
-    The offsets are absolute from the start of the block, so the first sector
-    begins after the table itself.  Stored rather than compressed: the client
-    handles uncompressed blocks in any MPQ, and a patch this small gains nothing
-    from zlib.
+    A stored file carries **no sector offset table**: the client only reads one
+    when the block is compressed or carries sector CRCs, and treats an
+    uncompressed block as one contiguous unit.  Writing the table anyway - which
+    this script did - makes the client read the table as file content, so the
+    first bytes of Item.dbc were `a0 06 00 00` instead of `WDBC` and 3.3.5a
+    stopped at "ERROR #121 Version Mismatch: unable to open
+    DBFilesClient\Item.dbc".  MPQ_FILE_SINGLE_UNIT says so explicitly.
     """
-    count = (len(data) + SECTOR_SIZE - 1) // SECTOR_SIZE
-    table_size = (count + 1) * 4
-    offsets = [table_size + index * SECTOR_SIZE for index in range(count)] + [table_size + len(data)]
-    return struct.pack(f"<{count + 1}I", *offsets) + data
+    return data
 
 
 def build_mpq(files: list[tuple[str, bytes]]) -> bytes:
-    """A version-1 archive holding stored, sectored files: enough for a patch."""
+    """A version-1 archive holding stored single-unit files: enough for a patch."""
     if not files:
         raise SystemExit("an archive needs at least one file")
     hash_size = MPQ_HASH_ENTRIES
@@ -265,8 +267,9 @@ def build_mpq(files: list[tuple[str, bytes]]) -> bytes:
     blocks = []
     body = bytearray()
     for _, data in files:
-        block = _sector_block(data)
-        blocks.append(struct.pack("<IIII", MPQ_HEADER_SIZE + len(body), len(block), len(data), MPQ_FILE_EXISTS))
+        block = _file_block(data)
+        blocks.append(struct.pack("<IIII", MPQ_HEADER_SIZE + len(body), len(block), len(data),
+                                  MPQ_FILE_EXISTS | MPQ_FILE_SINGLE_UNIT))
         body += block
 
     hash_table = [MPQ_EMPTY_HASH] * hash_size
@@ -321,11 +324,17 @@ def read_mpq_file(archive: bytes, name: str) -> bytes:
             pos, archived, size, flags = struct.unpack_from("<IIII", block_table, block_index * 16)
             if not flags & MPQ_FILE_EXISTS:
                 raise SystemExit(f"{name}: block is not present")
-            if archived != size + (size + SECTOR_SIZE - 1) // SECTOR_SIZE * 4 + 4:
-                raise SystemExit(f"{name}: block size does not match a stored sector table")
             block = archive[pos:pos + archived]
+            if flags & MPQ_FILE_COMPRESS:
+                raise SystemExit(f"{name}: compressed blocks are not written by this script")
+            if flags & MPQ_FILE_SINGLE_UNIT or archived == size:
+                return block[:size]
+            # An older run wrote a stored file with a sector offset table in front of it, which the
+            # client reads as content. Recognise that layout so those archives can still be replaced.
             count = (size + SECTOR_SIZE - 1) // SECTOR_SIZE
             offsets = struct.unpack_from(f"<{count + 1}I", block)
+            if offsets[0] != (count + 1) * 4 or offsets[-1] != archived:
+                raise SystemExit(f"{name}: block is neither single-unit nor a sector table")
             data = b"".join(block[offsets[i]:offsets[i + 1]] for i in range(count))
             if len(data) != size:
                 raise SystemExit(f"{name}: sectors hold {len(data)} bytes, block says {size}")

@@ -123,8 +123,15 @@ python3 scripts/item-dbc/patch_item_dbc.py \
   the copy it wrote (recognised by holding exactly the two files it writes) or
   moves it to a name that loads after the others; it never leaves one archive per
   run behind. The archive holds
-  `DBFilesClient\Item.dbc` stored in 4096-byte sectors, with its hash and block
-  tables encrypted the way the client expects.
+  `DBFilesClient\Item.dbc` as a stored single-unit file, with its hash and block
+  tables encrypted the way the client expects. Single-unit matters: a stored
+  file must carry **no** sector offset table, because the client only reads one
+  when the block is compressed or carries sector CRCs and otherwise treats the
+  block as the file itself. The first version of the script wrote the table
+  anyway, so the client read `a0 06 00 00` instead of `WDBC` as the DBC header
+  and refused to start with `ERROR #121 Version Mismatch: unable to open
+  DBFilesClient\Item.dbc`. `StormLib` - the reference MPQ reader - reproduces
+  both behaviours, which is how the bug was found and how the fix is checked.
 - It writes the patched `Item.dbc` back to the server's `data/dbc`, so
   `sItemStore` agrees with the client.
 - Re-running is safe: existing records in 91000-91063 are replaced, and the
