@@ -86,8 +86,11 @@ bots in the player's zone and turns the traffic cycle on with the defaults above
 bots keep the normal world-wide distribution, so a 50-bot install still has 50 bots online. To
 fill the world with both factions around a solo player, set
 `RandomBotNearPlayersSameFaction = 0`; the bot AI may then treat the player as a PvP target.
-Re-running the installer rewrites these keys to those defaults, and `--status`/`--repair` compare
-the values rather than just their presence - so make later tuning changes after the last repair; it also drops the old `RandomBotNearPlayersRadius`,
+Re-running the installer rewrites these keys to those defaults. `--status`/`--repair` compare the
+values rather than just their presence, and replace a key that still holds an older installer
+default (`5` for the level window, `10` for the zone cap); any other value is treated as yours,
+reported as a `note` and left alone - which is what keeps `SameFaction = 0` and a hand-set level
+window through a repair; it also drops the old `RandomBotNearPlayersRadius`,
 `RandomBotNearPlayersInnerCount`, `RandomBotNearPlayersOuterRadius` and
 `RandomBotNearPlayersZoneCount` keys, which the current build does not read.
 

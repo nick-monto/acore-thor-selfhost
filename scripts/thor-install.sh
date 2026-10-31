@@ -261,6 +261,16 @@ missing_libs() {   # missing_libs BINARY - runtime libraries the binary cannot f
     ldd "$1" 2>/dev/null | awk '/not found/ {print $1}' | sort -u
 }
 
+# Values an earlier installer wrote for a near-player key, so a repair can replace a stale default
+# without touching a hand-set one. Only keys whose default has actually changed need an entry.
+stale_near_value() {   # stale_near_value KEY - space separated old defaults
+    case "$1" in
+        RandomBotNearPlayersLevelRange)  echo "5" ;;
+        RandomBotNearPlayersMaxPerPlayer) echo "10" ;;
+        *) echo "" ;;
+    esac
+}
+
 set_conf() {   # set_conf FILE KEY VALUE - replace the first live "KEY = ..." line, else append
     local file="$1" key="$2" value="$3" tmp
     [ -f "$file" ] || { warn "no such config file: $file"; return 1; }
@@ -2381,16 +2391,27 @@ run_checks() {   # run_checks FIX(0|1)
                 near_val="${near_pair#*=}"
                 if grep -qE "^[[:space:]]*Playerbots\\.${near_key}[[:space:]]*=" "$pb"; then
                     # Present is not the same as right: a default that changes here has to reach a
-                    # device that already carries the key, or the new default never applies.
-                    local near_now
+                    # device that already carries the key, or the new default never applies. Only a
+                    # superseded installer default is replaced - a value that was never written by
+                    # the installer is somebody's tuning (SameFaction 0, a different level window),
+                    # and reverting it would be the repair fighting the user.
+                    local near_now near_stale
                     near_now="$(conf_get "$pb" "Playerbots.$near_key")"
                     [ "$near_now" = "$near_val" ] && continue
-                    bad "playerbots.conf: $near_key is $near_now, the installer writes $near_val"
-                    if [ "$fix" = 1 ]; then
-                        FIXES=$((FIXES + 1))
-                        set_conf "$pb" "Playerbots.$near_key" "$near_val"
-                        ok "$near_key set to $near_val"
-                    fi
+                    near_stale="$(stale_near_value "$near_key")"
+                    case " $near_stale " in
+                        *" $near_now "*)
+                            bad "playerbots.conf: $near_key is the old default $near_now, the installer now writes $near_val"
+                            if [ "$fix" = 1 ]; then
+                                FIXES=$((FIXES + 1))
+                                set_conf "$pb" "Playerbots.$near_key" "$near_val"
+                                ok "$near_key set to $near_val"
+                            fi
+                            ;;
+                        *)
+                            note "playerbots.conf: $near_key is $near_now (set by hand; the installer default is $near_val)"
+                            ;;
+                    esac
                     continue
                 fi
 
