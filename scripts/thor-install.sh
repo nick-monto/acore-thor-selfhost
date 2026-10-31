@@ -92,7 +92,7 @@ BOTS=50
 # Solo default: only a handful of the random bots stay in the real player's zone; the rest keep the
 # normal world-wide distribution, so the total population is unchanged without crowding the player.
 # The zone group also churns: bots visit for 15-40 minutes, then leave for 4-10 and come back.
-NEAR_BOTS=10
+NEAR_BOTS=20
 NEAR_MIN_DISTANCE=100.0
 NEAR_VISIT_MIN=900
 NEAR_VISIT_MAX=2400
@@ -1816,7 +1816,7 @@ write_configs() {
         # of, real players instead of spreading it over the whole world. The keys are ignored by an
         # unpatched playerbots build, so an older artifact still starts normally.
         set_conf "$pb" Playerbots.RandomBotNearPlayers              1
-        set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange    5
+        set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange    3
         set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
         set_conf "$pb" Playerbots.RandomBotNearPlayersMinDistance   "$NEAR_MIN_DISTANCE"
         set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction   1
@@ -2366,7 +2366,7 @@ run_checks() {   # run_checks FIX(0|1)
             # defaults - so name them rather than silently accepting the difference.
             local near_pair near_key near_val near_missing=0
             for near_pair in \
-                "RandomBotNearPlayersLevelRange=5" \
+                "RandomBotNearPlayersLevelRange=3" \
                 "RandomBotNearPlayersFollowInterval=120" \
                 "RandomBotNearPlayersMinDistance=$NEAR_MIN_DISTANCE" \
                 "RandomBotNearPlayersSameFaction=1" \
@@ -2380,6 +2380,17 @@ run_checks() {   # run_checks FIX(0|1)
                 near_key="${near_pair%%=*}"
                 near_val="${near_pair#*=}"
                 if grep -qE "^[[:space:]]*Playerbots\\.${near_key}[[:space:]]*=" "$pb"; then
+                    # Present is not the same as right: a default that changes here has to reach a
+                    # device that already carries the key, or the new default never applies.
+                    local near_now
+                    near_now="$(conf_get "$pb" "Playerbots.$near_key")"
+                    [ "$near_now" = "$near_val" ] && continue
+                    bad "playerbots.conf: $near_key is $near_now, the installer writes $near_val"
+                    if [ "$fix" = 1 ]; then
+                        FIXES=$((FIXES + 1))
+                        set_conf "$pb" "Playerbots.$near_key" "$near_val"
+                        ok "$near_key set to $near_val"
+                    fi
                     continue
                 fi
 
@@ -2407,7 +2418,7 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then
                 FIXES=$((FIXES + 1))
                 set_conf "$pb" Playerbots.RandomBotNearPlayers 1
-                set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange 5
+                set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange 3
                 set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
                 set_conf "$pb" Playerbots.RandomBotNearPlayersMinDistance "$NEAR_MIN_DISTANCE"
                 set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction 1

@@ -70,24 +70,24 @@ the same thing from the player's point of view and costs nothing.
 | Key | Module default | Installer default | Meaning |
 |---|---|---|---|
 | `Playerbots.RandomBotNearPlayers` | `0` | `1` | Master switch |
-| `Playerbots.RandomBotNearPlayersLevelRange` | `5` | `5` | Allowed level distance from the assigned player (max 40) |
+| `Playerbots.RandomBotNearPlayersLevelRange` | `5` | `3` | Allowed level distance from the assigned player (max 40) |
 | `Playerbots.RandomBotNearPlayersFollowInterval` | `120` | `120` | Seconds before a bot that drifted out of the zone is moved back (min 30) |
 | `Playerbots.RandomBotNearPlayersMinDistance` | `100.0` | `100.0` | Yards of clearance from the player when placing a bot in the zone (about where the client stops drawing other players) |
 | `Playerbots.RandomBotNearPlayersSameFaction` | `1` | `1` | Only assign same-faction players |
-| `Playerbots.RandomBotNearPlayersMaxPerPlayer` | `10` | `10` | Bots per player, i.e. the most that can be in one zone; `0` = even distribution, no cap |
+| `Playerbots.RandomBotNearPlayersMaxPerPlayer` | `10` | `20` | Bots per player, i.e. the most that can be in one zone; `0` = even distribution, no cap |
 | `Playerbots.RandomBotNearPlayersZoneTraffic` | `1` | `1` | Visit/away cycle for zone bots |
 | `Playerbots.RandomBotNearPlayersZoneVisitMinTime` | `900` | `900` | Shortest stay in the zone, in seconds |
 | `Playerbots.RandomBotNearPlayersZoneVisitMaxTime` | `2400` | `2400` | Longest stay in the zone, in seconds |
 | `Playerbots.RandomBotNearPlayersZoneAwayMinTime` | `240` | `240` | Shortest time away, in seconds |
 | `Playerbots.RandomBotNearPlayersZoneAwayMaxTime` | `600` | `600` | Longest time away, in seconds |
 
-The self-host installer enables the mode, keeps the same-faction restriction, keeps at most 10
+The self-host installer enables the mode, keeps the same-faction restriction, keeps at most 20
 bots in the player's zone and turns the traffic cycle on with the defaults above; the remaining
 bots keep the normal world-wide distribution, so a 50-bot install still has 50 bots online. To
 fill the world with both factions around a solo player, set
 `RandomBotNearPlayersSameFaction = 0`; the bot AI may then treat the player as a PvP target.
-Re-running the installer rewrites these keys to those defaults, so make later tuning changes
-after it has finished; it also drops the old `RandomBotNearPlayersRadius`,
+Re-running the installer rewrites these keys to those defaults, and `--status`/`--repair` compare
+the values rather than just their presence - so make later tuning changes after the last repair; it also drops the old `RandomBotNearPlayersRadius`,
 `RandomBotNearPlayersInnerCount`, `RandomBotNearPlayersOuterRadius` and
 `RandomBotNearPlayersZoneCount` keys, which the current build does not read.
 
