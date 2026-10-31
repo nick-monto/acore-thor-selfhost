@@ -30,7 +30,13 @@ Useful flags: `--bots N` (default 50), `--lan-ip <ip>` (bind to the LAN and pin 
 
 Afterwards:
 
+`--status` and `--repair` run *the copy you invoke*, not the one on GitHub: a `thor-install.sh` left
+over from an earlier install keeps doing what it did then. Re-download it first whenever a fix is
+supposed to reach the device — `curl -fLO …/main/scripts/thor-install.sh` overwrites in place — or a
+repair reports `ok` for work an older script did the older way.
+
 ```sh
+curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
 bash thor-install.sh --status       # component-by-component report; exit 1 if something needs repair
 bash thor-install.sh --repair       # fix what it can, then re-check
 bash thor-install.sh --uninstall --keep-db   # dump the databases, then remove everything
