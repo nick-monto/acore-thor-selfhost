@@ -608,6 +608,20 @@ mysql_admin() { mysql --protocol=socket --socket="$SOCKET" -uroot "$@"; }
 
 db_ping() { mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1; }
 
+db_process_running() { pgrep -x mysqld >/dev/null 2>&1; }
+
+# mysqladmin shutdown returns as soon as the server accepts the request; InnoDB keeps writing out
+# for a while after that, and the datadir stays locked until the process is gone. Waiting on ping
+# alone therefore returns too early, and a start that follows races the shutdown for the datadir.
+db_wait_down() {   # db_wait_down SECONDS
+    local timeout="${1:-60}" i
+    for i in $(seq 1 "$timeout"); do
+        db_process_running || return 0
+        sleep 1
+    done
+    return 1
+}
+
 # "ping" only proves the server accepts connections. The first statement that writes goes through
 # InnoDB's I/O path instead, and under proot that path has no real io_setup/io_submit, so the write
 # never returns: the server still answers ping, every later step hangs behind it, and nothing is
@@ -636,6 +650,16 @@ db_start() {
     if db_ping; then
         log "mysqld already running"
     else
+        # Two InnoDB instances over one datadir is what a repair run straight after
+        # stop-wow-server.sh walks into, because the stop returns before the server has exited.
+        if db_process_running; then
+            log "a mysqld is still running; waiting for it to finish shutting down"
+            if ! db_wait_down 120; then
+                die "a mysqld is running but not answering on $SOCKET; stop it and re-run:
+       mysqladmin --protocol=socket --socket=$SOCKET -uroot shutdown    # or: pkill -9 mysqld
+       Otherwise read $ROOT/logs/mysql.err and docs/RUNBOOK.md Part 10."
+            fi
+        fi
         log "starting mysqld (datadir $DB_DIR, socket $SOCKET)"
         mysqld --user=mysql --datadir="$DB_DIR" --socket="$SOCKET" \
                --bind-address=127.0.0.1 --port=3306 --skip-name-resolve \
@@ -661,6 +685,7 @@ db_stop() {
     if db_ping; then
         mysqladmin --protocol=socket --socket="$SOCKET" shutdown 2>/dev/null || true
     fi
+    db_wait_down 60 || warn "mysqld is still running after 60s; see $ROOT/logs/mysql.err"
 }
 
 db_query() { mysql_admin -N -B -e "$1" 2>/dev/null; }
@@ -1962,6 +1987,18 @@ set -euo pipefail
 mkdir -p "$RUN_DIR" "$DB_DIR" "$ROOT/logs"
 chown mysql:mysql "$DB_DIR" "$RUN_DIR"
     if ! mysqladmin --protocol=socket --socket="$SOCKET" ping >/dev/null 2>&1; then
+    # A server that is still shutting down holds the datadir; starting a second one over it fails
+    # to lock, or leaves both flushing the same pages.
+    if pgrep -x mysqld >/dev/null 2>&1; then
+        for _ in \$(seq 1 120); do
+            pgrep -x mysqld >/dev/null 2>&1 || break
+            sleep 1
+        done
+        if pgrep -x mysqld >/dev/null 2>&1; then
+            echo "a mysqld is running but not answering on $SOCKET; stop it and re-run (docs/RUNBOOK.md Part 10)" >&2
+            exit 1
+        fi
+    fi
     # --innodb-use-native-aio=0: proot has no libaio, and with native AIO on InnoDB's first write
     # hangs while the server still answers ping (see docs/RUNBOOK.md Part 10).
     mysqld --user=mysql --datadir="$DB_DIR" --socket="$SOCKET" \\
@@ -1980,6 +2017,13 @@ EOF
     cat > "$ROOT/stop-db.sh" <<EOF
 #!/usr/bin/env bash
 mysqladmin --protocol=socket --socket="$SOCKET" shutdown 2>/dev/null || true
+# mysqladmin returns as soon as the shutdown is accepted, while InnoDB is still writing out and the
+# datadir is still locked: a start that follows immediately would race the shutdown for it.
+for _ in \$(seq 1 60); do
+    pgrep -x mysqld >/dev/null 2>&1 || exit 0
+    sleep 1
+done
+echo "mysqld is still running after 60s; see $ROOT/logs/mysql.err" >&2
 EOF
 
     cat > "$ROOT/run.sh" <<EOF
