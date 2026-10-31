@@ -940,7 +940,7 @@ ask() {   # ask PROMPT -> REPLY, from the terminal
 }
 
 client_candidates() {   # one line per folder under shared storage that holds Data/common.MPQ
-    local root dir seen=""
+    local root dir seen="" found=0
     for root in "${STORAGE_ROOTS[@]}"; do
         [ -d "$root" ] || continue
         # $EXTERNAL_STORAGE, /storage/emulated/0 and /sdcard are usually one directory: scan it once.
@@ -951,12 +951,16 @@ client_candidates() {   # one line per folder under shared storage that holds Da
         # Hidden directories are skipped by the glob, and a folder is only listed when its Data holds a
         # common.MPQ, so a half-copied client or an unrelated folder never appears.
         for dir in "$root"/*/ "$root"/*/*/; do
+            # Android/data is the biggest tree on the device, and scoped storage hides it from Termux
+            # anyway: walking it costs hundreds of failed reads and can never produce a client.
+            case "$dir" in */Android/*) continue ;; esac
             [ -d "${dir}Data" ] || continue
             ls "${dir}Data" 2>/dev/null | grep -qix 'common\.mpq' || continue
             printf '%s\n' "${dir%/}"
+            found=1
         done
     done
-    return 1
+    [ "$found" = 1 ]
 }
 
 choose_client_data() {   # --client-data, or the remembered choice, or ask once
