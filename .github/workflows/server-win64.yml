@@ -1,0 +1,828 @@
+name: server-win64
+
+# Builds the same AzerothCore + mod-playerbots server as server-aarch64.yml, for Windows x64
+# (MSVC), and packages it the way scripts/windows-install.ps1 unpacks it.
+#
+# The layout is FLAT, exactly as AzerothCore installs on Windows:
+#     worldserver.exe, authserver.exe   at the zip root, with every non-OS DLL they need beside them
+#     configs/*.conf.dist               worldserver.conf.dist, authserver.conf.dist
+#     configs/modules/*.conf.dist       one per module, with the shipped values checked below
+#     src/data/sql/                     the core's SQL sources, plus src/data/sql/custom/db_world
+#     src/modules/<module>/data/sql/    mod-playerbots, mod-creature-gear, mod-survivor
+#
+# Three facts set that shape, and none of them is the arm64 shape:
+#   * src/server/apps/CMakeLists.txt:241-243 installs the apps into ${CMAKE_INSTALL_PREFIX} on
+#     WIN32 (UNIX is what gets bin/), and src/cmake/macros/ConfigInstall.cmake:42/70/103 installs
+#     the app dists into ${CMAKE_INSTALL_PREFIX}/configs and the module dists into
+#     ${CMAKE_INSTALL_PREFIX}/configs/modules. So the prefix *is* the runtime tree; there is no
+#     bin/ and no etc/ to reproduce.
+#   * ConfigMgr::GetConfigPath() returns the literal "configs/" under AC_PLATFORM_WINDOWS
+#     (src/common/Configuration/Config.cpp:704-712) and module configs load from
+#     GetConfigPath() + "modules/" (:766). That path is relative to the process's working
+#     directory, so the served confs are <root>\configs\ and <root>\configs\modules\ wherever the
+#     root is unpacked - and nothing absolute is compiled in that a moved install would need to
+#     repair.
+#   * The server is a native Windows process with DLL resolution rules of its own: the exe's own
+#     directory wins, so the non-OS DLLs travel beside the exes rather than in a lib/ folder.
+#
+# No PDBs. A RelWithDebInfo MSVC build writes debug information to separate .pdb files, and those
+# are most of the payload; the packaging step fails if one ends up in the zip anyway.
+# No client data (dbc/maps/vmaps/mmaps). GitHub refuses release assets of 2 GiB or more, and those
+# four trees are ~1.2 GiB on their own (server-aarch64.yml:20-24 has the same reasons); the Windows
+# installer downloads the pinned wowgaming/client-data zip and verifies its sha256 instead, exactly
+# as thor-install.sh does.
+#
+# The rolling release is server-build-win64 and is deliberately NOT marked latest: this repository
+# has one "latest", thor-install.sh resolves releases/latest/download/acore-server-arm64.tar.zst,
+# and a Windows release marked latest would make that URL 404 for the arm64 asset.
+#
+# Nothing in this repository has ever built this tree with MSVC. The first workflow_dispatch is the
+# gate: it either produces acore-server-win64.zip or names the file that does not compile there.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["server-v*"]
+
+permissions:
+  contents: write
+
+env:
+  # pins.toml is the source of truth for both commits; these two values are copies of
+  # [core].commit and [module.playerbots].commit. A pin bump is three things: pins.toml, this file,
+  # and the arm64 workflow.
+  CORE_REPO: https://github.com/mod-playerbots/azerothcore-wotlk.git
+  CORE_COMMIT: 8a4e76eac8c4ccebf547113afe7b51d6c3e91641
+  PB_REPO: https://github.com/mod-playerbots/mod-playerbots.git
+  PB_COMMIT: d750b4b3a50effdf22bedc8032f0e8e5f7cb8091
+
+  # The installer's default -Root. Both the configure prefix and the install prefix use it, and
+  # the packaging step archives this tree's *children*, so the prefix is the zip's root.
+  PREFIX: C:/acore
+
+  # The three dependency versions. They appear in a URL, in an install path and in the cache key;
+  # the dependency step fails if BOOST_ROOT and BOOST_VERSION disagree rather than letting CMake
+  # find an empty Boost.
+  BOOST_VERSION: 1.87.0
+  BOOST_MSVC: "14.3"
+  # deps/boost/CMakeLists.txt:13-20 (WIN32) forces Boost_USE_STATIC_LIBS ON and reads Boost_ROOT
+  # out of the environment. Environment lookups are case-insensitive on Windows, so BOOST_ROOT
+  # satisfies that ENV{Boost_ROOT} lookup; 1.87.0 is the version that block's minimum (1.78)
+  # accepts and the one upstream CI installs.
+  BOOST_ROOT: C:\local\boost_1_87_0
+  MYSQL_VERSION: 8.4.9
+
+jobs:
+  build:
+    runs-on: windows-2022
+    # Same ceiling as the arm64 job: a cold MSVC build of this tree plus a cold dependency fetch
+    # fits, and a build that hangs is killed rather than left to the 6 h runner limit.
+    timeout-minutes: 240
+
+    steps:
+      # This repository is checked out for the modules under modules/, the playerbots patch under
+      # patches/ and the custom SQL under sql/custom/; the core and mod-playerbots are fetched at
+      # their pinned commits below.
+      - name: Checkout this repository (module source)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Boost's installer is ~200 MB and the MySQL zip ~250 MB, both of which have to be
+      # downloaded and unpacked again on every run otherwise. The key carries both versions, so a
+      # version bump in env: above misses the cache instead of restoring the wrong Boost.
+      - name: Cache Boost and the MySQL client
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\local\boost_1_87_0
+            C:\tools\mysql\current
+          key: win64-deps:boost-${{ env.BOOST_VERSION }}:mysql-${{ env.MYSQL_VERSION }}
+
+      - name: Dependencies (Boost, MySQL client, OpenSSL)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+
+          # The runner image already carries CMake, Visual Studio 2022 (with MSVC and the Windows
+          # SDK) and OpenSSL, so the missing pieces are Boost's prebuilt binaries and the MySQL
+          # client library. Both are fetched directly instead of through chocolatey: upstream
+          # dropped that route because its pinned packages kept breaking CI, and the versions here
+          # have to match what CMake is told to link two steps below.
+
+          # --- Boost <version> (msvc-<msvc>, 64-bit) -> $env:BOOST_ROOT ---
+          # downloads.sourceforge.net hands out an https mirror. master.dl redirects to plain http,
+          # which PowerShell 7.4+ refuses to follow - and an installer we then execute should not
+          # travel in the clear anyway. SourceForge also sniffs the user agent: anything starting
+          # with Mozilla gets the HTML download page instead of the file, so send a non-browser one.
+          # (The MySQL CDN below needs the opposite; see there.)
+          $boostTag = 'boost_' + ($env:BOOST_VERSION -replace '\.', '_')
+          if ((Split-Path $env:BOOST_ROOT -Leaf) -ne $boostTag) {
+            Fail "BOOST_ROOT ($env:BOOST_ROOT) does not match the Boost version ($boostTag); they have to move together"
+          }
+          $boostHeaders = Join-Path $env:BOOST_ROOT 'boost\version.hpp'
+          $boostLibs = Join-Path $env:BOOST_ROOT "lib64-msvc-$($env:BOOST_MSVC)"
+          if (-not ((Test-Path $boostHeaders) -and (Test-Path $boostLibs))) {
+            $boostExe = Join-Path $env:RUNNER_TEMP 'boost.exe'
+            $boostUrl = "https://downloads.sourceforge.net/project/boost/boost-binaries/$($env:BOOST_VERSION)/$boostTag-msvc-$($env:BOOST_MSVC)-64.exe"
+            # OperationTimeoutSeconds is the one that catches a mirror going quiet mid-transfer,
+            # which would otherwise hang the job until the runner limit. It is not a whole-transfer
+            # budget: a slow mirror can legitimately need 15+ minutes for 200 MB.
+            $boostRequest = @{
+              Uri                      = $boostUrl
+              OutFile                  = $boostExe
+              UserAgent                = 'acore-thor-selfhost-ci'
+              ConnectionTimeoutSeconds = 60
+              OperationTimeoutSeconds  = 60
+            }
+            $boostAttempts = 3
+            for ($boostAttempt = 1; $boostAttempt -le $boostAttempts; $boostAttempt++) {
+              try {
+                Invoke-WebRequest @boostRequest
+                # A mirror can answer 200 with an error page, which does not throw. Size-check
+                # inside the loop so a bad payload retries onto a different mirror instead of
+                # failing the job on the first one.
+                $boostMb = (Get-Item $boostExe).Length / 1MB
+                if ($boostMb -lt 50) { throw "got $([int]$boostMb) MB, which is an error page, not the installer" }
+                break
+              } catch {
+                Write-Host "boost download attempt $boostAttempt failed: $($_.Exception.Message)"
+                if ($boostAttempt -eq $boostAttempts) { Fail "could not download $boostUrl" }
+                Start-Sleep -Seconds 15
+              }
+            }
+            Write-Host ("downloaded the Boost installer: {0:N1} MB" -f $boostMb)
+            # Splatted rather than continued with backticks: one trailing space after a backtick
+            # silently drops every argument that follows it.
+            $boostStart = @{
+              FilePath     = $boostExe
+              ArgumentList = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$($env:BOOST_ROOT)")
+              Wait         = $true
+              PassThru     = $true
+            }
+            $boostProc = Start-Process @boostStart
+            if ($boostProc.ExitCode -ne 0) { Fail "the Boost installer exited $($boostProc.ExitCode)" }
+          } else {
+            Write-Host "boost: cache hit at $env:BOOST_ROOT"
+          }
+          # Checked whether the cache restored or the installer ran: a cache entry can be partial,
+          # and an installer can report success without laying down the tree. Both halves are
+          # required - headers alone mean nothing to link, libraries alone make find_package fail.
+          if (-not (Test-Path $boostHeaders)) { Fail "no Boost headers at $boostHeaders" }
+          if (-not (Test-Path $boostLibs)) { Fail "no prebuilt Boost libraries at $boostLibs" }
+          $boostLibCount = @(Get-ChildItem -LiteralPath $boostLibs -File | Where-Object Name -like '*.lib').Count
+          Write-Host "boost: $env:BOOST_ROOT ($boostLibCount .lib files)"
+
+          # --- MySQL <version> client -> C:\tools\mysql\current ---
+          # The archives CDN is used on purpose: dev.mysql.com/get only serves the current GA, so a
+          # pinned version would start 404ing as soon as MySQL releases. Oracle's CDN answers a
+          # non-browser user agent with an HTML error page, so this request *needs* Mozilla/5.0 -
+          # the opposite of the SourceForge rule above.
+          # lib\mysqlclient.lib is the static client library, which is what the app links
+          # (FindMySQL.cmake:200-215 finds `libmysql` and the configure step passes the file
+          # outright); bin\mysql.exe is kept as the proof that this is the full server package and
+          # as one of the directories the DLL resolution below searches.
+          $mysqlRoot = 'C:\tools\mysql\current'
+          $mysqlLib = Join-Path $mysqlRoot 'lib\mysqlclient.lib'
+          $mysqlBin = Join-Path $mysqlRoot 'bin\mysql.exe'
+          if (-not ((Test-Path $mysqlLib) -and (Test-Path $mysqlBin))) {
+            $mysqlSeries = ($env:MYSQL_VERSION -split '\.')[0..1] -join '.'
+            $mysqlUrl = "https://cdn.mysql.com/archives/mysql-$mysqlSeries/mysql-$($env:MYSQL_VERSION)-winx64.zip"
+            $mysqlZip = Join-Path $env:RUNNER_TEMP 'mysql.zip'
+            $mysqlAttempts = 3
+            for ($mysqlAttempt = 1; $mysqlAttempt -le $mysqlAttempts; $mysqlAttempt++) {
+              try {
+                $mysqlRequest = @{
+                  Uri                      = $mysqlUrl
+                  OutFile                  = $mysqlZip
+                  UserAgent                = 'Mozilla/5.0'
+                  ConnectionTimeoutSeconds = 60
+                  OperationTimeoutSeconds  = 60
+                }
+                Invoke-WebRequest @mysqlRequest
+                $mysqlMb = (Get-Item $mysqlZip).Length / 1MB
+                if ($mysqlMb -lt 50) { throw "got $([int]$mysqlMb) MB, which is an error page, not the archive" }
+                break
+              } catch {
+                Write-Host "mysql download attempt $mysqlAttempt failed: $($_.Exception.Message)"
+                if ($mysqlAttempt -eq $mysqlAttempts) { Fail "could not download $mysqlUrl" }
+                Start-Sleep -Seconds 15
+              }
+            }
+            Write-Host ("downloaded the MySQL zip: {0:N1} MB" -f $mysqlMb)
+            New-Item -ItemType Directory -Force -Path 'C:\tools\mysql' | Out-Null
+            Expand-Archive -Path $mysqlZip -DestinationPath 'C:\tools\mysql' -Force
+            $mysqlExtracted = "C:\tools\mysql\mysql-$($env:MYSQL_VERSION)-winx64"
+            if (-not (Test-Path -LiteralPath $mysqlExtracted)) {
+              Fail "the MySQL archive did not unpack to $mysqlExtracted; the zip layout changed"
+            }
+            # Rename-Item refuses an existing target, so drop a half-restored tree first.
+            if (Test-Path -LiteralPath $mysqlRoot) { Remove-Item -Recurse -Force $mysqlRoot }
+            Rename-Item -LiteralPath $mysqlExtracted -NewName 'current'
+          } else {
+            Write-Host "mysql: cache hit at $mysqlRoot"
+          }
+          if (-not (Test-Path $mysqlLib)) { Fail "no static MySQL client library at $mysqlLib" }
+          if (-not (Test-Path $mysqlBin)) { Fail "no mysql.exe at $mysqlBin; the archive layout changed" }
+          Write-Host "mysql: $mysqlRoot"
+
+          # --- OpenSSL: the runner image's own install ---
+          # The image ships OpenSSL 3 with headers and import libraries; chocolatey's installer
+          # packages kept drifting and slproweb removes old installers, so nothing is downloaded
+          # here. What matters is that OPENSSL_ROOT_DIR is exported: CMake's FindOpenSSL reads it
+          # at configure time, and the DLL-bundling step looks for libcrypto/libssl DLLs in its
+          # bin\ - the same directory the link's import libraries point at.
+          $opensslRoot = @($env:OPENSSL_ROOT_DIR, 'C:\Program Files\OpenSSL', 'C:\Program Files\OpenSSL-Win64') |
+            Where-Object { $_ -and (Test-Path (Join-Path $_ 'include\openssl\opensslv.h')) } |
+            Select-Object -First 1
+          if (-not $opensslRoot) {
+            Fail 'the runner image has no OpenSSL development install (no include\openssl\opensslv.h under OPENSSL_ROOT_DIR, C:\Program Files\OpenSSL or C:\Program Files\OpenSSL-Win64)'
+          }
+          # Searched recursively rather than at a fixed lib\ path: the image's OpenSSL layout is
+          # not this workflow's contract, and a build whose import library lives under lib\VC\x64
+          # configures perfectly well. What is checked is that an import library exists at all.
+          $opensslLibs = @(Get-ChildItem -LiteralPath $opensslRoot -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -in @('libssl.lib', 'ssl.lib') })
+          if ($opensslLibs.Count -eq 0) {
+            Fail "no OpenSSL import library (libssl.lib or ssl.lib) anywhere under $opensslRoot; the build could not link"
+          }
+          "OPENSSL_ROOT_DIR=$opensslRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $opensslDlls = @(Get-ChildItem -LiteralPath (Join-Path $opensslRoot 'bin') -File -ErrorAction SilentlyContinue | Where-Object Name -like '*.dll')
+          Write-Host "openssl: $opensslRoot ($($opensslLibs.Count) import library, $($opensslDlls.Count) dll(s) in bin)"
+
+      # Cheap, deterministic and it guards the boot: a module SQL file that fails to apply aborts
+      # the worldserver, so the mercenary module's roster schema, conf and code are checked against
+      # each other before the build rather than after it. The Windows runner image exposes the
+      # interpreter as `python`; `python3` is the alias on the Linux runners only.
+      - name: Check the mercenary module's files agree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & python scripts/mercenaries/check_mercenaries.py
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::scripts/mercenaries/check_mercenaries.py failed; its mismatch would abort the worldserver on first boot'
+            exit 1
+          }
+
+      - name: Fetch pinned sources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+          function Invoke-Git([string[]]$Command) {
+            & git @Command
+            if ($LASTEXITCODE -ne 0) { Fail "git $($Command -join ' ') failed with exit code $LASTEXITCODE" }
+          }
+
+          # Windows git rewrites the worktree to CRLF when core.autocrlf is true, and the runner
+          # image's system config sets it. The player-centric patch is LF and `git apply` compares
+          # worktree bytes, so a converted tree fails every hunk with "patch does not apply".
+          # Forcing LF gives the same byte-for-byte tree server-aarch64.yml checks out.
+          Invoke-Git 'config', '--global', 'core.autocrlf', 'false'
+          Invoke-Git 'config', '--global', 'core.eol', 'lf'
+
+          # Same layout as the arm64 build (src/core, src/playerbots), so the SQL step below can use
+          # the same relative paths on either platform.
+          New-Item -ItemType Directory -Force -Path 'src' | Out-Null
+          Invoke-Git 'init', '-q', 'src/core'
+          Invoke-Git '-C', 'src/core', 'remote', 'add', 'origin', $env:CORE_REPO
+          Invoke-Git '-C', 'src/core', 'fetch', '--depth', '1', 'origin', $env:CORE_COMMIT
+          Invoke-Git '-C', 'src/core', 'checkout', '-q', 'FETCH_HEAD'
+          Invoke-Git 'clone', '-q', $env:PB_REPO, 'src/playerbots'
+          Invoke-Git '-C', 'src/playerbots', 'fetch', '--depth', '1', 'origin', $env:PB_COMMIT
+          Invoke-Git '-C', 'src/playerbots', 'checkout', '-q', 'FETCH_HEAD'
+
+          # Prove the pins rather than the commands that fetched them: a pin that resolves to
+          # something else would build a tree nobody chose, and the notes below name these hashes.
+          $coreSha = (& git -C 'src/core' rev-parse HEAD).Trim()
+          if ($coreSha -ne $env:CORE_COMMIT) { Fail "src/core is at $coreSha, not the pinned $env:CORE_COMMIT" }
+          $pbSha = (& git -C 'src/playerbots' rev-parse HEAD).Trim()
+          if ($pbSha -ne $env:PB_COMMIT) { Fail "src/playerbots is at $pbSha, not the pinned $env:PB_COMMIT" }
+
+          # The directory name is load-bearing twice: modules/CMakeLists.txt:340-371 walks
+          # modules/<name> for conf/*.conf.dist, and the module is only compiled in when it has a
+          # src/ directory, so a mistyped name would silently build a server without it.
+          New-Item -ItemType Directory -Force -Path 'src/core/modules' | Out-Null
+          Copy-Item -Recurse -Force 'src/playerbots' 'src/core/modules/mod-playerbots'
+          Copy-Item -Recurse -Force 'modules/mod-creature-gear' 'src/core/modules/mod-creature-gear'
+          Copy-Item -Recurse -Force 'modules/mod-hardcore' 'src/core/modules/mod-hardcore'
+          Copy-Item -Recurse -Force 'modules/mod-e-interact' 'src/core/modules/mod-e-interact'
+          Copy-Item -Recurse -Force 'modules/mod-survivor' 'src/core/modules/mod-survivor'
+          Copy-Item -Recurse -Force 'modules/mod-mercenaries' 'src/core/modules/mod-mercenaries'
+          foreach ($module in @('mod-playerbots', 'mod-creature-gear', 'mod-hardcore', 'mod-e-interact', 'mod-survivor', 'mod-mercenaries')) {
+            if (-not (Test-Path "src/core/modules/$module/src")) { Fail "$module has no src/ directory under src/core/modules; the core would not discover it" }
+          }
+
+          # The player-centric distribution mode lives on top of the pinned module commit: the
+          # patch is maintained in this repository so the upstream pin stays exact. git apply, not
+          # patch.exe - Git for Windows ships patch under usr/bin, which is not on PATH here.
+          Push-Location 'src/core/modules/mod-playerbots'
+          try {
+            Invoke-Git 'apply', '--whitespace=nowarn', "$env:GITHUB_WORKSPACE/patches/playerbots-player-centric.patch"
+          } finally {
+            Pop-Location
+          }
+          # The same guard the arm64 build runs: the patch is what adds this key to the shipped
+          # conf, so its absence means the patch did not take even though git reported success.
+          if (-not (Select-String -LiteralPath 'src/core/modules/mod-playerbots/conf/playerbots.conf.dist' -Pattern 'Playerbots\.RandomBotNearPlayers' -Quiet)) {
+            Fail 'Playerbots.RandomBotNearPlayers is missing from the playerbots conf; the player-centric patch did not take'
+          }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+
+          # Passed as an argument array rather than as backtick-continued lines: a trailing space
+          # after a backtick silently ends the command, and the flags after it would be dropped.
+          #
+          # -S src/core is the pin's checkout at the same path the arm64 build uses, so the SQL
+          # step's relative paths are identical on both platforms; -B build keeps the object tree
+          # out of the source tree and away from the C:/acore prefix the packaging step archives.
+          #
+          # MySQL is linked from the static client library, which is what upstream's own Windows
+          # build does. FindMySQL.cmake:150-215 would find it by searching C:\MySQL, Program Files
+          # and the registry, but that makes the build depend on whatever the image happens to
+          # carry; naming the include directory and the .lib here makes it deterministic. The cache
+          # checks below prove those two flags arrived.
+          #
+          # RelWithDebInfo is also the --config used by build/install; a multi-config generator
+          # ignores CMAKE_BUILD_TYPE for the compile itself, and it is passed for the scripts that
+          # read it.
+          $cmakeArgs = @(
+            '-S', 'src/core', '-B', 'build',
+            '-G', 'Visual Studio 17 2022', '-A', 'x64',
+            "-DCMAKE_INSTALL_PREFIX=$($env:PREFIX)",
+            '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
+            '-DAPPS_BUILD=all',
+            '-DTOOLS_BUILD=all',
+            '-DSCRIPTS=static',
+            '-DMODULES=static',
+            '-DWITH_WARNINGS=OFF',
+            '-DMYSQL_INCLUDE_DIR=C:/tools/mysql/current/include',
+            '-DMYSQL_LIBRARY=C:/tools/mysql/current/lib/mysqlclient.lib',
+            "-DOPENSSL_ROOT_DIR=$($env:OPENSSL_ROOT_DIR)"
+          )
+          & cmake @cmakeArgs
+          if ($LASTEXITCODE -ne 0) { Fail 'cmake configure failed' }
+
+          # Prove the flags reached the cache instead of trusting the exit code: a flag CMake
+          # rejects, or a find module that overrides it, leaves a working configure and the wrong
+          # library - which is how a build links the DLL client while the DLL is not bundled.
+          $cachePath = 'build/CMakeCache.txt'
+          if (-not (Test-Path $cachePath)) { Fail "$cachePath does not exist; the generator produced no cache" }
+          $cache = Get-Content -LiteralPath $cachePath
+          function Assert-Cache([string]$variable, [string]$needle, [string]$what) {
+            $lines = @($cache | Where-Object { $_ -like "$variable*" -and $_ -like "*$needle*" })
+            if ($lines.Count -eq 0) { Fail "CMakeCache.txt does not record $what; the -D flag did not take" }
+            foreach ($line in $lines) { Write-Host "  $line" }
+          }
+          Assert-Cache 'MYSQL_INCLUDE_DIR' 'tools/mysql/current/include' 'the MySQL include directory'
+          Assert-Cache 'MYSQL_LIBRARY' 'tools/mysql/current/lib/mysqlclient.lib' 'the static MySQL client library'
+          Assert-Cache 'MODULES:' '=static' 'MODULES=static (the modules would otherwise be shared libraries)'
+          Assert-Cache 'SCRIPTS:' '=static' 'SCRIPTS=static'
+          Assert-Cache 'CMAKE_INSTALL_PREFIX' 'acore' 'the C:/acore install prefix'
+          Assert-Cache 'OPENSSL_ROOT_DIR' 'OpenSSL' 'the OpenSSL root'
+          Assert-Cache 'CMAKE_GENERATOR_PLATFORM' 'x64' 'the x64 platform'
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # No -k-style continue-after-failure switch: MSBuild keeps building the projects that do
+          # not depend on a failed one and names each error, so the arm64 build's `ninja -k 0` has
+          # no MSBuild equivalent. Adding one here would only turn a failed build into a partly
+          # installed tree.
+          & cmake --build build --config RelWithDebInfo --parallel
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::the build failed; the projects named above are the ones that do not compile with MSVC'
+            exit 1
+          }
+
+      - name: Install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+          function Assert-File([string]$path, [string]$what) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "$what is missing: $path" }
+          }
+          function Assert-Key([string]$file, [string]$key, [string]$what) {
+            if (-not (Select-String -LiteralPath $file -Pattern ("(?m)^" + [regex]::Escape($key) + "\r?$") -Quiet)) {
+              Fail "$what is missing from $file"
+            }
+          }
+
+          # There is nothing to strip here, unlike the arm64 build: RelWithDebInfo on MSVC writes
+          # debug information to separate .pdb files and leaves the exes small. What keeps symbols
+          # out of the artifact is the packaging step's *.pdb check.
+          & cmake --install build --config RelWithDebInfo --prefix $env:PREFIX
+          if ($LASTEXITCODE -ne 0) { Fail 'cmake --install failed' }
+
+          # Prove the layout instead of trusting the install rules, because this tree is unpacked
+          # as-is on the host: a binary under bin\ (the UNIX layout) or a conf under etc\ is a
+          # server that starts and cannot find its configs.
+          Assert-File "$env:PREFIX\worldserver.exe" 'worldserver.exe at the install root'
+          Assert-File "$env:PREFIX\authserver.exe" 'authserver.exe at the install root'
+          if (Test-Path "$env:PREFIX\bin\worldserver.exe") {
+            Fail "the install also put worldserver.exe in $env:PREFIX\bin; the Windows install is flat and a second copy is the one the start script would pick up by mistake"
+          }
+          Assert-File "$env:PREFIX\configs\worldserver.conf.dist" 'configs\worldserver.conf.dist'
+          Assert-File "$env:PREFIX\configs\authserver.conf.dist" 'configs\authserver.conf.dist'
+
+          # One entry per module, with the shipped values worth failing on: a module that was not
+          # discovered installs no conf at all, and a conf that lost a key breaks the behaviour the
+          # installer's defaults assume. CreatureGear and playerbots are checked with their master
+          # switches too, so a build that dropped either is caught here rather than in game.
+          $moduleConfs = @(
+            @{ File = 'mod-creature-gear.conf.dist'; Keys = @('CreatureGear.Enable = 1') },
+            @{ File = 'mod_hardcore.conf.dist'; Keys = @('Hardcore.DeathPolicy = ghost') },
+            @{ File = 'mod_e_interact.conf.dist'; Keys = @('EInteract.Use = 1', 'EInteract.Roll = 1') },
+            @{ File = 'mod-survivor.conf.dist'; Keys = @('Survivor.Enable = 1') },
+            @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
+            @{ File = 'playerbots.conf.dist'; Keys = @('Playerbots.RandomBotNearPlayers = 0') }
+          )
+          foreach ($conf in $moduleConfs) {
+            $path = Join-Path $env:PREFIX "configs/modules/$($conf.File)"
+            Assert-File $path "the $($conf.File) module config"
+            foreach ($key in $conf.Keys) { Assert-Key $path $key "'$key' in $($conf.File)" }
+          }
+          # Cheap census beside the named files: exactly the six modules above are expected, and a
+          # seventh conf means a module was vendored in without this list being extended.
+          $installedConfs = @(Get-ChildItem -LiteralPath "$env:PREFIX\configs\modules" -File | Where-Object Name -like '*.conf.dist')
+          Write-Host "module confs installed: $($installedConfs.Count)"
+          $installedConfs | ForEach-Object { Write-Host "  $($_.Name)" }
+          if ($installedConfs.Count -lt 6) { Fail "only $($installedConfs.Count) module conf(s) installed under $env:PREFIX\configs\modules; a module was not discovered" }
+
+          Get-ChildItem -LiteralPath $env:PREFIX | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          $totalMb = ((Get-ChildItem -LiteralPath $env:PREFIX -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB
+          Write-Host ("installed tree: {0:N1} MB" -f $totalMb)
+
+      # Windows resolves a DLL by the exe's own directory first, so every non-OS DLL the two
+      # servers load has to sit beside them. Which files those are is read off the binaries with
+      # dumpbin rather than written down here: the set depends on the OpenSSL and MySQL packages
+      # the link actually resolved, and a list written from memory is how a bundle ships with a
+      # hole in it.
+      - name: Bundle the runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+
+          $exes = @('worldserver.exe', 'authserver.exe') | ForEach-Object { Join-Path $env:PREFIX $_ }
+          foreach ($exe in $exes) {
+            if (-not (Test-Path -LiteralPath $exe)) { Fail "no $exe to inspect" }
+          }
+
+          # dumpbin ships with the MSVC toolset and is not on PATH in a plain shell, so it is
+          # located through vswhere. The newest toolset's copy is used because the exes were just
+          # linked with it.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { Fail 'vswhere.exe is missing; the MSVC tools cannot be located' }
+          $vsRoot = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+          if (-not $vsRoot) { Fail 'vswhere found no Visual Studio installation with the MSVC x64 tools' }
+          $dumpbinItem = Get-ChildItem -Path (Join-Path $vsRoot 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $dumpbinItem) { Fail "no dumpbin.exe under $vsRoot\VC\Tools\MSVC" }
+          $dumpbin = $dumpbinItem.FullName
+          Write-Host "dumpbin: $dumpbin"
+
+          # The VC redistributable is the right source for msvcp140/vcruntime140/concrt140: it is
+          # the exact CRT the link used, and it is not guaranteed to be present on a target machine
+          # that never installed a Visual Studio build. System32 is the fallback, never the first
+          # choice, because an image's System32 copy can be an older redistributable.
+          $crtDir = $null
+          $redistRoot = Join-Path $vsRoot 'VC\Redist\MSVC'
+          if (Test-Path $redistRoot) {
+            $crtDir = Get-ChildItem -LiteralPath $redistRoot -Directory |
+              Where-Object { Test-Path (Join-Path $_.FullName 'x64\Microsoft.VC143.CRT') } |
+              Sort-Object Name -Descending |
+              ForEach-Object { Join-Path $_.FullName 'x64\Microsoft.VC143.CRT' } |
+              Select-Object -First 1
+          }
+          if ($crtDir) { Write-Host "VC runtime: $crtDir" } else { Write-Host 'VC runtime: no redistributable found, System32 is the only source' }
+
+          # Checked before the search list is built: Join-Path with an empty OPENSSL_ROOT_DIR throws
+          # a binding error instead of the annotation this deserves.
+          if (-not $env:OPENSSL_ROOT_DIR) { Fail 'OPENSSL_ROOT_DIR is not set; the dependency step did not run or did not export it' }
+          $searchDirs = @(
+            (Join-Path $env:OPENSSL_ROOT_DIR 'bin'),
+            'C:\tools\mysql\current\lib',
+            'C:\tools\mysql\current\bin',
+            $crtDir,
+            (Join-Path $env:SystemRoot 'System32')
+          ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+          Write-Host "searching: $($searchDirs -join '; ')"
+
+          # The DLLs every supported Windows provides. Anything not in this list and not bundled
+          # fails the step below, which is the point: the list is the contract for what a host is
+          # allowed to be missing.
+          $osDlls = @(
+            'kernel32.dll', 'user32.dll', 'advapi32.dll', 'ole32.dll', 'oleaut32.dll', 'ws2_32.dll',
+            'wsock32.dll', 'mswsock.dll', 'winmm.dll', 'iphlpapi.dll', 'psapi.dll', 'secur32.dll',
+            'crypt32.dll', 'bcrypt.dll', 'shlwapi.dll', 'version.dll', 'gdi32.dll', 'shell32.dll',
+            'comctl32.dll', 'comdlg32.dll', 'dbghelp.dll', 'powrprof.dll', 'normaliz.dll',
+            'dnsapi.dll', 'wldap32.dll', 'ntdll.dll', 'mpr.dll', 'imm32.dll', 'uxtheme.dll',
+            'setupapi.dll', 'userenv.dll', 'netapi32.dll', 'rpcrt4.dll', 'msimg32.dll',
+            'opengl32.dll', 'glu32.dll'
+          )
+          function Test-VcRuntime([string]$name) {
+            $lower = $name.ToLowerInvariant()
+            return ($lower -like 'msvcp140*.dll' -or $lower -like 'vcruntime140*.dll' -or $lower -eq 'concrt140.dll')
+          }
+
+          $bundled = New-Object System.Collections.Generic.List[string]
+          foreach ($exe in $exes) {
+            $output = & $dumpbin /nologo /dependents $exe 2>&1
+            if ($LASTEXITCODE -ne 0) { Fail "dumpbin /dependents failed for $exe" }
+            # Both the "Image has the following dependencies" block and the delay-load block are
+            # collected: a delay-loaded DLL the host lacks still breaks the feature that uses it.
+            # Section names in the summary (".data", ".text") cannot match a .dll pattern.
+            $deps = @([regex]::Matches(($output -join "`n"), '(?im)^\s+([A-Za-z0-9_.\-]+\.dll)\s*$') |
+              ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+            if ($deps.Count -eq 0) { Fail "dumpbin reported no dependencies for $exe; either the parse or the binary is wrong" }
+            Write-Host "--- $([System.IO.Path]::GetFileName($exe)) depends on $($deps.Count) DLL(s) ---"
+            Write-Host ("  {0,-34} {1}" -f 'dependency', 'disposition')
+            foreach ($dep in $deps) {
+              $lower = $dep.ToLowerInvariant()
+              if (($osDlls -contains $lower) -or ($lower -like 'api-ms-win-*') -or ($lower -like 'ext-ms-*')) {
+                Write-Host ("  {0,-34} shipped with Windows" -f $dep)
+                continue
+              }
+              $source = $null
+              foreach ($dir in $searchDirs) {
+                $candidate = Join-Path $dir $dep
+                if (Test-Path -LiteralPath $candidate) { $source = $candidate; break }
+              }
+              if (-not $source) {
+                Fail "$([System.IO.Path]::GetFileName($exe)) needs $dep, which is in none of: $($searchDirs -join '; '). Either bundle it from the toolchain or add it to the always-present list above"
+              }
+              # System32 is only a source for the VC runtime: anything else found there would be a
+              # file the image happens to have and the host may not, which is exactly the silent
+              # dependency this step exists to prevent.
+              if ($source.StartsWith((Join-Path $env:SystemRoot 'System32'), [System.StringComparison]::OrdinalIgnoreCase) -and -not (Test-VcRuntime $dep)) {
+                Fail "$dep resolved only to $source; System32 is only a source for the VC runtime, so this DLL has to come from the toolchain that linked it"
+              }
+              $dest = Join-Path $env:PREFIX $dep
+              if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $source -Destination $dest -Force }
+              if (-not (Test-Path -LiteralPath $dest)) { Fail "copying $dep to $dest produced no file" }
+              if (-not $bundled.Contains($dep)) { $bundled.Add($dep) }
+              Write-Host ("  {0,-34} bundled <- {1}" -f $dep, $source)
+            }
+          }
+
+          # The list is written to the workspace, not into the install tree: the verify step reads
+          # it back to prove every one of these files survived packaging, and it has no business
+          # travelling to the host.
+          Set-Content -Path (Join-Path $env:GITHUB_WORKSPACE 'bundled-dlls.txt') -Value $bundled -Encoding utf8
+          Write-Host "bundled $($bundled.Count) DLL(s) into $env:PREFIX: $($bundled -join ', ')"
+          Get-ChildItem -LiteralPath $env:PREFIX -File | Where-Object Name -like '*.dll' | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+
+      - name: SQL sources (what the DB updater reads on first boot)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+
+          # The same five trees the arm64 step copies, in the same places: the DB updater reads
+          # SourceDirectory/data/sql for the CUSTOM slot and the modules' own data/sql for the
+          # MODULE pass, and mod-playerbots reads its own tree for the playerbots database.
+          New-Item -ItemType Directory -Force -Path "$env:PREFIX\src\data",
+            "$env:PREFIX\src\modules\mod-playerbots\data",
+            "$env:PREFIX\src\modules\mod-creature-gear\data",
+            "$env:PREFIX\src\modules\mod-survivor\data" | Out-Null
+          Copy-Item -Recurse -Force 'src/core/data/sql' "$env:PREFIX\src\data\sql"
+          Copy-Item -Recurse -Force 'src/playerbots/data/sql' "$env:PREFIX\src\modules\mod-playerbots\data\sql"
+          Copy-Item -Recurse -Force 'src/core/modules/mod-creature-gear/data/sql' "$env:PREFIX\src\modules\mod-creature-gear\data\sql"
+          Copy-Item -Recurse -Force 'src/core/modules/mod-survivor/data/sql' "$env:PREFIX\src\modules\mod-survivor\data\sql"
+          # The CUSTOM slot is already registered in the base database
+          # (data/sql/base/db_world/updates_include.sql), so the loot-bag and portal patches ride
+          # in under the core's own data/sql/custom/db_world directory.
+          New-Item -ItemType Directory -Force -Path "$env:PREFIX\src\data\sql\custom\db_world" | Out-Null
+          Copy-Item -Force "$env:GITHUB_WORKSPACE\sql\custom\db_world\*" "$env:PREFIX\src\data\sql\custom\db_world\"
+
+          # Count instead of trusting the copies: one level wrong here and the DB updater finds
+          # nothing to apply, on a host where the operator only sees an empty world.
+          foreach ($relative in @('data\sql', 'modules\mod-playerbots\data\sql', 'modules\mod-creature-gear\data\sql', 'modules\mod-survivor\data\sql', 'data\sql\custom\db_world')) {
+            $dir = Join-Path $env:PREFIX "src\$relative"
+            if (-not (Test-Path -LiteralPath $dir)) { Fail "$dir does not exist" }
+            $count = @(Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object Name -like '*.sql').Count
+            Write-Host "src\$relative : $count .sql files"
+            if ($count -eq 0) { Fail "$dir has no .sql files" }
+          }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          # The prefix *is* the layout, so archive its children: -Path "$env:PREFIX\*" puts
+          # worldserver.exe at the zip root, while -Path $env:PREFIX wraps everything in an
+          # "acore/" folder and the flat tree the installer unpacks is gone. The verify step below
+          # re-checks the extracted tree for exactly this reason.
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'acore-server-win64.zip'
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -Path "$env:PREFIX\*" -DestinationPath $zip -CompressionLevel Optimal
+          if (-not (Test-Path -LiteralPath $zip)) { Fail 'Compress-Archive produced no file' }
+          $size = (Get-Item -LiteralPath $zip).Length
+          Write-Host ("asset size: {0} bytes ({1:N1} MB)" -f $size, ($size / 1MB))
+          # 2147483648 is GitHub's ceiling for a single release asset. Fail here, in seconds,
+          # instead of after the upload is refused - and before the upload, so a build that crossed
+          # it cannot leave a digest beside a missing zip.
+          if ($size -ge 2147483648) {
+            Fail "acore-server-win64.zip is $size bytes, at or over GitHub's 2 GiB release-asset limit"
+          }
+
+          # No PDBs: RelWithDebInfo writes one per target beside the exe, so this is the check that
+          # the install rules did not pick them up.
+          #
+          # The entry names are read into strings before the archive is closed: a ZipArchiveEntry
+          # cannot be read after its archive is disposed, so building the failure message from the
+          # entry object would throw instead of naming the file.
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $pdbNames = @($archive.Entries | Where-Object { $_.FullName -like '*.pdb' } | ForEach-Object { $_.FullName })
+            $entryCount = $archive.Entries.Count
+            $topLevel = @($archive.Entries | ForEach-Object { ($_.FullName -split '/')[0] } | Sort-Object -Unique)
+          } finally {
+            $archive.Dispose()
+          }
+          if ($pdbNames.Count -gt 0) { Fail "the zip carries $($pdbNames.Count) .pdb file(s), first: $($pdbNames[0])" }
+          Write-Host "archive: $entryCount entries; top level: $($topLevel -join ', ')"
+
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          # sha256sum's "<hash>  <name>" form, so `sha256sum -c` and the installer's own comparison
+          # both parse it without a second convention.
+          $shaFile = $zip + '.sha256'
+          Set-Content -Path $shaFile -Value "$hash  acore-server-win64.zip" -Encoding ascii
+          Get-Content $shaFile
+
+          # The notes are built once, here, where the sha256 is known, and both publish steps hand
+          # this file to gh. Assembling them twice is how the rolling release kept describing an
+          # older build than the asset beside it.
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          $notes = (@(
+            "Rolling windows/x64 server build: AzerothCore core $($env:CORE_COMMIT) + mod-playerbots $($env:PB_COMMIT), this repository at $shortSha (run $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)). Compiled with MSVC (Visual Studio 2022) on windows-2022."
+            "Artifact sha256: $hash. Compare it with the downloaded acore-server-win64.zip before unpacking; acore-server-win64.zip.sha256 beside the asset carries the same value in sha256sum form."
+            "Modules: mod-playerbots (the bot population, with the player-centric distribution patch that keeps random bots in the zones real players are in), mod-creature-gear (humanoids visibly wear the gear they can drop), mod-hardcore (opt-in one-death ruleset, ghost by default), mod-e-interact (one interact key, including the local gameobject pass), mod-survivor (death drops everything carried into a lootable container) and mod-mercenaries (named bots recruited at any innkeeper, levelling with you inside a two-level window)."
+            "No PDBs and no client data ride the artifact: the installer downloads the pinned wowgaming/client-data zip and verifies its sha256 itself. Install with scripts/windows-install.ps1 from an elevated PowerShell session; its default -ReleaseUrl points at this release's tag rather than at releases/latest, which stays the arm64 build."
+          ) -join "`n`n")
+          Set-Content -Path (Join-Path $env:GITHUB_WORKSPACE 'release-notes-win64.md') -Value $notes -Encoding utf8
+
+      # A wrong Compress-Archive path prefix ships a zip whose root is a folder, which the installer
+      # unpacks happily and the server then cannot start from. So the checks that ran against the
+      # install tree run again against the *extracted* artifact, plus one check they cannot make:
+      # that every DLL the bundling step decided on is inside.
+      - name: Verify the packaged artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+          function Assert-File([string]$path, [string]$what) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "$what is missing from the packaged artifact: $path" }
+          }
+          function Assert-Key([string]$file, [string]$key, [string]$what) {
+            if (-not (Select-String -LiteralPath $file -Pattern ("(?m)^" + [regex]::Escape($key) + "\r?$") -Quiet)) {
+              Fail "$what is missing from $file"
+            }
+          }
+
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'acore-server-win64.zip'
+          Assert-File $zip 'the package'
+          # A scratch directory under RUNNER_TEMP, emptied first: expanding over an earlier
+          # extraction is how a stale worldserver.exe passes a check the fresh zip would fail.
+          $root = Join-Path $env:RUNNER_TEMP 'win64-verify'
+          if (Test-Path -LiteralPath $root) { Remove-Item -Recurse -Force $root }
+          Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+
+          # The classic failure: everything under an "acore/" folder.
+          if (Test-Path -LiteralPath (Join-Path $root 'acore')) {
+            Fail 'the zip contains an acore/ folder at its root; Compress-Archive was pointed at the prefix instead of its children'
+          }
+          # And the other one: client data riding along, which is a 2 GiB upload that fails late.
+          if (Test-Path -LiteralPath (Join-Path $root 'data')) {
+            Fail 'the artifact carries a data/ directory; the client data is the installer''s job and does not fit under the 2 GiB asset ceiling'
+          }
+
+          Assert-File (Join-Path $root 'worldserver.exe') 'worldserver.exe at the zip root'
+          Assert-File (Join-Path $root 'authserver.exe') 'authserver.exe at the zip root'
+          Assert-File (Join-Path $root 'configs\worldserver.conf.dist') 'configs\worldserver.conf.dist at the zip root'
+          Assert-File (Join-Path $root 'configs\authserver.conf.dist') 'configs\authserver.conf.dist at the zip root'
+
+          $moduleConfs = @(
+            @{ File = 'mod-creature-gear.conf.dist'; Keys = @('CreatureGear.Enable = 1') },
+            @{ File = 'mod_hardcore.conf.dist'; Keys = @('Hardcore.DeathPolicy = ghost') },
+            @{ File = 'mod_e_interact.conf.dist'; Keys = @('EInteract.Use = 1', 'EInteract.Roll = 1') },
+            @{ File = 'mod-survivor.conf.dist'; Keys = @('Survivor.Enable = 1') },
+            @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
+            @{ File = 'playerbots.conf.dist'; Keys = @('Playerbots.RandomBotNearPlayers = 0') }
+          )
+          foreach ($conf in $moduleConfs) {
+            $path = Join-Path $root "configs\modules\$($conf.File)"
+            Assert-File $path "configs\modules\$($conf.File)"
+            foreach ($key in $conf.Keys) { Assert-Key $path "'$key' in $($conf.File)" }
+          }
+
+          # Every DLL the bundling step copied, checked by name against the extracted tree: a
+          # resolved dependency that did not survive packaging is a server that cannot start.
+          $bundledList = Join-Path $env:GITHUB_WORKSPACE 'bundled-dlls.txt'
+          Assert-File $bundledList 'the bundled-DLL list written by the bundle step'
+          $bundled = @(Get-Content -LiteralPath $bundledList | Where-Object { $_.Trim() })
+          foreach ($dll in $bundled) { Assert-File (Join-Path $root $dll) "the bundled $dll at the zip root" }
+          Write-Host "verified $($bundled.Count) bundled DLL(s) at the zip root: $($bundled -join ', ')"
+
+          foreach ($relative in @('src\data\sql', 'src\modules\mod-playerbots\data\sql', 'src\modules\mod-creature-gear\data\sql', 'src\modules\mod-survivor\data\sql', 'src\data\sql\custom\db_world')) {
+            $dir = Join-Path $root $relative
+            if (-not (Test-Path -LiteralPath $dir)) { Fail "$relative is missing from the packaged artifact" }
+            $count = @(Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object Name -like '*.sql').Count
+            if ($count -eq 0) { Fail "$relative in the packaged artifact has no .sql files" }
+            Write-Host "$relative : $count .sql files"
+          }
+          Write-Host "the artifact unpacks to the flat layout the installer expects"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acore-server-win64
+          path: |
+            acore-server-win64.zip
+            acore-server-win64.zip.sha256
+          retention-days: 14
+
+      # scripts/windows-install.ps1 resolves its default artifact from the tag, not from
+      # releases/latest, but a manual build still has to land somewhere a person can fetch it after
+      # the run page expires.
+      #
+      # --latest=false is not cosmetic: this repository has one "latest", thor-install.sh downloads
+      # releases/latest/download/acore-server-arm64.tar.zst, and a Windows release marked latest
+      # would make that URL 404 for the arm64 asset.
+      #
+      # Every gh call passes -R "$env:GITHUB_REPOSITORY": gh otherwise derives the repository from a
+      # git remote in the working directory, and several unrelated ones are there now - the
+      # checkout of this repository at the workspace root and the core/playerbots clones under src/.
+      # -R removes the guess, and the token is GH_TOKEN below rather than a stored credential, which
+      # is why the checkout runs with persist-credentials: false. No step pushes with git.
+      - name: Publish the rolling release (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/server-v') }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+          $notesFile = Join-Path $env:GITHUB_WORKSPACE 'release-notes-win64.md'
+          if (-not (Test-Path -LiteralPath $notesFile)) { Fail "no release notes at $notesFile" }
+
+          # view-then-create, because "gh release create" fails on an existing tag and this release
+          # is rewritten on every run.
+          & gh release view server-build-win64 -R $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            $createArgs = @('release', 'create', 'server-build-win64', '-R', $env:GITHUB_REPOSITORY, '--latest=false',
+              '--title', 'Windows x64 server build (rolling)', '--notes-file', $notesFile)
+            & gh @createArgs
+            if ($LASTEXITCODE -ne 0) { Fail 'gh release create server-build-win64 failed' }
+          }
+          # The upload comes before the edit: the notes must not describe a build whose asset failed
+          # to upload.
+          $uploadArgs = @('release', 'upload', 'server-build-win64', '-R', $env:GITHUB_REPOSITORY,
+            'acore-server-win64.zip', 'acore-server-win64.zip.sha256', '--clobber')
+          & gh @uploadArgs
+          if ($LASTEXITCODE -ne 0) { Fail 'gh release upload failed' }
+          # Notes rewritten on every run, not only when the release is created: otherwise the page
+          # keeps describing whichever build created it while the asset beside it is newer.
+          & gh release edit server-build-win64 -R $env:GITHUB_REPOSITORY --notes-file $notesFile
+          if ($LASTEXITCODE -ne 0) { Fail 'gh release edit failed' }
+          Write-Host 'published acore-server-win64.zip to the server-build-win64 rolling release'
+
+      # The arm64 workflow publishes its own two assets to the same server-v* tag, so this step
+      # views before creating (that run may have created the release already, with its own body,
+      # which is left alone) and uploads with --clobber so the two workflows can finish in either
+      # order.
+      - name: Publish the tagged release
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
+          $notesFile = Join-Path $env:GITHUB_WORKSPACE 'release-notes-win64.md'
+          if (-not (Test-Path -LiteralPath $notesFile)) { Fail "no release notes at $notesFile" }
+
+          & gh release view $env:GITHUB_REF_NAME -R $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            # --latest=false: the rolling arm64 release has to stay "latest" for thor-install.sh.
+            $createArgs = @('release', 'create', $env:GITHUB_REF_NAME, '-R', $env:GITHUB_REPOSITORY, '--latest=false',
+              '--title', "Server build $env:GITHUB_REF_NAME", '--notes-file', $notesFile)
+            & gh @createArgs
+            if ($LASTEXITCODE -ne 0) { Fail "gh release create $env:GITHUB_REF_NAME failed" }
+          }
+          $uploadArgs = @('release', 'upload', $env:GITHUB_REF_NAME, '-R', $env:GITHUB_REPOSITORY,
+            'acore-server-win64.zip', 'acore-server-win64.zip.sha256', '--clobber')
+          & gh @uploadArgs
+          if ($LASTEXITCODE -ne 0) { Fail "gh release upload to $env:GITHUB_REF_NAME failed" }
+          Write-Host "published acore-server-win64.zip to $env:GITHUB_REF_NAME"
