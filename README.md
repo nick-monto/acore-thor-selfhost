@@ -29,6 +29,7 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 |---|---|
 | [`docs/LAUNCHER-HOSTING-DESIGN.md`](docs/LAUNCHER-HOSTING-DESIGN.md) | Can `wyattabuntjer/AYN-Thor-WoW-Launcher` support the self-hosted stack, and what exactly must change |
 | [`docs/SERVER-STACK.md`](docs/SERVER-STACK.md) | The server half: build, data, database, bots, supervision, and what of the guide transfers |
+| [`docs/WINDOWS-HOST.md`](docs/WINDOWS-HOST.md) | The same realm on a Windows x64 host: the flat artifact and why its configs live in `configs/`, the release tag that must not be latest, every installer flag, the root layout, what a Windows install differs in, and the container path with its four volumes and its delete command |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | The ordered, copy-pasteable device steps (Termux + proot Ubuntu), with the gates to check as you go |
 | [`docs/CREATURE-GEAR-DESIGN.md`](docs/CREATURE-GEAR-DESIGN.md) | Mobs that wear what they drop: what needs a client patch (almost nothing), what needs code, and how the SQL rides the release — **implemented as `modules/mod-creature-gear`**; its status table lists what is verified and where |
 | [`docs/LOOT-BAGS-DESIGN.md`](docs/LOOT-BAGS-DESIGN.md) | Level-banded loot bags on every lootable creature: quality tiers, money, cloth, potions and level-appropriate gear, delivered as a pure database patch in the core's CUSTOM SQL slot |
@@ -42,10 +43,14 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 | [`docs/SURVIVOR-DESIGN.md`](docs/SURVIVOR-DESIGN.md) | Death that costs the gear instead of the character: the item-instance snapshot, the summoned chest with a pre-filled loot, ruleset-wide access to any container, the map-marker add-on message, the bot strip-and-re-roll, the Survivor → Hardcore ladder and the Hardcore death container, the schema and every core hook — **implemented as `modules/mod-survivor`**; what is verified and what needs a client is in its verification section |
 | [`modules/mod-hardcore/README.md`](modules/mod-hardcore/README.md) | Opt-in permadeath ruleset, vendored from `maluramichael/mod-hardcore` with the Thor-local changes recorded in `UPSTREAM.md` |
 | [`scripts/thor-install.sh`](scripts/thor-install.sh) | Does the whole device install for you: Termux packages, rootfs, server files, MySQL, configs, first boot, GM account, start/stop scripts |
+| [`scripts/windows-install.ps1`](scripts/windows-install.ps1) | Does the whole Windows x64 install for you, in one elevated PowerShell 5.1 session: artifact, portable MySQL, client data, configs, first boot, GM account, start/stop scripts |
 | [`scripts/syntax-check.sh`](scripts/syntax-check.sh) | Compile-checks every module translation unit with `-fsyntax-only` and the core's own flags, so a misspelt core symbol fails in seconds instead of in the hour-long arm64 build |
 | [`scripts/mercenaries/check_mercenaries.py`](scripts/mercenaries/check_mercenaries.py) | Offline checks on `mod-mercenaries`: conf keys against the code and the installer, dials against playerbots' strategy vocabulary, hooks against the core's headers, no database-bound script, the tables built after the spell store, temperament keys enumerated |
 | [`pins.toml`](pins.toml) | Exact commits, artifact hashes and ports every document refers to |
+| [`docker/`](docker/) | The container path: a headless `ubuntu:24.04` image that downloads the published artifact instead of compiling, a `mysql:8.4` service with no published port, four named volumes (`db`, `data`, `logs`, `state`), and an entrypoint that waits for the database, creates the schemas, fetches and verifies the client data, writes the confs with `scripts/write-confs.sh`, then runs auth and world - `docker compose down -v` deletes the realm |
 | [`.github/workflows/server-aarch64.yml`](.github/workflows/server-aarch64.yml) | Builds the linux/arm64 server + SQL sources on a native arm64 runner and attaches them to a release (the client data is fetched on the device: a single release asset stops at 2 GiB) |
+| [`.github/workflows/server-x86_64.yml`](.github/workflows/server-x86_64.yml) | Builds the same server for linux/x86_64 on a native `ubuntu-24.04` runner and publishes `acore-server-x86_64.tar.zst` to the rolling `server-build-x86_64` release, also deliberately not marked latest so the Thor's `releases/latest` download keeps resolving - it is the payload the container image downloads for `amd64` |
+| [`.github/workflows/server-win64.yml`](.github/workflows/server-win64.yml) | Builds the same server with MSVC on `windows-2022` and publishes a flat `acore-server-win64.zip` to the rolling `server-build-win64` release, which is deliberately not marked latest so the Thor's `releases/latest` download keeps resolving |
 | [`.github/workflows/module-checks.yml`](.github/workflows/module-checks.yml) | Runs on every push that touches a module: compile-checks the module sources against the pinned core's own flags, then runs the offline checks. Nothing is linked or published, so it takes about two minutes instead of the arm64 job's hour |
 
 ## Install on the Thor
@@ -89,6 +94,20 @@ python3 scripts/travel/gen_portals.py --core <core> --check
 The player-centric randombot pass is maintained as `patches/playerbots-player-centric.patch` against the pinned `mod-playerbots` commit. The workflow applies it before the arm64 build, `thor-install.sh --from-source` applies it after cloning the module, and the installer writes the near-player defaults into `playerbots.conf`: the bots assigned to the player are capped at 10 and placed at level-appropriate spots in the player's current zone, at least 100 yards away, never in a ring around them; each bot then visits for 15-40 minutes and spends 4-10 away in another zone, so the zone's population changes over time. The rest of the bots keep the normal world-wide distribution. See [`docs/BOT-DISTRIBUTION-DESIGN.md`](docs/BOT-DISTRIBUTION-DESIGN.md).
 
 Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every flag.
+
+## Install on Windows
+
+The same realm builds for a Windows x64 host: the same core pin, the same six modules and the same custom SQL, compiled with MSVC on `windows-2022` and published as a flat `acore-server-win64.zip` (both binaries, their DLLs, `configs\` and the SQL sources — no client data, the installer fetches and verifies that). Run this from an elevated Windows PowerShell 5.1 session:
+
+```powershell
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/windows-install.ps1 -OutFile windows-install.ps1
+.\windows-install.ps1 -Check      # report what it would do, change nothing
+.\windows-install.ps1             # install to C:\acore (-Root to move it)
+```
+
+It installs portable MySQL, fetches the pinned client data, writes the same conf keys, first-boots the realm to populate the databases and create the GM account, and leaves `start.ps1` / `stop.ps1` / `set-bots.ps1` behind. [`docs/WINDOWS-HOST.md`](docs/WINDOWS-HOST.md) has every flag, the root layout and what differs from the Thor install. The Windows build and install have not been run yet: the first `server-win64` workflow run is the gate.
+
+The same script also has a container mode, for a host that would rather have neither MySQL nor the server as native processes: `.\windows-install.ps1 -Docker` fetches the four compose files, builds the image and starts the realm, and `docker compose down -v` deletes it — database, client data and logs included. It needs a reachable Docker daemon, and the same caveat holds: no image build and no container start has been run yet.
 
 ## Manage it afterwards
 

@@ -61,10 +61,60 @@ size = 1196168257
 sha256 = "a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610"
 provides = ["dbc", "maps", "vmaps", "mmaps"]           # no WoW client needed for the server side
 
+[artifact.win64]
+workflow = ".github/workflows/server-win64.yml"
+release_tag = "server-build-win64"                     # deliberately NOT marked latest
+asset = "acore-server-win64.zip"
+runner = "windows-2022"
+toolchain = "MSVC (Visual Studio 2022, x64)"
+prefix = "C:/acore"                                    # windows-install.ps1 -Root default
+installer = "scripts/windows-install.ps1"
+# Same core pin, same six modules, same patches and same custom SQL as the arm64 artifact; the zip
+# is flat (worldserver.exe and authserver.exe at the root, configs/, src/) because AzerothCore's
+# Windows install has no prefix layout: ConfigMgr::GetConfigPath() returns "configs/" under
+# AC_PLATFORM_WINDOWS (src/common/Configuration/Config.cpp:709) and it is CWD-relative.
+# The tag is not marked latest on purpose: thor-install.sh resolves its artifact through
+# releases/latest/download/acore-server-arm64.tar.zst, and there is only one latest per repository,
+# so a second latest release would silently break every Thor install.
+
+[artifact.win64.build_deps]
+boost = { version = "1.87.0", variants = "msvc-14.3, 64-bit" }
+mysql = { version = "8.4.9", package = "portable winx64 zip", use = "client library to build; server binaries to install" }
+# OpenSSL is not pinned: the windows-2022 runner image supplies it.
+
+[artifact.x86_64]
+workflow = ".github/workflows/server-x86_64.yml"
+release_tag = "server-build-x86_64"                    # deliberately NOT marked latest
+asset = "acore-server-x86_64.tar.zst"
+runner = "ubuntu-24.04"
+prefix = "/opt/acore"
+# Same core pin, same six modules, same patches and same custom SQL as the other two artifacts:
+# server-aarch64.yml with the platform swapped, on a native x86_64 runner so the sonames match the
+# arm64 artifact's generation. The tarball layout is the Docker image's (bin/ etc/ lib/ src/ under
+# /opt/acore), which is also what thor-install.sh expects from a tarball. This tag is not marked
+# latest for the same reason server-build-win64 is not: thor-install.sh resolves its artifact
+# through releases/latest/download/acore-server-arm64.tar.zst, and there is only one latest per
+# repository, so a second latest release would silently break every Thor install.
+
 [database]
 engine = "mysql-server 8.0.46 (Ubuntu noble arm64)"    # MySQL's own APT repo is amd64/i386 only
 schemas = ["acore_auth", "acore_world", "acore_characters", "acore_playerbots"]
 ports = { db = 3306, auth = 3724, world = 8085, soap = 7878 }   # SOAP disabled by default
+
+[container]
+image_base = "ubuntu:24.04"                            # headless: no display, no systemd, no compiler
+compose = "docker/docker-compose.yml"
+services = ["db", "acore"]                             # mysql:8.4 (healthcheck, no published port), the built image
+volumes = ["db", "data", "logs", "state"]              # mysql data; client data; logs; first-boot marker
+ports = [3724, 8085]                                   # auth, world; the database is compose-network only
+payload = { amd64 = "acore-server-x86_64.tar.zst", arm64 = "acore-server-arm64.tar.zst", select = "TARGETARCH" }
+conf_writer = "scripts/write-confs.sh"                 # wc_write_all: the same writer thor-install.sh calls
+# A rebuild is a download, not a compile: the image unpacks the artifact at /opt/acore and checks
+# bin/ etc/ lib/ src/, with ARTIFACT_URL/ARTIFACT_SHA256 overriding the asset (the .sha256 beside it
+# is the default hash). Client data lives in the data volume - fetched and sha256-verified on first
+# start, ~1.2 GiB - not in an image layer. The compose project name is fixed to acore-realm so the
+# volumes keep their names wherever compose runs, which is what lets scripts/windows-install.ps1
+# stage the four files in <root>\docker-src. `docker compose down -v` takes the whole realm with it.
 
 [launcher]
 repo = "https://github.com/wyattabuntjer/AYN-Thor-WoW-Launcher"

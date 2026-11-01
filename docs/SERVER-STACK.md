@@ -236,3 +236,19 @@ the mount and pet each mercenary ends up with on the roster. The study is
 | Restore | `state = 1` roster rows are re-added with `AddPlayerBot` on the owner's login, and a mercenary's own login queues its level and archetype until it is in the world, so both survive a relog and a world-server restart | `MercenaryMgr::RestoreParty`, `MercenaryMgr::Update` [V] |
 | Offline checks | `python3 scripts/mercenaries/check_mercenaries.py`, run by the workflow before the build: conf keys read by the code are defined, the installer's `MERCENARY_CONF_DEFAULTS` and the shipped conf agree in both directions, the picker is a `CreatureScript` gated on the innkeeper flag with action codes clear of the core's option range, the pool reads the playerbots account table rather than the addclass cache, nothing still refers to `Mercenary.ObeliskEntry`, the roster schema matches the columns written, the loader symbol matches the folder name, every personality dial is a name playerbots registers as a *strategy* (read from the base, class, raid and dungeon `Strategy` contexts only, so a trigger, action or value of that name fails), and pins/workflow/installer mention the module | `scripts/mercenaries/check_mercenaries.py`, `server-aarch64.yml` "Check the mercenary module's files agree" [V] |
 | Verified | the offline checker passes and every module translation unit compiles (`scripts/syntax-check.sh`, `-fsyntax-only` against the pinned core's flags); the module has **not** been run on the Thor. The compile gate is `server-aarch64.yml`; the in-game steps are the plan's verification list | **not a build or Thor run** |
+
+## 16. The same stack for a Windows host
+
+The pins in §1 and the six modules of §10-§15 ride a second artifact as well: `server-win64.yml`
+builds the same core commit, the same module commits and the same custom SQL with MSVC on a
+Windows x64 host, and `scripts/windows-install.ps1` installs them. Nothing in this document changes
+for it; what changes is the host, and it is written up in [`WINDOWS-HOST.md`](WINDOWS-HOST.md).
+
+One runtime difference belongs here, because it sits in the core's own configuration loader rather
+than in the packaging: under `AC_PLATFORM_WINDOWS`, `ConfigMgr::GetConfigPath()` returns the
+literal, CWD-relative `"configs/"` instead of the compile-time `_CONF_DIR` used on Linux
+(`src/common/Configuration/Config.cpp:704-712`, Windows branch at `:709`), and module confs load
+from `GetConfigPath() + "modules/"` (`:766`). So a Windows install's conf directory is
+`<prefix>/configs` and `<prefix>/configs/modules` rather than the Thor's `<prefix>/etc` and
+`<prefix>/etc/modules`, the servers have to be started with the working directory at the install
+root, and the Thor's `_CONF_DIR` repair step has no counterpart there.
