@@ -110,9 +110,11 @@ public:
         if (!player || !sMercenaryMgr.IsMercenary(player->GetGUID()))
             return;
 
-        // The line is said here, before the mercenary is released, because this hook is the last
-        // moment the mercenary is still a player in the world: a line said from a ghost would
-        // arrive after the player has already read the death.
+        // The line is said here because this hook is the last moment the mercenary is still a body
+        // in the world: the dead engine's next pass releases the spirit and starts the run to the
+        // corpse ("auto release", then "find corpse", then "revive from corpse"), and a line said
+        // from a ghost arrives after the player has already read the death. Nothing logs the
+        // mercenary out on death - the dismissal timer is the only thing in this module that does.
         sMercenaryPersonality.SayLine(player, sMercenaryMgr.OwnerOf(player->GetGUID()), "death");
     }
 };
