@@ -1,0 +1,40 @@
+# The build context is the repository root: docker/docker-compose.yml builds with `context: ..` so
+# the Dockerfile can COPY docker/entrypoint.sh and scripts/write-confs.sh out of the checkout. The
+# image needs nothing else, and without this file the daemon would send the whole tree - docs,
+# modules, patches, SQL, a local build - on every build.
+#
+# Everything is excluded by name rather than with a leading `*`: the exceptions below are the only
+# files the build reads, and naming the exclusions keeps a new top-level directory from silently
+# becoming part of the context.
+
+.git
+.github
+build
+docs
+modules
+patches
+sql
+pins.toml
+README.md
+LICENSE
+
+# scripts/ except the one file the image copies (write-confs.sh is the realm's conf writer, shared
+# with scripts/thor-install.sh).
+scripts/**
+!scripts/write-confs.sh
+
+# Local artifacts and noise: the tarballs and client data the docs tell you to download, plus
+# anything a build or an editor leaves behind.
+*.log
+*.zst
+*.zip
+*.tar
+*.sha256
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/

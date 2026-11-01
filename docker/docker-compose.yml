@@ -1,0 +1,111 @@
+# The realm as one disposable unit: `docker compose -f docker/docker-compose.yml up -d --build`,
+# and `docker compose -f docker/docker-compose.yml down -v` puts the host back the way it was.
+#
+# Every variable below has a ${VAR:-default}, so this file works with no .env at all; put a .env
+# beside it (compose reads one from the project directory) or export the variables to change
+# something. Defaults match scripts/thor-install.sh: DB_USER=acore, BOTS=50, ACCOUNT=admin,
+# ACCOUNT_PASS=password, and the realm's passwords default to acore/password for a throwaway host.
+# A password that contains `;` or `"` breaks the core's DatabaseInfo strings, and one that contains
+# `'` is escaped by the entrypoint but is best avoided - pick something else.
+
+# The project name is fixed so the volumes are named acore-realm_* wherever compose is run from.
+# Without it, the name is the directory the compose file sits in, and scripts/windows-install.ps1
+# stages these files in a temporary directory before running compose there.
+name: acore-realm
+
+services:
+  db:
+    image: mysql:8.4
+    # --skip-name-resolve: the core connects by IP over the compose network, and reverse lookups on
+    # every connection buy nothing there. 64M: the world DB updater applies large statements, and
+    # MySQL's 64M ceiling is what the core's own SQL is sized for.
+    command:
+      - --skip-name-resolve
+      - --max-allowed-packet=64M
+    environment:
+      # Only the root password is given to the image. The realm's own user is created by the
+      # entrypoint, not by MYSQL_USER/MYSQL_PASSWORD: those are applied once, at the image's first
+      # initialisation, so changing DB_PASS later would leave the user with the old password. The
+      # entrypoint's ALTER USER keeps the account in step with the environment on every start.
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-acore}
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      # mysqladmin ping exits 0 as soon as mysqld answers, even when it refuses the credentials, so
+      # this asks "may the realm start yet", not "is the password right" - the entrypoint's schema
+      # step is what proves the login.
+      # The password is interpolated here rather than read from the container's environment: compose
+      # substitutes $VAR in every value at parse time, so "$MYSQL_ROOT_PASSWORD" would reach the shell
+      # already expanded to nothing and the ping would run with no password - mysqladmin reports that
+      # as a failure, so db never turns healthy and acore never starts. It is the same secret the
+      # container already carries in MYSQL_ROOT_PASSWORD, so nothing new is exposed.
+      test: ['CMD-SHELL', 'MYSQL_PWD="${DB_ROOT_PASS:-acore}" mysqladmin ping --protocol=TCP -h 127.0.0.1 -u root --silent']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    # No published port: only the acore service needs the database, and it reaches it as `db:3306`
+    # on the compose network. Publishing 3306 would expose the realm's database to the host and its
+    # LAN for no reason.
+
+  acore:
+    build:
+      # The repository root, because the Dockerfile copies docker/entrypoint.sh and
+      # scripts/write-confs.sh out of it.
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        # Empty means "the published artifact for this platform", and its sha256 is fetched from the
+        # .sha256 published beside it. Set both to build from another tarball.
+        ARTIFACT_URL: ${ARTIFACT_URL:-}
+        ARTIFACT_SHA256: ${ARTIFACT_SHA256:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3724:3724"   # authserver
+      - "8085:8085"   # worldserver
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      # The port the realm dials on `db`. mysqld inside that container listens on 3306, so this only
+      # changes meaning if the db service is changed to listen elsewhere - change both or neither.
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER:-acore}
+      DB_PASS: ${DB_PASS:-acore}
+      # Root is used once, by the entrypoint, to create the schemas and DB_USER.
+      DB_ROOT_PASS: ${DB_ROOT_PASS:-acore}
+      BOTS: ${BOTS:-50}
+      BIND_IP: ${BIND_IP:-0.0.0.0}
+      ACCOUNT: ${ACCOUNT:-admin}
+      ACCOUNT_PASS: ${ACCOUNT_PASS:-password}
+      # The v20.0 client data, the same archive and hash the Thor installer uses. It is downloaded
+      # into the data volume on first start, not built into the image.
+      DATA_URL: ${DATA_URL:-https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip}
+      DATA_SHA256: ${DATA_SHA256:-a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610}
+      # Seconds the first boot may spend importing the SQL sources and building the world before
+      # the entrypoint gives up.
+      BOOT_TIMEOUT: ${BOOT_TIMEOUT:-1800}
+      # The near-player window the realm uses on the Thor: a handful of the random bots stay in the
+      # real player's zone, visiting for 15-40 minutes and leaving for 4-10.
+      NEAR_BOTS: ${NEAR_BOTS:-20}
+      NEAR_MIN_DISTANCE: ${NEAR_MIN_DISTANCE:-100.0}
+      NEAR_VISIT_MIN: ${NEAR_VISIT_MIN:-900}
+      NEAR_VISIT_MAX: ${NEAR_VISIT_MAX:-2400}
+      NEAR_AWAY_MIN: ${NEAR_AWAY_MIN:-240}
+      NEAR_AWAY_MAX: ${NEAR_AWAY_MAX:-600}
+    volumes:
+      # The client data (~1.2 GiB) and everything the realm writes while it runs live in named
+      # volumes: they survive a rebuild of the image, and `down -v` is the one command that takes
+      # the whole realm away.
+      - data:/opt/acore/data
+      - logs:/opt/acore/logs
+      # First-boot marker and anything else that has to outlive the container but is not the realm.
+      - state:/opt/acore/.state
+
+volumes:
+  db:
+  data:
+  logs:
+  state:
