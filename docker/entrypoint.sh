@@ -49,6 +49,9 @@ MYSQL=/usr/bin/mysql
 MYSQLADMIN=/usr/bin/mysqladmin
 WS_LOG="$LOGS/worldserver.out"
 AS_LOG="$LOGS/authserver.out"
+# Written once the world has reported "World initialized", removed before every start: the
+# compose healthcheck for this service and the -Docker readiness probe both read it.
+READY="$STATE/world-ready"
 
 for required in DB_PASS DB_ROOT_PASS ACCOUNT_PASS; do
     [ -n "${!required}" ] || die "$required is empty: set it (docker/docker-compose.yml gives it a default, docker run does not)"
@@ -323,11 +326,32 @@ run_realm() {
     AS_PID=$!
     log "authserver started (pid $AS_PID)"
 
-    local rc
+    local rc waited offset
     while [ "$STOPPING" -eq 0 ]; do
+        # Readiness is judged on what THIS start writes. worldserver.out is appended to across
+        # restarts, so a "World initialized" line left by the previous run would make a world that
+        # is still importing - or one that crashes on start - look healthy.
+        offset=0
+        if [ -f "$WS_LOG" ]; then offset=$(wc -c < "$WS_LOG"); fi
+        rm -f "$READY"
         "$ROOT/bin/worldserver" -c "$CONF/worldserver.conf" >> "$WS_LOG" 2>&1 &
         WS_PID=$!
         log "worldserver started (pid $WS_PID)"
+        waited=0
+        while [ "$STOPPING" -eq 0 ] && [ "$waited" -lt "$BOOT_TIMEOUT" ]; do
+            if tail -c +"$((offset + 1))" "$WS_LOG" 2>/dev/null | grep -qi 'world initialized'; then
+                # The compose healthcheck and windows-install.ps1 -Docker read the marker and this
+                # line: the world's own output goes to the logs volume, never to the container's
+                # stdout, so neither of them can see "World initialized" directly.
+                : > "$READY"
+                log "the world is up (pid $WS_PID)"
+                break
+            fi
+            kill -0 "$WS_PID" 2>/dev/null || break
+            sleep 2 &
+            wait $! || true
+            waited=$((waited + 2))
+        done
         rc=0
         wait "$WS_PID" || rc=$?
         if [ "$STOPPING" -ne 0 ]; then break; fi

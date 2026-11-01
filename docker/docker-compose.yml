@@ -67,6 +67,17 @@ services:
       - "3724:3724"   # authserver
       - "8085:8085"   # worldserver
     restart: unless-stopped
+    healthcheck:
+      # The entrypoint touches .state/world-ready once worldserver has logged "World initialized",
+      # and removes it before every start, so this answers "is the realm serving right now" - a
+      # restart is unhealthy until the world is back up. The world's own output goes to the logs
+      # volume, never to this container's stdout, which is why the marker exists at all.
+      # start_period covers the first boot, where the SQL import and the world build run.
+      test: ["CMD-SHELL", "test -f /opt/acore/.state/world-ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 1800s
     environment:
       DB_HOST: db
       # The port the realm dials on `db`. mysqld inside that container listens on 3306, so this only

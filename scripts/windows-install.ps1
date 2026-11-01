@@ -104,8 +104,9 @@
     Default: the pinned wowgaming client-data 20.0 zip, whose sha256 is checked.
 
 .PARAMETER BootTimeout
-    Seconds the first boot may take to report "World initialized" (default 1800). Importing
-    the world database on a spinning disk takes the longest part of it.
+    Seconds the first boot may take to report that the world is up (default 1800): the
+    native path waits for "World initialized" in the log, the -Docker path for the
+    entrypoint's readiness line. Importing the world database takes the longest part of it.
 
 .PARAMETER MysqlUrl
     The portable MySQL zip. Default: MySQL 8.4.9 winx64 from the MySQL CDN archives. It is
@@ -3484,10 +3485,12 @@ function Test-DockerWorldReady {
     if ($status -eq 'exited' -or $status -eq 'dead') { return 'down' }
     $health = Get-DockerInspectField -Id $id -Format '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
     if ($health -eq 'healthy') { return 'ok' }
-    # The acore service has no healthcheck of its own: the entrypoint's first boot is the thing that
-    # takes the time, and its "World initialized" line is the only progress signal there is.
+    # The acore healthcheck is the entrypoint's world-ready marker, so it is the answer whenever it
+    # is there. An image built before that healthcheck has none, and the world's own "World
+    # initialized" line never reaches the container's stdout - it goes to the logs volume - so the
+    # entrypoint's readiness line is the signal to fall back to.
     $log = Invoke-Compose -Arguments @('logs', '--no-color', '--tail', '400', 'acore') -Capture -AllowFailure
-    if ($log -match 'World initialized') { return 'ok' }
+    if ($log -match 'the world is up|World initialized') { return 'ok' }
     return 'waiting'
 }
 
@@ -3583,7 +3586,7 @@ function Invoke-DockerSummary {
         return
     }
     if (-not $script:FirstBootOk) {
-        Warn ("the world has not reported 'World initialized' yet; watch docker compose -f {0} logs -f acore" -f (Get-DockerComposeFile))
+        Warn ("the entrypoint has not reported the world is up yet; watch docker compose -f {0} logs -f acore, or the world's own log at <root>\logs\Server.log" -f (Get-DockerComposeFile))
     }
     $bind = '0.0.0.0 in the container, published on 3724 and 8085'
     if ($script:LanIp) { $bind = ('{0} (realm 1 pinned there; inbound 3724/8085 opened)' -f $script:LanIp) }
@@ -3664,22 +3667,23 @@ function Invoke-DockerStatus {
         }
     }
 
-    # "Healthy recently" for the acore service is its own healthcheck when it has one and the first
-    # boot's marker line when it does not: the service ships without a healthcheck, so the log is
-    # what actually says the world came up.
+    # "Healthy recently" for the acore service is its own healthcheck - the entrypoint's world-ready
+    # marker, removed on every start - or, for an image built before it, the entrypoint's readiness
+    # line. The world's own "World initialized" goes to the logs volume, never to the container's
+    # stdout, so it is not what compose logs can show.
     $acoreId = ([string](Invoke-Compose -Arguments @('ps', '-q', 'acore') -Capture -AllowFailure)).Trim()
     if ($acoreId) {
         $health = Get-DockerInspectField -Id $acoreId -Format '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
         $log = Invoke-Compose -Arguments @('logs', '--no-color', '--tail', '400', 'acore') -Capture -AllowFailure
-        $worldUp = ($log -match 'World initialized')
+        $worldUp = ($log -match 'the world is up|World initialized')
         if ($health -eq 'healthy') {
             Ok 'acore: healthy'
         } elseif ($health -eq 'unhealthy') {
             Bad 'acore: unhealthy (docker compose logs acore)'
         } elseif ($worldUp) {
-            Ok 'acore: running, and the log reports "World initialized"'
+            Ok 'acore: running, and the entrypoint reports the world is up'
         } else {
-            Bad 'acore: running, but the log has not reported "World initialized" (the first boot may still be importing)'
+            Bad 'acore: running, but the entrypoint has not reported the world is up (the first boot may still be importing)'
         }
     }
 

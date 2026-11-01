@@ -142,12 +142,12 @@ The default install is `C:\acore`. Add `-Root D:\acore` to move it.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `-Check` | | Pre-install dry run: resolves the artifact URL, reports the planned root and the tool checks, writes nothing |
+| `-Check` | | Dry run: walks every phase the chosen mode would run and prints each command and file it would touch, without writing anything |
 | `-Status` | | Reports every component (binaries, configs and their keys, client data, SQL sources, database, schemas, account, bot count) and exits non-zero if something needs repair |
 | `-Repair` | | Runs the same checks and fixes what it can, then re-checks and reports what is left |
 | `-Uninstall` | | Stops everything and removes the install root and every path in the manifest |
 | `-KeepDb` | | With `-Uninstall`: dump each `acore_*` schema to `%USERPROFILE%\.win-wow\dumps\<stamp>-<schema>.sql` first |
-| `-Force` | | Proceed over an existing install instead of stopping |
+| `-Force` | | Replace an installed build: re-download and re-unpack over it. Without it an existing `<root>` is left alone and only the missing pieces are added |
 | `-Help` | | Print the usage text and exit |
 | `-Bots N` | `50` | Number of random bots (`Playerbots.MinRandomBots` and `MaxRandomBots`) |
 | `-DbUser` | `acore` | MySQL user created for the server, over `127.0.0.1` |
@@ -158,7 +158,7 @@ The default install is `C:\acore`. Add `-Root D:\acore` to move it.
 | `-Root DIR` | `C:\acore` | Install root |
 | `-ReleaseUrl URL` | the `server-build-win64` asset | Where to download the artifact zip |
 | `-DataZip URL\|PATH\|none` | the pinned client-data URL | Source of the client data (`none` skips the fetch) |
-| `-BootTimeout SECS` | `1800` | How long the first boot may take to log `ready...` |
+| `-BootTimeout SECS` | `1800` | How long the first boot may take to report the world is up: `World initialized` in the log on the native path, the entrypoint's readiness line under `-Docker` |
 | `-MysqlUrl URL` | the pinned portable MySQL zip | Where to download MySQL 8.4.9 winx64 |
 
 Install is the default action: passing no action flag installs, and `-Bots`, `-LanIp` and the rest
@@ -166,8 +166,12 @@ modify that install.
 
 ### What each phase does
 
-1. **Preflight.** Confirms the session is elevated, that the root is absent or that `-Force` was
-   given, and that the artifact URL resolves. `-Check` stops here.
+1. **Preflight.** Confirms the session is elevated (except for `-Status`, which only reads and warns
+   instead), that this is 64-bit Windows x64, that the drive has room (a warning below 6 GB), and
+   that the root is not `Program Files` or a path with a space unless `-Root` was passed on purpose.
+   It reports the PowerShell version it is running under.
+   `-Check` does not stop here: it runs every phase below in dry-run, printing the `would:` line for
+   each command and each file.
 2. **Artifact.** Downloads `acore-server-win64.zip` to a temporary directory, reads the sibling
    `.sha256` and fails on a mismatch, then unpacks the flat layout into the root.
 3. **MySQL.** Downloads the portable MySQL 8.4.9 winx64 zip, unpacks it to `<root>\mysql`,
@@ -236,8 +240,9 @@ The helpers are the Windows equivalents of the Thor's `wow-server.sh`:
 
 `-Status` reads back what `-Repair` can fix: both binaries and the DLLs they need, every conf file
 and the keys it expects (including the activating keys of each module and the bot count), the
-client-data trees and their version stamp, the SQL sources, whether `mysqld` is running and the four
-schemas hold tables, and whether the GM account exists. `-Repair` re-downloads a missing artifact,
+client-data trees, the four SQL source trees, whether `mysqld` is running and whether the three
+schemas it creates hold tables, and whether the GM account exists. `acore_playerbots` is created by
+the module's own updater on first boot, so `-Status` reports it only through the bot count. `-Repair` re-downloads a missing artifact,
 rewrites drifted conf keys, restores the bot count, starts a stopped database, re-populates an empty
 database, re-creates a missing account, and then re-checks. `-Uninstall` stops both servers and
 MySQL, then deletes the root and every manifest path; `-KeepDb` dumps the four schemas to
