@@ -8,6 +8,7 @@
 
 #include "Bag.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Guild.h"
@@ -744,9 +745,11 @@ void MercenaryMgr::Update(uint32 /*diff*/)
     if (_config.Enabled && getMSTime() >= _poolRefreshDue)
         RefreshPool();
 
-    // Dismissals run whether or not the module is enabled: a bot released before the config
-    // was switched off still has to leave.
+    // Dismissals and deaths run whether or not the module is enabled: a bot released before
+    // the config was switched off still has to leave, and a queued death logout is the last
+    // half of a death that has already happened.
     ProcessDismissals();
+    ProcessDeathLogouts();
 
     if (_pendingOwners.empty() && _pendingMercenaries.empty())
         return;
@@ -1288,7 +1291,7 @@ bool MercenaryMgr::Dismiss(Player* player, ObjectGuid bot, std::string& message)
         }
         else
         {
-            LogoutDismissed(botPlayer, it->second.Owner);
+            LogoutMercenary(botPlayer, it->second.Owner);
             LOG_INFO("module", "Mercenary: {} dismissed {}", player->GetName(), bot.ToString());
         }
     }
@@ -1341,7 +1344,7 @@ void MercenaryMgr::ReleaseMercenary(Player* bot)
     bot->RemovePlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
 }
 
-void MercenaryMgr::LogoutDismissed(Player* bot, ObjectGuid owner)
+void MercenaryMgr::LogoutMercenary(Player* bot, ObjectGuid owner)
 {
     if (!bot)
         return;
@@ -1391,7 +1394,75 @@ void MercenaryMgr::ProcessDismissals()
         LOG_INFO("module", "Mercenary: {}: dismissal grace over, leaving the server", bot->GetName());
         ObjectGuid const owner = it->second.Owner;
         it = _dismissals.erase(it);
-        LogoutDismissed(bot, owner);
+        LogoutMercenary(bot, owner);
+    }
+}
+
+void MercenaryMgr::HandleMercenaryDeath(Player* bot)
+{
+    if (!bot)
+        return;
+
+    auto it = _rows.find(bot->GetGUID().GetCounter());
+    if (it == _rows.end() || !it->second.Recruited)
+        return;
+
+    // The contract ends where the mercenary fell. The roster stops saying "in your party"
+    // before anything else touches the bot: every later hook reads that flag, so a row left
+    // recruited would have the login drain and the party restore bring the mercenary back.
+    it->second.Recruited = false;
+
+    // The build the row remembers is not on the character any more: mod-survivor strips a
+    // bot's gear into the remains container the same way it strips a survivor's. Clearing the
+    // flag is what makes the next hire rebuild it instead of finding a naked mercenary, and
+    // it is free for this owner, because the roster's paid level is what the fee is checked
+    // against and that has not moved.
+    it->second.Built = false;
+    Upsert(it->second);
+
+    // A death inside a dismissal grace is moot: the mercenary is leaving either way, and the
+    // death path is the one that leaves a container behind.
+    _dismissals.erase(bot->GetGUID().GetCounter());
+
+    // The same release a dismissal does - out of the group, no master, default strategies,
+    // no XP pin - so the tick before the logout cannot put it back on the owner's heels.
+    ReleaseMercenary(bot);
+
+    // Deferred: this runs inside Player::Kill, which still holds this Player, and so does
+    // every other OnPlayerJustDied hook. LogoutPlayerBot deletes the object, so the logout
+    // waits for the next update, after the whole death sequence has run.
+    _deathLogouts.push_back(bot->GetGUID());
+
+    if (Player* owner = ObjectAccessor::FindConnectedPlayer(it->second.Owner))
+        ChatHandler(owner->GetSession()).SendSysMessage(
+            Acore::StringFormat("%s has fallen and will not return. What it carried lies where it died.",
+                                bot->GetName()));
+
+    LOG_INFO("module", "Mercenary: {} died: contract ended, logout queued (owner {})", bot->GetName(),
+             it->second.Owner.ToString());
+}
+
+void MercenaryMgr::ProcessDeathLogouts()
+{
+    if (_deathLogouts.empty())
+        return;
+
+    // Swapped out first: LogoutPlayerBot runs the character's logout, which can reach back
+    // into this manager, and the queue must not be walked while that happens.
+    std::vector<ObjectGuid> pending;
+    pending.swap(_deathLogouts);
+
+    for (ObjectGuid const& guid : pending)
+    {
+        Player* bot = ObjectAccessor::FindConnectedPlayer(guid);
+        if (!bot)
+            continue;           // already gone: the death logged it out, or it was removed
+
+        ObjectGuid owner;
+        if (auto it = _rows.find(guid.GetCounter()); it != _rows.end())
+            owner = it->second.Owner;
+
+        LogoutMercenary(bot, owner);
     }
 }
 

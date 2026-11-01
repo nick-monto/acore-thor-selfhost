@@ -165,6 +165,14 @@ bot for `Mercenary.DismissGraceSeconds` (default 300, `0` logs it out on the spo
 at the end of it; re-recruiting inside that window cancels the timer. The roster row is marked released,
 so re-recruiting later restores it as it was, including gear, because it is the same character.
 
+**Death.** A mercenary's death ends the contract. The death hook says the `death` line and calls
+`MercenaryMgr::HandleMercenaryDeath`, which marks the row released and unbuilt, runs the same release a
+dismissal does (group, master, default strategies, XP pin), and queues the logout for the next world
+update - not for the hook itself, which runs inside `Player::Kill` while the rest of the death sequence
+and every other death hook still hold that `Player`. The mercenary therefore does not release its spirit
+and does not run back to its corpse; it leaves the server, and what it was wearing is in the remains
+container mod-survivor summons for a bot death, lootable by any Survivor-flagged character.
+
 **Gearing a mercenary.** No new code: a mercenary is a player character, so the trade window works. The bot
 accepts a trade from its master or from a group member and refuses everyone else ("I'm kind of busy
 now", `src/Ai/Base/Actions/TradeStatusAction.cpp:25-38`), and when the trade completes

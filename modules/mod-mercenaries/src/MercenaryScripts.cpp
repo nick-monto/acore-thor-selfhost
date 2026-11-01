@@ -110,12 +110,15 @@ public:
         if (!player || !sMercenaryMgr.IsMercenary(player->GetGUID()))
             return;
 
-        // The line is said here because this hook is the last moment the mercenary is still a body
-        // in the world: the dead engine's next pass releases the spirit and starts the run to the
-        // corpse ("auto release", then "find corpse", then "revive from corpse"), and a line said
-        // from a ghost arrives after the player has already read the death. Nothing logs the
-        // mercenary out on death - the dismissal timer is the only thing in this module that does.
+        // The line first, because this hook is the last moment the mercenary is still a body in
+        // the world and a line said from a ghost arrives after the player has already read the
+        // death. Then the contract ends with it: the mercenary leaves the server instead of
+        // releasing its spirit and running back to its corpse, and mod-survivor has already
+        // stripped its gear into the remains container that stands where it fell. The logout
+        // itself is queued by the manager - this hook runs inside Player::Kill, which still
+        // holds this Player, and so does every other death hook.
         sMercenaryPersonality.SayLine(player, sMercenaryMgr.OwnerOf(player->GetGUID()), "death");
+        sMercenaryMgr.HandleMercenaryDeath(player);
     }
 };
 

@@ -59,6 +59,13 @@ public:
     bool Recruit(Player* player, MercenaryOffer const& offer, std::string& message);
     bool Dismiss(Player* player, ObjectGuid bot, std::string& message);
 
+    // Called from the death hook, after the mercenary has spoken its death line. The contract
+    // ends where the mercenary fell: the row stops saying "in your party", the mercenary is
+    // released from the group and its master, and it leaves the server on the next update
+    // instead of releasing its spirit and running back to its corpse. What it was carrying is
+    // left where it died by mod-survivor's bot path, for whoever plays the ruleset.
+    void HandleMercenaryDeath(Player* bot);
+
     // Forwards one order to an online mercenary of this player. The verb is the whisper
     // vocabulary playerbots already implements - follow, flee - and is handed to the same
     // entry point a whisper reaches, so a click at the innkeeper and a typed whisper cannot
@@ -122,9 +129,11 @@ private:
     // group membership and the master both outlive a dismissal otherwise, and either one is
     // enough to keep it following the player it was dismissed from.
     void ReleaseMercenary(Player* bot);
-    // Logs a dismissed mercenary out for good. The owner's holder is the manager that knows
-    // it, because that is the one AddPlayerBot put it in.
-    void LogoutDismissed(Player* bot, ObjectGuid owner);
+    // Logs a mercenary out for good, whatever ended the contract. The owner's holder is the
+    // manager that knows it, because that is the one AddPlayerBot put it in.
+    void LogoutMercenary(Player* bot, ObjectGuid owner);
+    // Mercenaries that died this tick, logged out once every hook of the death has run.
+    void ProcessDeathLogouts();
     // The dismissal timer: a mercenary released from the party leaves the server once its
     // grace has run out.
     void ProcessDismissals();
@@ -165,6 +174,10 @@ private:
         uint32     Due = 0;   // getMSTime() when the bot leaves the server
     };
     std::unordered_map<uint32, MercenaryDismissal> _dismissals;
+    // Mercenaries killed this tick, in death order, waiting for the next update. Their
+    // Player is still held by the rest of Player::Kill and by every other death hook, and
+    // LogoutPlayerBot deletes it, so the logout cannot happen inside the hook.
+    std::vector<ObjectGuid> _deathLogouts;
 };
 
 #define sMercenaryMgr MercenaryMgr::instance()

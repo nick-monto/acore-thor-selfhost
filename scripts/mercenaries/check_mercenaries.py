@@ -75,13 +75,16 @@ def fail(message: str) -> None:
 
 
 def function_body(text: str, name: str) -> str:
-    """The body of `MercenaryMgr::<name>`, by brace matching, or "" when it is absent.
+    """The body of `<name>`, by brace matching, or "" when it is absent.
+
+    `name` is qualified when it has to be ("MercenaryMgr::Update"), bare when the file has one
+    candidate ("OnPlayerJustDied").
 
     Scoping a rule to one function is what keeps a deliberate call elsewhere from being read as
     the same mistake: the build path applies the trait after its last ResetStrategies, and the
     dismissal calls ResetStrategies itself.
     """
-    start = text.find(f"MercenaryMgr::{name}(")
+    start = text.find(f"{name}(")
     if start == -1:
         return ""
     open_brace = text.find("{", start)
@@ -479,7 +482,7 @@ def check_personality(keys: dict[str, str]) -> None:
     # is scoped to ApplyMercenary: the dismissal calls ResetStrategies on purpose, to take the
     # trait away again, and a whole-file "last occurrence" would read that as a build-path bug.
     mgr = read(SRC / "MercenaryMgr.cpp")
-    build = function_body(mgr, "ApplyMercenary")
+    build = function_body(mgr, "MercenaryMgr::ApplyMercenary")
     reset = build.rfind("ResetStrategies")
     applied = build.rfind("sMercenaryPersonality.Apply")
     if not build or reset == -1 or applied == -1:
@@ -491,7 +494,7 @@ def check_personality(keys: dict[str, str]) -> None:
 
     # A dismissed mercenary is the mirror image: it has to lose the group, the master and the
     # trait, or it goes on following and fighting like the companion it is no longer.
-    release = function_body(mgr, "ReleaseMercenary")
+    release = function_body(mgr, "MercenaryMgr::ReleaseMercenary")
     if not release:
         fail("dismissal: MercenaryMgr.cpp has no ReleaseMercenary; a dismissed mercenary would keep "
              "the group and the master it follows")
@@ -504,6 +507,62 @@ def check_personality(keys: dict[str, str]) -> None:
 
 
 VOICE_EVENTS = ("kill", "death", "dismiss")
+
+
+def check_death() -> None:
+    """A mercenary's death ends the contract, and the logout waits for the next update.
+
+    Three invariants. The line is said before the contract ends, because a line said from a
+    ghost arrives after the death has been read. The death hook never logs the bot out itself:
+    it runs inside Player::Kill, which still holds that Player, and so does every other
+    OnPlayerJustDied hook, while LogoutPlayerBot deletes the object. And the row loses both
+    flags - a mercenary left recruited comes back through the login drain or the party
+    restore, and one left built comes back naked, because its gear is in the remains
+    container mod-survivor made.
+    """
+    script = read(SRC / "MercenaryScripts.cpp")
+    hook = function_body(script, "OnPlayerJustDied")
+    if not hook:
+        fail("death: MercenaryScripts.cpp has no OnPlayerJustDied; a dead mercenary keeps following its owner")
+    else:
+        line = hook.find("SayLine")
+        kick = hook.find("HandleMercenaryDeath")
+        if line == -1:
+            fail("death: the hook does not say the death line")
+        elif kick == -1:
+            fail("death: the hook does not end the contract; a dead mercenary stays on the server")
+        elif line > kick:
+            fail("death: the line is said after the contract ends; it would arrive from a ghost")
+
+    mgr = read(SRC / "MercenaryMgr.cpp")
+    handler = function_body(mgr, "MercenaryMgr::HandleMercenaryDeath")
+    if not handler:
+        fail("death: MercenaryMgr.cpp has no MercenaryMgr::HandleMercenaryDeath")
+    else:
+        if "LogoutMercenary(" in handler:
+            fail("death: HandleMercenaryDeath logs the bot out inline; it runs inside Player::Kill, "
+                 "which still holds that Player and every other death hook, and LogoutPlayerBot "
+                 "deletes it")
+        if "_deathLogouts" not in handler:
+            fail("death: HandleMercenaryDeath does not queue the logout, so nothing logs the "
+                 "mercenary out")
+        if "Recruited = false" not in handler:
+            fail("death: the death path leaves the row recruited; the login drain or the party "
+                 "restore brings the mercenary back")
+        if "Built = false" not in handler:
+            fail("death: the death path leaves the row built; the next hire finds a mercenary "
+                 "whose gear is in the container it died in")
+
+    drain = function_body(mgr, "MercenaryMgr::ProcessDeathLogouts")
+    if not drain:
+        fail("death: MercenaryMgr.cpp has no MercenaryMgr::ProcessDeathLogouts")
+    elif "LogoutMercenary(" not in drain:
+        fail("death: ProcessDeathLogouts never logs anything out")
+
+    update = function_body(mgr, "MercenaryMgr::Update")
+    if "ProcessDeathLogouts()" not in update:
+        fail("death: Update never drains the queued death logouts; a dead mercenary stays on the "
+             "server")
 
 
 def check_voice_lines(keys: dict[str, str]) -> None:
@@ -894,6 +953,7 @@ def main() -> int:
     check_personality(keys)
     check_voice_lines(keys)
     check_roster()
+    check_death()
     check_loader()
     check_wiring()
     check_core_hooks()

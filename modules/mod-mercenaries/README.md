@@ -262,6 +262,22 @@ on the spot) and leaves the server at the end of it, so the dismissal reads as w
 despawn; re-recruiting it inside that window cancels the timer. The roster row is kept, so a mercenary
 that comes back is the same character, with its gear, its spec and the affinity it earned.
 
+**What a death does.** A mercenary dies where it stands, says its death line, and the contract ends
+with it. `MercenaryMgr::HandleMercenaryDeath` marks the roster row released and unbuilt, releases the
+mercenary from the group, its master and the mercenary AI exactly as a dismissal does, and queues the
+logout for the next world update. The logout is deferred rather than done in the hook because
+`OnPlayerJustDied` runs inside `Player::Kill`: the rest of the death sequence and every other death
+hook still hold that `Player`, and `LogoutPlayerBot` deletes the object.
+
+The mercenary leaves nothing behind by itself - mod-survivor strips a bot's gear into the remains
+container it summons at the death spot, the same container a Survivor's own death leaves, so the gear
+of a fallen mercenary is there for whoever plays the ruleset to find (any Survivor-flagged character may
+open any container, whoever the death was). That is why the row loses its built flag too: the gear it
+died in is not on the character any more, so the next hire rebuilds it instead of handing the player a
+naked companion. The roster keeps the face, its spec, its temperament and its affinity, and the paid
+level is unchanged, so calling the same mercenary back costs nothing. With `Survivor.ApplyToBots` off
+there is no container, and the mercenary is simply gone with its gear.
+
 The action code carries both the mercenary and the verb, `1300 + party_row * 10 + verb`, because the page
 is one mercenary rather than a position on a list; `Mercenary.MaxMercenaries` is clamped to four, so the whole range
 is `1300..1339`. The two rows that spend money (retrain and restock) and the one that ends the
