@@ -1433,10 +1433,12 @@ void MercenaryMgr::HandleMercenaryDeath(Player* bot)
     // waits for the next update, after the whole death sequence has run.
     _deathLogouts.push_back(bot->GetGUID());
 
+    // Nothing about the gear is claimed here: whether there is a container to walk back to is
+    // mod-survivor's answer (Survivor.ApplyToBots and Survivor.BotDropContainer), and this hook
+    // may run before or after that module's own death hook.
     if (Player* owner = ObjectAccessor::FindConnectedPlayer(it->second.Owner))
         ChatHandler(owner->GetSession()).SendSysMessage(
-            Acore::StringFormat("%s has fallen and will not return. What it carried lies where it died.",
-                                bot->GetName()));
+            Acore::StringFormat("{} has fallen and will not return.", bot->GetName()));
 
     LOG_INFO("module", "Mercenary: {} died: contract ended, logout queued (owner {})", bot->GetName(),
              it->second.Owner.ToString());
