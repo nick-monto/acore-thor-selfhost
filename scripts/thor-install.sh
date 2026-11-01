@@ -101,52 +101,6 @@ NEAR_VISIT_MIN=900
 NEAR_VISIT_MAX=2400
 NEAR_AWAY_MIN=240
 NEAR_AWAY_MAX=600
-# mod-survivor's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. The module
-# reads all eleven once at load, so a key that is absent or outside its range is silently replaced
-# by the module's own fallback; write_configs() and run_checks() restore them from this one list.
-SURVIVOR_CONF_DEFAULTS=(
-    "Survivor.Enable=1"
-    "Survivor.MinLevelToFlag=10"
-    "Survivor.AnnounceDeaths=1"
-    "Survivor.DropEquipped=1"
-    "Survivor.DropBags=1"
-    "Survivor.ContainerLifetimeDays=7"
-    "Survivor.MarkOnMap=1"
-    "Survivor.ContainerEntry=5000000"
-    "Survivor.ApplyToBots=1"
-    "Survivor.BotRegenOnDeath=1"
-    "Survivor.BotDropContainer=1"
-)
-# mod-mercenaries's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. Same contract as
-# the survivor list: a key outside its range is silently replaced by the module's own fallback, so
-# write_configs() restores it from here.
-MERCENARY_CONF_DEFAULTS=(
-    "Mercenary.Enable=1"
-    "Mercenary.MaxMercenaries=2"
-    "Mercenary.LevelWindow=2"
-    "Mercenary.GainXP=0"
-    "Mercenary.DismissGraceSeconds=300"
-    "Mercenary.Voice=Talkative: +emote | Quiet: -emote"
-    "Mercenary.VoiceKillChancePercent=10"
-    "Mercenary.VoiceCooldownSeconds=120"
-    "Mercenary.HireFeePercent=100"
-    "Mercenary.HireFeeHeldPercent=100"
-    "Mercenary.GearFloorPercent=85"
-    "Mercenary.GearCapPercent=150"
-    "Mercenary.ResupplyFeePercent=100"
-    "Mercenary.AffinityEnabled=1"
-    "Mercenary.AffinityKillPoints=10"
-    "Mercenary.AffinityQuestPoints=25"
-    "Mercenary.AffinityStep=100"
-    "Mercenary.AffinityGearPercent=5"
-    "Mercenary.AffinityMaxSteps=2"
-    "Mercenary.OfferedPerPage=12"
-    "Mercenary.FeaturedMin=10"
-    "Mercenary.FeaturedMax=15"
-    "Mercenary.PoolRefreshMinMinutes=40"
-    "Mercenary.PoolRefreshMaxMinutes=60"
-    "Mercenary.Debug=0"
-)
 DB_USER="acore"
 DB_PASS=""
 ACCOUNT="admin"
@@ -187,6 +141,36 @@ ok()   { printf 'ok    %s\n' "$*"; }
 bad()  { printf 'FAIL  %s\n' "$*"; PROBLEMS=$((PROBLEMS + 1)); }
 
 usage() { awk 'NR > 2 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$SCRIPT_PATH"; }
+
+# ---------------------------------------------------------------- conf-writing library
+
+# scripts/write-confs.sh holds every conf key this realm writes, and it is what the Docker entrypoint
+# uses too, so the two cannot drift apart. It sits beside this script in the repository. A release
+# installer is a single-file copy and does not carry it; that copy is not a fallback, so nothing here
+# re-implements the confs. --check returns before any conf is written and --status reports what it
+# can without the library (one warning), but an install needs it: fetching the release tarball
+# instead of the repository does not give you the newer confs.
+CONF_LIB="$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/write-confs.sh"
+CONF_LIB_LOADED=0
+CONF_LIB_WARNED=0
+
+load_conf_lib() {   # load_conf_lib [soft] - source it; soft=1 warns and returns 1 instead of dying
+    if [ "$CONF_LIB_LOADED" = 1 ]; then return 0; fi
+    if [ -f "$CONF_LIB" ]; then
+        # shellcheck source=write-confs.sh
+        . "$CONF_LIB" || die "could not source $CONF_LIB"
+        CONF_LIB_LOADED=1
+        return 0
+    fi
+    if [ "${1:-0}" = 1 ]; then
+        if [ "$CONF_LIB_WARNED" = 0 ]; then
+            CONF_LIB_WARNED=1
+            warn "no $CONF_LIB - the confs this install writes live there and cannot be checked or rewritten without it"
+        fi
+        return 1
+    fi
+    die "missing $CONF_LIB: this copy of the installer is incomplete. Fetch the repository copy (scripts/thor-install.sh together with scripts/write-confs.sh) and run that - the release archive is not enough."
+}
 
 # ---------------------------------------------------------------- args
 
@@ -306,158 +290,6 @@ conf_get() {   # conf_get FILE KEY - print the live value (last uncommented defi
 }
 
 conf_get_unquoted() { conf_get "$1" "$2" | tr -d '"'; }
-
-mercenary_value_ok() {   # mercenary_value_ok KEY VALUE - true when VALUE is one mod-mercenaries accepts
-    # Mercenary.Enable and Mercenary.Debug are 0|1, MaxMercenaries 0-4 (the gossip page has room for four party
-    # rows), LevelWindow 0-10, OfferedPerPage 1-14, the featured count 1-50 each, the pool
-    # refresh 1-1440 minutes each, the two fee percentages 0-10000 and 0-1000, and the gear
-    # band 25-100 for the floor and 100-300 for the cap.
-    local key="$1" val="$2"
-    # A voice pool is a profile list, not a number - labels, strategies and `|` separators -
-    # so it is settled here, before the numeric guard below can see it. A pool is any
-    # non-empty value carrying a `:`; the module skips the profiles it cannot parse.
-    if [ "$key" = Mercenary.Voice ]; then
-        case "$val" in
-            ?*:*) return 0 ;;
-            *) return 1 ;;
-        esac
-    fi
-    case "$val" in ''|*[!0-9]*) return 1 ;; esac
-    case "$key" in
-        Mercenary.Enable|Mercenary.Debug)
-            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Mercenary.MaxMercenaries)
-            [ "$val" -ge 0 ] && [ "$val" -le 4 ] ;;
-        Mercenary.LevelWindow)
-            [ "$val" -ge 0 ] && [ "$val" -le 10 ] ;;
-        Mercenary.GainXP)
-            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Mercenary.OfferedPerPage)
-            [ "$val" -ge 1 ] && [ "$val" -le 14 ] ;;
-        Mercenary.HireFeePercent)
-            [ "$val" -ge 0 ] && [ "$val" -le 10000 ] ;;
-        Mercenary.HireFeeHeldPercent)
-            [ "$val" -ge 0 ] && [ "$val" -le 1000 ] ;;
-        Mercenary.GearFloorPercent)
-            [ "$val" -ge 25 ] && [ "$val" -le 100 ] ;;
-        Mercenary.GearCapPercent)
-            [ "$val" -ge 100 ] && [ "$val" -le 300 ] ;;
-        Mercenary.ResupplyFeePercent)
-            [ "$val" -ge 0 ] && [ "$val" -le 10000 ] ;;
-        Mercenary.VoiceKillChancePercent)
-            [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
-        Mercenary.VoiceCooldownSeconds)
-            [ "$val" -ge 0 ] && [ "$val" -le 3600 ] ;;
-        Mercenary.AffinityEnabled)
-            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Mercenary.AffinityKillPoints|Mercenary.AffinityQuestPoints)
-            [ "$val" -ge 0 ] && [ "$val" -le 1000 ] ;;
-        Mercenary.AffinityStep)
-            [ "$val" -ge 1 ] && [ "$val" -le 100000 ] ;;
-        Mercenary.AffinityGearPercent)
-            [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
-        Mercenary.AffinityMaxSteps)
-            [ "$val" -ge 0 ] && [ "$val" -le 20 ] ;;
-        Mercenary.FeaturedMin|Mercenary.FeaturedMax)
-            [ "$val" -ge 1 ] && [ "$val" -le 50 ] ;;
-        Mercenary.PoolRefreshMinMinutes|Mercenary.PoolRefreshMaxMinutes)
-            [ "$val" -ge 1 ] && [ "$val" -le 1440 ] ;;
-        *)
-            return 1 ;;
-    esac
-}
-
-mercenary_append_missing_conf() {   # mercenary_append_missing_conf LIVE DIST - append the shipped keys LIVE lacks
-    # The pool keys are lists, not scalars, so they stay out of MERCENARY_CONF_DEFAULTS: the checker
-    # asserts that array and the conf agree key for key, and set_conf would overwrite a pool the
-    # admin had trimmed. But conf_pair() only copies the .dist when the live conf is missing, so an
-    # install made before the pools shipped keeps a conf with no Mercenary.Temperament.* block at all,
-    # and MercenaryPersonality::Load then has nothing to roll from. Appending the missing keys is the
-    # only repair that leaves every existing value alone. The module looks keys up by name, so the
-    # additions can go at the end of a hand-edited file without disturbing it.
-    local live="$1" dist="$2" line key added=0 pending
-    [ -f "$live" ] && [ -f "$dist" ] || return 0
-    pending="$(mktemp)"
-    while IFS= read -r line || [ -n "$line" ]; do
-        key="${line%%=*}"
-        key="${key#"${key%%[![:space:]]*}"}"        # trim leading whitespace
-        key="${key%"${key##*[![:space:]]}"}"        # and trailing
-        case "$key" in
-            Mercenary.Voice) ;;
-            Mercenary.VoiceLine.*) ;;
-            Mercenary.Temperament.[0-9]*.[0-9]*) ;;
-            *) continue ;;                          # comments, blanks and every scalar key
-        esac
-        # An empty value counts as absent here, unlike for a scalar: a pool is never legitimately
-        # empty (the module drops an empty one), and conf_get() prints nothing for it.
-        [ -z "$(conf_get "$live" "$key")" ] || continue
-        printf '%s\n' "$line" >> "$pending"
-        added=$((added + 1))
-    done < "$dist"
-    if [ "$added" -gt 0 ]; then
-        {
-            printf '\n# Pool keys this file did not have: appended by the installer, values as shipped.\n'
-            cat "$pending"
-        } >> "$live"
-        ok "mod-mercenaries.conf: appended $added shipped pool keys (voice/temperament/blacklist/variant)"
-    fi
-    rm -f "$pending"
-}
-
-# conf_defaults FILE CHECK LABEL DEFAULT... - hold every scalar key this script knows to its shipped
-# value, and keep the repair honest about why it was needed.
-#
-# A key the file does not have at all is not a bad value: the live conf was written by an older
-# install and conf_pair() deliberately never overwrites one, so an upgrade leaves the new keys
-# absent. They are appended with the values the shipped .dist carries - which is what the module
-# would have used anyway - and reported once, as a count, because ten "restoring the shipped
-# default" lines for an upgrade that worked read like ten failures.
-#
-# A key that is present and out of range is a different matter and stays a warning per key: the
-# module silently replaces an unusable value with its own default, so the file and the running
-# server disagree until the file is fixed.
-conf_defaults() {
-    local file=$1 check=$2 label=$3; shift 3
-    local default key val added=0 fixed=0
-    for default in "$@"; do
-        key="${default%%=*}"
-        val="$(conf_get "$file" "$key")"
-        if [ -z "$val" ]; then
-            set_conf "$file" "$key" "${default#*=}"
-            added=$((added + 1))
-        elif ! "$check" "$key" "$val"; then
-            warn "$label: $key is '$val', restoring the shipped default ${default#*=}"
-            set_conf "$file" "$key" "${default#*=}"
-            fixed=$((fixed + 1))
-        fi
-    done
-    if [ "$added" -gt 0 ]; then
-        ok "$label: appended $added key(s) the live file did not have yet, values as shipped"
-    fi
-    if [ "$fixed" -gt 0 ]; then
-        ok "$label: restored $fixed drifted key(s) to their shipped defaults"
-    fi
-    return 0
-}
-
-survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one the module accepts
-    # The ranges are the ones mod-survivor's own conf comments state: the 0|1 switches, a minimum
-    # flag level inside the level cap, a container lifetime in days, and a positive template entry.
-    local key="$1" val="$2"
-    case "$val" in ''|*[!0-9]*) return 1 ;; esac
-    case "$key" in
-        Survivor.Enable|Survivor.AnnounceDeaths|Survivor.DropEquipped|Survivor.DropBags|\
-        Survivor.MarkOnMap|Survivor.ApplyToBots|Survivor.BotRegenOnDeath|Survivor.BotDropContainer)
-            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
-        Survivor.MinLevelToFlag)
-            [ "$val" -ge 1 ] && [ "$val" -le 80 ] ;;
-        Survivor.ContainerLifetimeDays)
-            [ "$val" -ge 1 ] && [ "$val" -le 365 ] ;;
-        Survivor.ContainerEntry)
-            [ "$val" -gt 0 ] ;;
-        *) return 1 ;;
-    esac
-}
 
 # ---------------------------------------------------------------- state and manifest
 
@@ -730,13 +562,23 @@ world_console() {   # world_console TIMEOUT "console command" ...
     local timeout="$1"
     shift
     local fifo="$ROOT/.console.fifo" wslog="$ROOT/logs/worldserver.out" aslog="$ROOT/logs/authserver.out"
+    # The conf this installer writes turns the world console off (Console.Enable = 0), and
+    # Main.cpp:402-408 starts the CLI thread - the only thing that reads stdin - only when that key
+    # is 1. Without it the commands written to the fifo below are never read, `server shutdown 1`
+    # never arrives, and the first boot "finishes" only when its timeout runs out. So the console is
+    # turned on in a COPY of the live conf, used for this one run: -c overrides the app conf and
+    # nothing else, and the live conf keeps its 0, which is what keeps a later start from spinning
+    # on EOF. docs/WINDOWS-HOST.md and docker/entrypoint.sh do the same thing the same way.
+    local console_conf="$ROOT/.console.conf"
+    cp "$CONF_DIR/worldserver.conf" "$console_conf"
+    set_conf "$console_conf" Console.Enable 1
     rm -f "$fifo"
     mkfifo "$fifo"
     : > "$wslog"
     : > "$aslog"
     "$BIN_DIR/authserver" -c "$CONF_DIR/authserver.conf" > "$aslog" 2>&1 &
     local as_pid=$!
-    "$BIN_DIR/worldserver" -c "$CONF_DIR/worldserver.conf" < "$fifo" > "$wslog" 2>&1 &
+    "$BIN_DIR/worldserver" -c "$console_conf" < "$fifo" > "$wslog" 2>&1 &
     local ws_pid=$!
     exec 9<> "$fifo"         # read-write, so this cannot block when the server failed to start
                              # (opening for write alone waits for a reader that a dead process never opens)
@@ -761,7 +603,7 @@ world_console() {   # world_console TIMEOUT "console command" ...
         if [ -s "$aslog" ]; then warn "last lines of $aslog:"; tail -n 20 "$aslog" >&2 || true; fi
         exec 9>&-
         kill "$ws_pid" "$as_pid" 2>/dev/null || true
-        rm -f "$fifo"
+        rm -f "$fifo" "$console_conf"
         return 1
     fi
     log "world is up"
@@ -780,7 +622,7 @@ world_console() {   # world_console TIMEOUT "console command" ...
     kill "$ws_pid" "$as_pid" 2>/dev/null || true
     wait "$ws_pid" 2>/dev/null || true
     wait "$as_pid" 2>/dev/null || true
-    rm -f "$fifo"
+    rm -f "$fifo" "$console_conf"
     return 0
 }
 
@@ -1266,8 +1108,13 @@ host_install() {
 
     note mkdir -p "$(dirname "$ROOTFS$inner")"
     note cp "$SCRIPT_PATH" "$ROOTFS$inner"
+    # The inside stage writes the confs out of scripts/write-confs.sh, so that copy travels with the
+    # script: a release tarball that holds only thor-install.sh cannot configure the realm.
+    if [ "$CHECK" != 1 ]; then load_conf_lib; fi
+    note cp "$CONF_LIB" "$(dirname "$ROOTFS$inner")/write-confs.sh"
     if [ "$CHECK" != 1 ]; then
         [ -f "$ROOTFS$inner" ] || die "could not put the script into the rootfs: $ROOTFS$inner"
+        [ -f "$ROOTFS$(dirname "$inner")/write-confs.sh" ] || die "could not put $CONF_LIB into the rootfs: $ROOTFS$(dirname "$inner")/write-confs.sh"
         # The guest sees the copy only if this is the filesystem proot-distro boots. Asking from
         # inside costs one proot start and turns a bare "No such file or directory" from the guest's
         # bash into a statement of what is actually wrong.
@@ -1280,6 +1127,7 @@ host_install() {
     manifest_add "$HOME/start-wow-server.sh"
     manifest_add "$HOME/stop-wow-server.sh"
     manifest_add "$ROOTFS$inner"
+    manifest_add "$ROOTFS$(dirname "$inner")/write-confs.sh"
     write_host_wrappers
 
     state_save
@@ -1335,6 +1183,11 @@ host_repair() {
     mkdir -p "$(dirname "$ROOTFS$INSIDE_SCRIPT_COPY")"
     cp "$SCRIPT_PATH" "$ROOTFS$INSIDE_SCRIPT_COPY"
     manifest_add "$ROOTFS$INSIDE_SCRIPT_COPY"
+    # The conf-writing library travels with the script; without it the inside stage cannot write or
+    # check a single conf.
+    load_conf_lib
+    cp "$CONF_LIB" "$(dirname "$ROOTFS$INSIDE_SCRIPT_COPY")/write-confs.sh"
+    manifest_add "$(dirname "$ROOTFS$INSIDE_SCRIPT_COPY")/write-confs.sh"
     guest_has_path "$INSIDE_SCRIPT_COPY" || die_path_invisible "$INSIDE_SCRIPT_COPY"
     local w
     for w in "$HOME/start-wow-server.sh" "$HOME/stop-wow-server.sh"; do
@@ -1786,16 +1639,6 @@ SQL
     log "databases: $(printf '%s' "$schemas" | tr '\n' ' ')"
 }
 
-conf_pair() {   # print the live config file, creating it from NAME.conf.dist once
-    local dist="$CONF_DIR/$1.conf.dist" live="$CONF_DIR/$1.conf"
-    if [ ! -f "$live" ]; then
-        [ -f "$dist" ] || die "missing $dist (is the artifact complete?)"
-        cp "$dist" "$live"
-        printf 'created %s\n' "$live" >&2        # never on stdout: callers capture the path
-    fi
-    printf '%s' "$live"
-}
-
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
@@ -1803,176 +1646,30 @@ write_configs() {
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
+    load_conf_lib
     local bind_ip="$LAN_IP"
     if [ -z "$bind_ip" ]; then bind_ip="127.0.0.1"; fi
-    local mysql_bin
-    mysql_bin="$(command -v mysql)"
-
-    local ws as pb cg hc ei sv pw
-    ws="$(conf_pair worldserver)"
-    as="$(conf_pair authserver)"
-    set_conf "$ws" DataDir                "\"$DATA_DIR\""
-    set_conf "$ws" LogsDir                "\"$ROOT/logs\""
-    set_conf "$ws" SourceDirectory        "\"$SRC_DIR\""
-    set_conf "$ws" MySQLExecutable        "\"$mysql_bin\""
-    set_conf "$ws" BindIP                 "\"$bind_ip\""
-    set_conf "$ws" WorldServerPort        8085
-    # The realm is started headless by run.sh; the CLI prompt is readline, and at end of input it
-    # reprints "AC>" in a loop. GM commands go in-game. Set 1 and start under tmux to get it back.
-    set_conf "$ws" Console.Enable         0
-    set_conf "$ws" Updates.EnableDatabases 7
-    set_conf "$ws" Updates.AutoSetup      1
-    set_conf "$ws" PlayerLimit            1000
-    # Travel is dead time on a handheld. 2 = instant flight, but each flight master keeps a toggle so
-    # the player can still fly normally; 1 = every taxi node known from login; 50.0 = the top of the
-    # core's flight-speed clamp (values above 50 are rejected and fall back to the 32 default).
-    set_conf "$ws" InstantFlightPaths     2
-    set_conf "$ws" AllFlightPaths         1
-    set_conf "$ws" TaxiFlightSpeed        50.0
-    set_conf "$ws" LoginDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_auth\""
-    set_conf "$ws" WorldDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_world\""
-    set_conf "$ws" CharacterDatabaseInfo  "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_characters\""
-    log "worldserver.conf: InstantFlightPaths=$(conf_get "$ws" InstantFlightPaths) AllFlightPaths=$(conf_get "$ws" AllFlightPaths) TaxiFlightSpeed=$(conf_get "$ws" TaxiFlightSpeed)"
-    set_conf "$as" LogsDir                "\"$ROOT/logs\""
-    set_conf "$as" SourceDirectory        "\"$SRC_DIR\""
-    set_conf "$as" MySQLExecutable        "\"$mysql_bin\""
-    set_conf "$as" BindIP                 "\"$bind_ip\""
-    set_conf "$as" RealmServerPort        3724
-    set_conf "$as" Updates.EnableDatabases 1
-    set_conf "$as" Updates.AutoSetup      1
-    set_conf "$as" LoginDatabaseInfo      "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_auth\""
-
     mkdir -p "$ROOT/logs"
-    if [ -f "$CONF_DIR/modules/playerbots.conf.dist" ] || [ -f "$CONF_DIR/modules/playerbots.conf" ]; then
-        pb="$(conf_pair modules/playerbots)"
-        set_conf "$pb" Playerbots.Enabled              1
-        set_conf "$pb" Playerbots.RandomBotAutologin    1
-        set_conf "$pb" Playerbots.MinRandomBots         "$BOTS"
-        set_conf "$pb" Playerbots.MaxRandomBots         "$BOTS"
-        # Solo-friendly default: keep the bot population level-appropriate for, and inside the zone
-        # of, real players instead of spreading it over the whole world. The keys are ignored by an
-        # unpatched playerbots build, so an older artifact still starts normally.
-        set_conf "$pb" Playerbots.RandomBotNearPlayers              1
-        set_conf "$pb" Playerbots.RandomBotNearPlayersLevelRange    3
-        set_conf "$pb" Playerbots.RandomBotNearPlayersFollowInterval 120
-        set_conf "$pb" Playerbots.RandomBotNearPlayersMinDistance   "$NEAR_MIN_DISTANCE"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersSameFaction   1
-        set_conf "$pb" Playerbots.RandomBotNearPlayersMaxPerPlayer  "$NEAR_BOTS"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneTraffic   1
-        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneVisitMinTime "$NEAR_VISIT_MIN"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneVisitMaxTime "$NEAR_VISIT_MAX"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneAwayMinTime  "$NEAR_AWAY_MIN"
-        set_conf "$pb" Playerbots.RandomBotNearPlayersZoneAwayMaxTime  "$NEAR_AWAY_MAX"
-        # The twin-ring keys are gone: bots stay in the player's zone instead of being placed in
-        # rings around the player. Left in an older config they would look like they still do
-        # something, so they are dropped here.
-        sed -i -E '/^[[:space:]]*Playerbots\.RandomBotNearPlayers(Radius|InnerCount|OuterRadius|ZoneCount)[[:space:]]*=/d' "$pb"
-        # Mercenary system (mod-mercenaries). The innkeeper picker is the only doorway to a pool mercenary, so
-        # addclass stays a GM command; the pool is widened to fifteen accounts (about 150
-        # characters across both teams and every class) because the picker shows a random 10-15
-        # of them per visit, so a small pool would repeat; and mercenaries pass on every roll and leave
-        # free-for-all corpses alone, so the loot-bag economy stays the player's.
-        set_conf "$pb" Playerbots.AddClassCommand         0
-        set_conf "$pb" Playerbots.AddClassAccountPoolSize 15
-        set_conf "$pb" Playerbots.LootNeedRollLevel       0
-        set_conf "$pb" Playerbots.LootGreedRollLevel      0
-        set_conf "$pb" Playerbots.FreeMethodLoot          0
-        set_conf "$pb" Playerbots.KeepAltsInGroup         1
-        set_conf "$pb" Playerbots.SummonWhenGroup         1
-        set_conf "$pb" PlayerbotsDatabaseInfo           "\"127.0.0.1;3306;$DB_USER;$DB_PASS;acore_playerbots\""
-        set_conf "$pb" Playerbots.Updates.EnableDatabases 1
-        log "playerbots.conf: enabled=$(conf_get "$pb" Playerbots.Enabled) bots=$(conf_get "$pb" Playerbots.MaxRandomBots)"
-    else
-        warn "no $CONF_DIR/modules/playerbots.conf.dist - the artifact was built without the module, bots will not load"
-    fi
-    if [ -f "$CONF_DIR/modules/mod-creature-gear.conf.dist" ] || [ -f "$CONF_DIR/modules/mod-creature-gear.conf" ]; then
-        cg="$(conf_pair modules/mod-creature-gear)"
-        # The shipped .dist already holds the intended values, so nothing is rewritten here unless
-        # a key drifted; the four keys below are what makes all three halves of the module active.
-        local cg_key cg_val
-        for cg_key in CreatureGear.Enable CreatureGear.Drop.Enable \
-                      CreatureGear.Appearance.Enable CreatureGear.Weapons.RerollOnRespawn; do
-            cg_val="$(conf_get "$cg" "$cg_key")"
-            if [ "$cg_val" != "1" ]; then
-                warn "mod-creature-gear.conf: $cg_key is '$cg_val', restoring the shipped default 1"
-                set_conf "$cg" "$cg_key" 1
-            fi
-        done
-        log "mod-creature-gear.conf: Enable=$(conf_get "$cg" CreatureGear.Enable) Drop.Enable=$(conf_get "$cg" CreatureGear.Drop.Enable) Appearance.Enable=$(conf_get "$cg" CreatureGear.Appearance.Enable) Weapons.RerollOnRespawn=$(conf_get "$cg" CreatureGear.Weapons.RerollOnRespawn)"
-    else
-        warn "no $CONF_DIR/modules/mod-creature-gear.conf.dist - the artifact was built without the module, creatures keep their stock gear"
-    fi
-    if [ -f "$CONF_DIR/modules/mod_e_interact.conf.dist" ] || [ -f "$CONF_DIR/modules/mod_e_interact.conf" ]; then
-        ei="$(conf_pair modules/mod_e_interact)"
-        # One key for the whole interact loop (loot, gather, talk, chests and nodes). Every option
-        # defaults to on in the shipped .dist; a drifted key is put back, since a silent 0 here
-        # looks exactly like a broken key in game.
-        local ei_key ei_val
-        for ei_key in EInteract.Enable EInteract.Loot EInteract.Gather EInteract.Talk EInteract.Use; do
-            ei_val="$(conf_get "$ei" "$ei_key")"
-            if [ "$ei_val" != "1" ]; then
-                warn "mod_e_interact.conf: $ei_key is '$ei_val', restoring the shipped default 1"
-                set_conf "$ei" "$ei_key" 1
-            fi
-        done
-        log "mod_e_interact.conf: Enable=$(conf_get "$ei" EInteract.Enable) Loot=$(conf_get "$ei" EInteract.Loot) Gather=$(conf_get "$ei" EInteract.Gather) Talk=$(conf_get "$ei" EInteract.Talk) Use=$(conf_get "$ei" EInteract.Use)"
-    else
-        warn "no $CONF_DIR/modules/mod_e_interact.conf.dist - the artifact was built without the module, the interact key will not work"
-    fi
-    if [ -f "$CONF_DIR/modules/mod_hardcore.conf.dist" ] || [ -f "$CONF_DIR/modules/mod_hardcore.conf" ]; then
-        hc="$(conf_pair modules/mod_hardcore)"
-        local hc_policy
-        hc_policy="$(conf_get "$hc" Hardcore.DeathPolicy)"
-        case "$hc_policy" in
-            ghost|archive|delete) ;;
-            *)
-                # The module itself falls back to ghost; make the file say so too.
-                if [ -n "$hc_policy" ]; then
-                    warn "mod_hardcore.conf: unknown DeathPolicy '$hc_policy', restoring the shipped default ghost"
-                fi
-                set_conf "$hc" Hardcore.DeathPolicy ghost
-                hc_policy=ghost
-                ;;
-        esac
-        log "mod_hardcore.conf: Enable=$(conf_get "$hc" Hardcore.Enable) DeathPolicy=$hc_policy"
-    else
-        warn "no $CONF_DIR/modules/mod_hardcore.conf.dist - the artifact was built without the module, hardcore is unavailable"
-    fi
-    if [ -f "$CONF_DIR/modules/mod-survivor.conf.dist" ] || [ -f "$CONF_DIR/modules/mod-survivor.conf" ]; then
-        sv="$(conf_pair modules/mod-survivor)"
-        # The shipped .dist already holds these values; each one is still read back, because a key
-        # the module cannot use is silently replaced by the module's own default and a container on
-        # the wrong gameobject entry simply never appears. Only a value outside its range is
-        # rewritten - a deliberate 0 (ruleset off, no map marker, no bot re-roll) is left alone.
-        conf_defaults "$sv" survivor_value_ok mod-survivor.conf "${SURVIVOR_CONF_DEFAULTS[@]}"
-        log "mod-survivor.conf: Enable=$(conf_get "$sv" Survivor.Enable) MinLevelToFlag=$(conf_get "$sv" Survivor.MinLevelToFlag) DropEquipped=$(conf_get "$sv" Survivor.DropEquipped) DropBags=$(conf_get "$sv" Survivor.DropBags) ApplyToBots=$(conf_get "$sv" Survivor.ApplyToBots)"
-    else
-        warn "no $CONF_DIR/modules/mod-survivor.conf.dist - the artifact was built without the module, survivor mode is unavailable"
-    fi
-    if [ -f "$CONF_DIR/modules/mod-mercenaries.conf.dist" ] || [ -f "$CONF_DIR/modules/mod-mercenaries.conf" ]; then
-        pw="$(conf_pair modules/mod-mercenaries)"
-        # The shipped .dist already holds these values; each is read back because a key the module
-        # cannot use is silently replaced by its own default. Only a value outside its range is
-        # rewritten, so a deliberate Mercenary.Enable=0 (picker off) survives a repair. A key that no
-        # longer exists is dropped: the obelisk gameobject is gone, and a leftover entry would
-        # look like it still selected something.
-        sed -i -E '/^[[:space:]]*Mercenary\.ObeliskEntry[[:space:]]*=/d' "$pw"
-        # Same for the spellbook restriction: the blacklist and variant blocks and their two scalars
-        # are no longer read by the module, so a conf written before the removal would keep a page of
-        # blocks that do nothing. Only the live file is edited - the .dist is the shipped one.
-        sed -i -E '/^[[:space:]]*Mercenary\.(Blacklist|Variant)\.[0-9]+\.[0-9]+[[:space:]]*=/d; /^[[:space:]]*Mercenary\.VariantWithhold(Min|Max)[[:space:]]*=/d' "$pw"
-        conf_defaults "$pw" mercenary_value_ok mod-mercenaries.conf "${MERCENARY_CONF_DEFAULTS[@]}"
-        mercenary_append_missing_conf "$pw" "$CONF_DIR/modules/mod-mercenaries.conf.dist"
-        # The module was mod-pawn before it was mod-mercenaries and its conf file is renamed with it.
-        # The core loads every modules/*.conf, so a leftover mod-pawn.conf keeps being read while
-        # nothing looks at its Pawn.* keys; it goes now that the new file is written. run_checks
-        # reports and fixes the same thing for an install that never reaches this function.
-        rm -f "$CONF_DIR/modules/mod-pawn.conf" "$CONF_DIR/modules/mod-pawn.conf.dist"
-        log "mod-mercenaries.conf: Enable=$(conf_get "$pw" Mercenary.Enable) MaxMercenaries=$(conf_get "$pw" Mercenary.MaxMercenaries) LevelWindow=$(conf_get "$pw" Mercenary.LevelWindow) Featured=$(conf_get "$pw" Mercenary.FeaturedMin)-$(conf_get "$pw" Mercenary.FeaturedMax) Refresh=$(conf_get "$pw" Mercenary.PoolRefreshMinMinutes)-$(conf_get "$pw" Mercenary.PoolRefreshMaxMinutes)min Fee=$(conf_get "$pw" Mercenary.HireFeePercent)%+$(conf_get "$pw" Mercenary.HireFeeHeldPercent)% Gear=$(conf_get "$pw" Mercenary.GearFloorPercent)-$(conf_get "$pw" Mercenary.GearCapPercent)%"
-    else
-        warn "no $CONF_DIR/modules/mod-mercenaries.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
-    fi
-    log "worldserver.conf: DataDir=$(conf_get "$ws" DataDir) BindIP=$(conf_get "$ws" BindIP)"
+
+    # The keys, the values and every repair live in scripts/write-confs.sh, beside the Docker
+    # entrypoint that has to produce the same confs; this only maps the installer's variables onto
+    # the library's inputs.
+    WC_CONF_DIR="$CONF_DIR"
+    WC_ROOT="$ROOT"
+    WC_SRC_DIR="$SRC_DIR"
+    WC_DATA_DIR="$DATA_DIR"
+    WC_MYSQL_EXEC="$(command -v mysql)"
+    WC_DB_USER="$DB_USER"
+    WC_DB_PASS="$DB_PASS"
+    WC_BOTS="$BOTS"
+    WC_BIND_IP="$bind_ip"
+    WC_NEAR_BOTS="$NEAR_BOTS"
+    WC_NEAR_MIN_DISTANCE="$NEAR_MIN_DISTANCE"
+    WC_NEAR_VISIT_MIN="$NEAR_VISIT_MIN"
+    WC_NEAR_VISIT_MAX="$NEAR_VISIT_MAX"
+    WC_NEAR_AWAY_MIN="$NEAR_AWAY_MIN"
+    WC_NEAR_AWAY_MAX="$NEAR_AWAY_MAX"
+    wc_write_all || die "the configs could not be written (the reason is above)"
 }
 
 first_boot() {
@@ -2367,7 +2064,7 @@ run_checks() {   # run_checks FIX(0|1)
                 ;;
         esac
     fi
-    if [ -f "$sv" ]; then
+    if [ -f "$sv" ] && load_conf_lib 1; then
         # Every key the module reads, with the range it accepts. A missing key is filled with the
         # module's own fallback at load and a bad one is ignored the same way, so a config that
         # still starts the server can be wrong here without saying so. The two are reported apart:
@@ -2403,7 +2100,7 @@ run_checks() {   # run_checks FIX(0|1)
             ok "mod-mercenaries.conf: removed the stale mod-pawn.conf"
         fi
     fi
-    if [ -f "$pw" ]; then
+    if [ -f "$pw" ] && load_conf_lib 1; then
         local pw_default pw_key pw_val pw_bad="" pw_absent=""
         for pw_default in "${MERCENARY_CONF_DEFAULTS[@]}"; do
             pw_key="${pw_default%%=*}"

@@ -43,6 +43,10 @@ SRC = MODULE / "src"
 PINS = ROOT / "pins.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "server-aarch64.yml"
 INSTALLER = ROOT / "scripts" / "thor-install.sh"
+# The conf halves of the installer: the mercenary defaults and their range guard live here so the
+# Docker entrypoint can write the same confs, so the checks that used to read them out of
+# thor-install.sh read them out of this file.
+WRITE_CONFS = ROOT / "scripts" / "write-confs.sh"
 # Sibling checkouts on a developer host, present in CI as the workflow clones them. Both can be
 # pointed anywhere with AC_PLAYERBOTS and AC_CORE, which is what .github/workflows/module-checks.yml
 # does. The checks that need them degrade to a note when they are absent rather than failing.
@@ -126,7 +130,7 @@ def conf_keys(text: str) -> dict[str, str]:
 
 
 def check_files() -> None:
-    for path in (CONF, PINS, WORKFLOW, INSTALLER, SRC / "MercenaryInnkeeper.cpp"):
+    for path in (CONF, PINS, WORKFLOW, INSTALLER, WRITE_CONFS, SRC / "MercenaryInnkeeper.cpp"):
         if not path.is_file():
             fail(f"missing file: {path.relative_to(ROOT)}")
     for path in sorted(SRC.glob("*.cpp")) + sorted(SRC.glob("*.h")):
@@ -168,7 +172,7 @@ def check_config_keys() -> dict[str, str]:
 
 
 def check_installer_defaults(keys: dict[str, str]) -> None:
-    installer = read(INSTALLER)
+    installer = read(WRITE_CONFS)
     if not installer:
         return
 
@@ -198,7 +202,21 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
             fail(f"installer: {key} is in the conf but not in MERCENARY_CONF_DEFAULTS; a repair "
                  f"would leave a bad value in place")
 
-    notes.append(f"installer: {len(defaults)} conf defaults agree with the shipped conf")
+    # Every key the installer repairs has to be one mercenary_value_ok can judge. A key with no
+    # case arm falls to the catch-all `*) return 1`, so the shipped value is reported as drift on
+    # every install and rewritten to itself - Mercenary.DismissGraceSeconds did exactly that.
+    guard = re.search(r"^mercenary_value_ok\(\) *\{(.*?)^\}", installer, re.S | re.M)
+    if not guard:
+        fail("installer: no mercenary_value_ok function")
+    else:
+        judged = set(re.findall(r"Mercenary\.[A-Za-z0-9.]+", guard.group(1)))
+        for key in defaults:
+            if key not in judged:
+                fail(f"installer: {key} has no arm in mercenary_value_ok; the shipped value "
+                     f"would be reported as drift and rewritten on every install")
+
+    notes.append(f"installer: {len(defaults)} conf defaults agree with the shipped conf, and "
+                 f"mercenary_value_ok judges every one of them")
 
 
 def check_picker(keys: dict[str, str]) -> None:
@@ -268,10 +286,10 @@ def check_picker(keys: dict[str, str]) -> None:
             fail(f"pool: {key} is missing from the conf")
 
     # The obelisk is gone; a leftover key or script would look like it still selects something.
-    for path in (CONF, INSTALLER, *sorted(SRC.glob("*.cpp"))):
-        if "ObeliskEntry" in path.read_text(encoding="utf-8") and path != INSTALLER:
+    for path in (CONF, WRITE_CONFS, *sorted(SRC.glob("*.cpp"))):
+        if "ObeliskEntry" in path.read_text(encoding="utf-8") and path != WRITE_CONFS:
             fail(f"{path.relative_to(ROOT)}: still refers to Mercenary.ObeliskEntry")
-    if "Mercenary\\.ObeliskEntry" not in read(INSTALLER):
+    if "Mercenary\\.ObeliskEntry" not in read(WRITE_CONFS):
         fail("installer: does not drop a stale Mercenary.ObeliskEntry from an existing conf")
 
     notes.append("picker: the two AllCreatureScript gossip hooks on every innkeeper, "
@@ -704,11 +722,16 @@ def check_wiring() -> None:
         fail("workflow: still lists modules/mod-mercenaries/data/sql, which no longer exists")
 
     installer = read(INSTALLER)
-    for needle in ("mod-mercenaries", "MERCENARY_CONF_DEFAULTS", "mercenary_value_ok"):
+    for needle in ("mod-mercenaries",):
         if needle not in installer:
             fail(f"installer: {needle} is not mentioned; an install would not configure the module")
     if "modules/mod-mercenaries/data/sql" in installer:
         fail("installer: still lists modules/mod-mercenaries/data/sql, which no longer exists")
+    # The two conf needles moved with the confs: thor-install.sh sources them from write-confs.sh.
+    conf_writer = read(WRITE_CONFS)
+    for needle in ("MERCENARY_CONF_DEFAULTS", "mercenary_value_ok"):
+        if needle not in conf_writer:
+            fail(f"installer: {needle} is not mentioned; an install would not configure the module")
 
     # The fast gate is only a gate if it is wired: a workflow that runs the compile check on push
     # is what keeps a misspelt core symbol from waiting for the arm64 build.
