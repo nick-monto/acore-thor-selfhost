@@ -1157,6 +1157,15 @@ namespace Survivor
         if (!runRegen)
             return;
 
+        // A bot that belongs to a player is not a random bot: its gear is the player's
+        // business. A mercenary is rebuilt by its own module at the level it was hired at,
+        // with a ceiling taken from the owner's gear score, and a re-roll here would
+        // override that with gear nothing caps. The queue entry is already dropped, so
+        // the companion keeps whatever its own module gives it.
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(player))
+            if (botAI->GetMaster())
+                return;
+
         // Deliberately not the factory's full re-roll: that also resets
         // talents, skills, spells, quests and level. InitBags + AutoGear give
         // the same bot a fresh kit for its class, level and current specs.

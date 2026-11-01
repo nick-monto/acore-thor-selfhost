@@ -482,7 +482,7 @@ payload is auditable with plain SQL.
 | `Survivor.MarkOnMap` | `1` | send the `SURV` addon message |
 | `Survivor.ContainerEntry` | `5000000` | the gameobject template entry (the SQL above) |
 | `Survivor.ApplyToBots` | `1` | the ruleset also applies to bot-controlled characters (§5.8) |
-| `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory on death; `0` leaves it naked |
+| `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory on death; `0` leaves it naked. A bot that belongs to a player (a mercenary) is skipped: mod-mercenaries rebuilds it at the level it was hired at, with a ceiling taken from the owner's gear score, and a re-roll would replace that |
 | `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container that any Survivor-flagged character may take; `0` destroys the gear outright (§5.8) |
 
 ## Activation and the ladder

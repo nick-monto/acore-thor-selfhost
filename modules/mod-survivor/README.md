@@ -69,7 +69,7 @@ character can.
 | `Survivor.MarkOnMap` | `1` | send the `SURV` addon message |
 | `Survivor.ContainerEntry` | `5000000` | the gameobject template the module summons |
 | `Survivor.ApplyToBots` | `1` | the ruleset also applies to bot-controlled characters |
-| `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory; `0` leaves it naked |
+| `Survivor.BotRegenOnDeath` | `1` | re-roll a bot's gear from the playerbots factory; `0` leaves it naked. A bot with a master (a mercenary) is never re-rolled: its own module rebuilds it at the level it was hired at, and a re-roll here would override gear nothing caps against the owner |
 | `Survivor.BotDropContainer` | `1` | a bot death leaves a lootable container any Survivor-flagged character may take; `0` destroys the gear |
 
 With `Survivor.DropBags = 0` the equipped bags are kept even when
