@@ -55,3 +55,17 @@ EInteract.Talk = 1
 #
 
 EInteract.Use = 1
+
+#
+#    EInteract.Roll
+#        Description: Answer the player's own group loot rolls on the corpse or object the
+#                     auto-loot just opened with Greed. An item above the group's loot threshold
+#                     cannot be taken while its roll runs, so leaving the roll to the player means
+#                     it is counted as a pass when the 60 second timer runs out - with a bot in the
+#                     party, the bot takes the item. A vote the player has already cast is never
+#                     overridden, including the auto-pass a client can ask for.
+#        Default:     1 - Enabled (greed)
+#                     0 - Disabled (the roll is the player's to answer)
+#
+
+EInteract.Roll = 1

@@ -31,6 +31,8 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
+#include <vector>
+
 namespace
 {
 constexpr char const* kPrefix = "EINT\t";
@@ -44,6 +46,7 @@ enum class EInteractConfig
     GATHER,
     TALK,
     USE,
+    ROLL,
 
     NUM_CONFIGS,
 };
@@ -60,6 +63,7 @@ public:
         SetConfigValue<bool>(EInteractConfig::GATHER, "EInteract.Gather", true);
         SetConfigValue<bool>(EInteractConfig::TALK, "EInteract.Talk", true);
         SetConfigValue<bool>(EInteractConfig::USE, "EInteract.Use", true);
+        SetConfigValue<bool>(EInteractConfig::ROLL, "EInteract.Roll", true);
     }
 };
 
@@ -191,6 +195,38 @@ bool CanTakeSlot(Player* player, Loot* loot, uint8 slot)
     return true;
 }
 
+// Answers the player's own pending rolls on this loot with greed.
+//
+// Auto-looting opens the corpse, takes what it may take and releases it. An item above the group's
+// loot threshold is not takeable - the core blocks it while the roll runs - so the press leaves the
+// roll behind, and a roll nobody answers is counted as a pass when the 60-second timer runs out
+// (`Group::EndRoll`). With a bot in the party that is how the player's own greed roll became a pass
+// and the bot walked away with the item. The vote is cast here instead, on the player's behalf, the
+// same call `HandleLootRoll` makes; only a vote that is still NOT_EMITED_YET is touched, so a client
+// that asked to pass on group loot (`CMSG_SET_GROUP_PASS_ON_LOOT`) keeps its own answer.
+void GreedRolls(Player* player, Loot* loot)
+{
+    Group* group = player->GetGroup();
+    if (!group)
+        return;
+
+    // Snapshotted first: CountRollVote can be the last vote, and finishing a roll deletes it.
+    std::vector<ObjectGuid> pending;
+    for (Roll const* roll : group->GetRolls())
+    {
+        // Roll::getLoot() is not const in the pinned core; the pointer is only compared here.
+        if (const_cast<Roll*>(roll)->getLoot() != loot)
+            continue;
+
+        auto const vote = roll->playerVote.find(player->GetGUID());
+        if (vote != roll->playerVote.end() && vote->second == NOT_EMITED_YET)
+            pending.push_back(roll->itemGUID);
+    }
+
+    for (ObjectGuid const& itemGuid : pending)
+        group->CountRollVote(player->GetGUID(), itemGuid, ROLL_GREED);
+}
+
 // The 3.3.5 client silently ignores a corpse loot window it did not request itself, so the server
 // walks the whole chain for it: CMSG_LOOT -> LOOT_MONEY -> AUTOSTORE for every slot -> LOOT_RELEASE.
 // CMSG_LOOT goes through the CanPacketReceive hooks first, so mod-aoe-loot can merge nearby corpses.
@@ -223,6 +259,9 @@ void LootCorpse(Player* player, Creature* c)
         take << uint8(slot);
         session->HandleAutostoreLootItemOpcode(take);
     }
+
+    if (Enabled(EInteractConfig::ROLL))
+        GreedRolls(player, loot);
 
     // whatever is left (full bags, rolls) stays on the corpse and can be picked up with another press
     if (player->GetLootGUID() == guid)
@@ -311,6 +350,9 @@ void LootGameObject(Player* player, GameObject* go)
         take << uint8(slot);
         session->HandleAutostoreLootItemOpcode(take);
     }
+
+    if (Enabled(EInteractConfig::ROLL))
+        GreedRolls(player, loot);
 
     // The release is what marks an emptied chest or node deactivated, so the respawn and restock
     // timers run exactly as they do after a manual loot.

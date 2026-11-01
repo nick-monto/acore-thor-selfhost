@@ -45,19 +45,25 @@ check intact:
 
 | Action | What the module calls |
 |---|---|
-| Loot a corpse | `HandleLootOpcode` (through `CanPacketReceive`, so `mod-aoe-loot` still merges) → `HandleLootMoneyOpcode` → `HandleAutostoreLootItemOpcode` per free slot → `HandleLootReleaseOpcode` |
+| Loot a corpse | `HandleLootOpcode` (through `CanPacketReceive`, so `mod-aoe-loot` still merges) → `HandleLootMoneyOpcode` → `HandleAutostoreLootItemOpcode` per free slot → `Group::CountRollVote` greed for the player's own pending rolls → `HandleLootReleaseOpcode` |
 | Skin / herb / mine a corpse | `CastSpell` with the gathering spell, after the same skill check `Spell::CheckCast` does |
 | Loot a chest, herb or ore node | `Player::SendLoot(guid, LOOT_CORPSE)` — the call `Spell::EffectOpenLock` uses, which generates the loot, then the same money → autostore → release chain |
 | Quest object / NPC window | `HandleGameObjectUseOpcode`, or `QueuePacket(CMSG_GOSSIP_HELLO | CMSG_QUESTGIVER_HELLO | CMSG_LIST_INVENTORY | …)` — the packets a right click sends |
 | Mailbox | `HandleGetMailList` with the object's GUID (`CanOpenMailBox` checks distance and type; a mailbox has no `Use()` case) |
-| Quest dialog, Need/Greed rolls | the add-on alone (`QuestFrame` buttons, `ConfirmLootRoll`), so these work without the module |
+| Quest dialog | the add-on alone (`QuestFrame` buttons), so it works without the module |
+| Group loot rolls | `Group::CountRollVote` with `ROLL_GREED`, the call `HandleLootRoll` makes, for the rolls the auto-loot left open; the add-on's own Need/Greed answer on a key press still works |
 
 ### Order
 
 Current target → nearest lootable corpse → nearest chest/node → nearest questgiver object →
 nearest mailbox → nearest live NPC, all within the normal interaction distance (the searches reach
-`INTERACTION_DISTANCE + 5`). Group rules are respected: items under a roll, under master loot, or
-won by someone else stay on the corpse or object.
+`INTERACTION_DISTANCE + 5`). Group rules are respected: items under master loot or won by someone else stay on the corpse or
+object. Items under a roll cannot be taken while the roll runs, so the module answers the player's
+own roll with greed rather than leaving it open: an unanswered roll is counted as a pass when the
+60-second timer runs out (`Group::EndRoll`), which on this realm means the bot in the party takes
+every item above the loot threshold. `EInteract.Roll = 0` leaves the roll to the player. A vote the
+player already cast - including the auto-pass a client asks for with `CMSG_SET_GROUP_PASS_ON_LOOT` -
+is never overridden.
 
 ## The key is a binding, not a key
 
@@ -154,7 +160,8 @@ the largest gap for a solo realm that lives on gathering. `EInteract.Use` (defau
   world state rather than give the player something.
 
 Known limits: only the nearest object of each kind is tried, so a looted node makes the key fall
-through to the next stage (step sideways and press again); and a node is looted without the
+through to the next stage (step sideways and press again); the greed vote covers the loot the module
+opens, so a corpse looted by hand keeps its rolls for the player to answer; and a node is looted without the
 gathering cast, so there is no skill-up or gather animation — the lock check above is what keeps
 that from ignoring tool requirements.
 

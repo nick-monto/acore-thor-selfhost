@@ -54,7 +54,21 @@ so distance, visibility, loot permission and gossip checks all still apply.
    - `HandleNear()` calls the pass between the corpse stage and the NPC stage, using the
      core's own `WorldObject::FindNearestGameObjectOfType` (spawned, in range, nearest
      first).
-2. `conf/mod_e_interact.conf.dist`: documents `EInteract.Use`.
+2. `src/e_interact.cpp`: **greed on the rolls the auto-loot leaves open**, new in this fork and
+   gated by `EInteract.Roll` (default on). Upstream's chain takes the money and every slot it may
+   take, and an item above the group's loot threshold is not takeable while its roll runs
+   (`LootItem::is_blocked`), so the press left the roll behind and the 60 second timer counted it
+   as a pass (`Group::EndRoll`) - with a bot in the party, the bot won every such item.
+   - `GreedRolls()` walks `Group::GetRolls()` for the rolls whose `getLoot()` is the loot just
+     opened, and casts `Group::CountRollVote(guid, itemGUID, ROLL_GREED)` - the call
+     `HandleLootRoll` makes - for a vote that is still `NOT_EMITED_YET`.
+   - Only the player's own pending vote is touched: a vote already cast, including the auto-pass a
+     client asks for with `CMSG_SET_GROUP_PASS_ON_LOOT`, is left alone, and a roll can only be
+     answered once because the vote stops being `NOT_EMITED_YET`.
+   - `LootCorpse()` and `LootGameObject()` both call it, since `Group::GroupLoot` runs for both
+     (`Player::SendLoot`), and only for `GROUP_LOOT` and `NEED_BEFORE_GREED` - master loot has no
+     rolls to answer.
+3. `conf/mod_e_interact.conf.dist`: documents `EInteract.Use` and `EInteract.Roll`.
 
 ## Known limits of the local change
 
@@ -63,3 +77,7 @@ so distance, visibility, loot permission and gossip checks all still apply.
   the NPC stage; step sideways and press again for the next node.
 - A node is looted without the gathering cast, so there is no skill-up and no gather
   animation. The lock check above is what keeps this from ignoring tool requirements.
+- The greed vote covers the loot the module opens itself. A corpse looted by hand - or by the
+  client's own `autoLootDefault` after a right click - starts its rolls outside this chain, so
+  those stay the player's to answer (the add-on's key press answers them, Need first and Greed
+  when Need is not allowed).
