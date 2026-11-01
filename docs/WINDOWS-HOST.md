@@ -412,9 +412,11 @@ and `docker compose ps` followed by the `logs` volume as its verdict.
 
 - The core facts this document rests on, with their lines: `ConfigMgr::GetConfigPath()` returns
   `"configs/"` on Windows and `_CONF_DIR` otherwise (`Config.cpp:704-712`, the Windows `return` at
-  `:709`), module configs load from `GetConfigPath() + "modules/"` (`:766`), and CMake installs the
-  app and module dists to `${CONF_DIR}` and `${CONF_DIR}/modules`
-  (`ConfigInstall.cmake:40,68,101`). [V]
+  `:709`), module configs load from `GetConfigPath() + "modules/"` (`:766`), and the WIN32 branches
+  of `ConfigInstall.cmake` install the app and module dists to `${CMAKE_INSTALL_PREFIX}/configs` and
+  `${CMAKE_INSTALL_PREFIX}/configs/modules` (`:41-42`, `:69-70`, `:102-103`) rather than to
+  `CONF_DIR`, while the apps install into the prefix itself
+  (`src/server/apps/CMakeLists.txt:241-243`). [V]
 - The 2 GiB release-asset ceiling and its size gate in the arm64 workflow
   (`server-aarch64.yml:20-24`, `:368-371`), which is why no client data rides either artifact. [V]
 - The pins: core `8a4e76eac8c4ccebf547113afe7b51d6c3e91641`, the six module commits and the client

@@ -298,6 +298,8 @@ $script:SelfRef = $SelfRef
 # file afterwards: the mysql image initialises its volume with the password it is given once, so a
 # second, different one would leave the entrypoint unable to log in as root.
 $script:DockerRootPass = ''
+# Why the last daemon probe said no, as one line: -Docker -Status reports it next to the FAIL.
+$script:DockerDaemonReason = ''
 $script:Force = [bool]$Force
 $script:KeepDb = [bool]$KeepDb
 $script:ArtifactSha = ''
@@ -365,6 +367,66 @@ function Bad {
 function Have {
     param([string]$Name)
     $null -ne (Get-Command -Name $Name -ErrorAction SilentlyContinue)
+}
+
+# ---------------------------------------------------------------- native commands
+
+function Invoke-Native {
+    <# Invoke-Native -FilePath EXE [-Arguments ARGS] [-Display TEXT] [-InputText TEXT] [-Echo]
+       [-StdOutOnly] - run a program and return its text; $LASTEXITCODE is left for the caller. #>
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments = @(),
+        [string]$Display = '',
+        [string]$InputText = '',
+        [switch]$Echo,
+        [switch]$StdOutOnly
+    )
+    # Windows PowerShell 5.1 turns a native program's stderr into an ErrorRecord, and this file runs
+    # with $ErrorActionPreference = 'Stop': the first line a program writes to stderr therefore ends
+    # the script - "docker version" with Docker Desktop closed would abort -Status with a
+    # NativeCommandError block instead of a FAIL line - and the 2>$null at the call sites does not
+    # prevent it, because the record is an error before the redirection can drop it. The preference
+    # is 'Continue' for the length of the call, where the same stderr is just a message in the
+    # pipeline, and it is restored in finally. Success is decided from $LASTEXITCODE alone, never
+    # from whether an exception was thrown, and the caller gets the merged text, so a real failure
+    # is still reported by the exit code and by the words the program itself printed.
+    #
+    # -StdOutOnly drops the error records from the returned text: the callers that parse one value
+    # out of stdout (a ping, one field of digest) must not have a warning mixed into the answer.
+    # -Echo writes each line to this console as it arrives and collects nothing: a build that prints
+    # nothing for minutes looks hung, and streaming is the only reason compose up is not captured.
+    $argvList = @()
+    foreach ($item in $Arguments) { $argvList += $item }
+    if ($Display) { Log $Display }
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $text = ''
+    try {
+        if ($Echo) {
+            if ($InputText) {
+                $InputText | & $FilePath @argvList 2>&1 | ForEach-Object { Log ([string]$_) }
+            } else {
+                & $FilePath @argvList 2>&1 | ForEach-Object { Log ([string]$_) }
+            }
+        } else {
+            $pieces = @()
+            if ($InputText) {
+                $pieces = @($InputText | & $FilePath @argvList 2>&1)
+            } else {
+                $pieces = @(& $FilePath @argvList 2>&1)
+            }
+            $kept = @()
+            foreach ($piece in $pieces) {
+                if ($StdOutOnly -and ($piece -is [System.Management.Automation.ErrorRecord])) { continue }
+                $kept += [string]$piece
+            }
+            $text = ($kept -join "`n")
+        }
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    return $text
 }
 
 # ---------------------------------------------------------------- generic helpers
@@ -1095,7 +1157,10 @@ function Invoke-MysqlAdmin {
     $exe = Get-MysqlPath 'mysql.exe'
     if (-not (Test-Path -LiteralPath $exe)) { Die "no bundled mysql client at $exe (the MySQL step did not run)" }
     $argvList = @(Get-MysqlHostArgs) + @($Arguments)
-    $out = & $exe @argvList 2>$null
+    # Through Invoke-Native: a client that writes its complaint to stderr would otherwise be a
+    # terminating error under $ErrorActionPreference = 'Stop' (see Invoke-Native). Its error text is
+    # dropped (-StdOutOnly) because the failure paths print the tail of logs\mysql.err instead.
+    $out = Invoke-Native -FilePath $exe -Arguments $argvList -StdOutOnly
     return $out
 }
 
@@ -1125,7 +1190,9 @@ function Test-DbHost {
         $argvList += @('--protocol=tcp', ('-P{0}' -f $DbPort), '-uroot')
     }
     $argvList += 'ping'
-    $null = & $exe @argvList 2>$null
+    # Invoke-Native, not a bare '&': mysqladmin prints "mysqld is alive" or an error, and either can
+    # arrive on stderr, which $ErrorActionPreference = 'Stop' would turn into a fatal record.
+    $null = Invoke-Native -FilePath $exe -Arguments $argvList -StdOutOnly
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -1232,7 +1299,7 @@ function Stop-Db {
     }
     $exe = Get-MysqlPath 'mysqladmin.exe'
     $argvList = @(Get-MysqlHostArgs) + @('shutdown')
-    $null = & $exe @argvList 2>$null
+    $null = Invoke-Native -FilePath $exe -Arguments $argvList -StdOutOnly
     # mysqladmin returns as soon as the shutdown is accepted, while InnoDB is still writing out and
     # the datadir is still locked: a start that follows immediately would race the shutdown for it.
     if (-not (Wait-DbDown 60)) {
@@ -1552,7 +1619,10 @@ FLUSH PRIVILEGES;
 "@
     $exe = Get-MysqlPath 'mysql.exe'
     $argvList = @(Get-MysqlHostArgs)
-    $sql | & $exe @argvList 2>$null
+    # -InputText, not a pipeline into '&': the client's error text (a rejected statement) arrives on
+    # stderr, which $ErrorActionPreference = 'Stop' would turn into a terminating error before the
+    # exit code below could report it.
+    $null = Invoke-Native -FilePath $exe -Arguments $argvList -InputText $sql -StdOutOnly
     if ($LASTEXITCODE -ne 0) {
         $tail = Get-FileTailText -Path (Join-Path $script:LogsDir 'mysql.err') -Bytes 8192
         [Console]::Error.WriteLine($tail)
@@ -1803,7 +1873,9 @@ function Stop-ConsoleProcess {
     # killing cmd alone would leave the server running with nobody holding its stdin.
     $taskkill = Join-Path (Join-Path $env:SystemRoot 'System32') 'taskkill.exe'
     if (Test-Path -LiteralPath $taskkill) {
-        $null = & $taskkill '/PID' $Process.Id '/T' '/F' 2>$null
+        # taskkill writes "not found"/"access denied" to stderr; through Invoke-Native that is text
+        # instead of the terminating error $ErrorActionPreference = 'Stop' would make of it.
+        $null = Invoke-Native -FilePath $taskkill -Arguments @('/PID', [string]$Process.Id, '/T', '/F') -StdOutOnly
         if ($LASTEXITCODE -eq 0) { return }
     }
     Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
@@ -2071,11 +2143,22 @@ $root = '@@ROOT@@'
 $logs = Join-Path $root 'logs'
 $state = Join-Path $root '.win-state'
 $request = Join-Path $state 'stop-request'
+# Windows PowerShell 5.1 turns a native program's stderr into an error record, and 'Stop' above
+# makes the first one fatal: the .cmd helpers write their failures to stderr themselves, so they
+# run with 'Continue' (local to this function, the caller keeps 'Stop') and are judged by their
+# exit code. 2>&1 merges the two streams so the message is still shown.
+function Invoke-Child {
+    param([string]$Path, [string[]]$Arguments = @())
+    $argv = @()
+    foreach ($item in $Arguments) { $argv += $item }
+    $ErrorActionPreference = 'Continue'
+    & $Path @argv 2>&1 | ForEach-Object { Write-Host ([string]$_) }
+}
 foreach ($dir in @($logs, $state)) {
     if (-not (Test-Path -LiteralPath $dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
 }
 Remove-Item -LiteralPath $request -ErrorAction SilentlyContinue
-& (Join-Path $root 'start-db.cmd')
+Invoke-Child (Join-Path $root 'start-db.cmd')
 if ($LASTEXITCODE -ne 0) { Write-Host 'the database did not start'; exit 1 }
 
 $auth = Start-Process -FilePath (Join-Path $root 'authserver.exe') -ArgumentList @('-c', 'configs\authserver.conf') `
@@ -2111,7 +2194,7 @@ try {
             # graceful path (the core's signal handler runs whatever Console.Enable says).
             # /T: the worldserver runs under the cmd.exe started for its output redirection, so
             # killing cmd alone would leave the server holding the ports and the database.
-            & "$env:SystemRoot\System32\taskkill.exe" '/PID' $world.Id '/T' '/F' 2>$null
+            Invoke-Child "$env:SystemRoot\System32\taskkill.exe" @('/PID', $world.Id, '/T', '/F')
             [void]$world.WaitForExit(30000)
             if (-not $world.HasExited) {
                 Write-Host 'worldserver did not stop in 30s; it may still be writing'
@@ -2126,7 +2209,7 @@ try {
 } finally {
     Remove-Item -LiteralPath $request -ErrorAction SilentlyContinue
     if ($auth -and -not $auth.HasExited) { Stop-Process -Id $auth.Id -Force -ErrorAction SilentlyContinue }
-    & (Join-Path $root 'stop-db.cmd')
+    Invoke-Child (Join-Path $root 'stop-db.cmd')
 }
 '@
     $stopPs = @'
@@ -3208,17 +3291,18 @@ function Invoke-Docker {
     $code = 0
     try {
         if ($Capture) {
-            $output = @(& docker @Arguments 2>&1)
-            $code = $LASTEXITCODE
+            # Invoke-Native merges stderr into the text and decides success from $LASTEXITCODE: a
+            # daemon that is down writes its complaint to stderr, which a bare '&' would turn into
+            # a fatal error record under $ErrorActionPreference = 'Stop' (see Invoke-Native).
             # Joined per line, not piped through Out-String: a mysqldump line is one string and
             # Out-String would reformat it through the console width.
-            $text = ($output -join "`n")
+            $text = Invoke-Native -FilePath 'docker' -Arguments $Arguments
+            $code = $LASTEXITCODE
         } else {
-            # stdout is piped to the host so it does not become this function's return value;
-            # stderr is left alone on purpose, so docker's own progress and warnings reach the
-            # console as they happen (merging them into the pipeline would turn each line into an
-            # error record, which $ErrorActionPreference = 'Stop' treats as fatal).
-            & docker @Arguments | Out-Host
+            # -Echo streams both streams to this console as they arrive, so docker's own progress
+            # and warnings reach the user while a build runs - and an error record from a failed
+            # pull still cannot abort the script.
+            [void](Invoke-Native -FilePath 'docker' -Arguments $Arguments -Echo)
             $code = $LASTEXITCODE
         }
     } finally {
@@ -3243,16 +3327,48 @@ function Invoke-Compose {
     return (Invoke-Docker -Arguments $argv -WorkingDirectory $script:DockerDir -Capture:$Capture -AllowFailure:$AllowFailure)
 }
 
+function Get-BriefText {
+    <# Get-BriefText TEXT - one line, clipped from the front, for a status line. #>
+    param([string]$Text)
+    $line = ''
+    foreach ($piece in @($Text -split "`r?`n")) {
+        if ($piece.Trim()) { $line = $piece.Trim(); break }
+    }
+    $line = ($line -replace '\s+', ' ')
+    # The CLI spells its reason as 'Get "http://%2F%2F.%2Fpipe%2F.../v1.50/version": open //./pipe/
+    # ...', and the escaped URL says nothing the pipe path after the colon does not; dropping it is
+    # what keeps this a status line instead of a log excerpt.
+    $line = ($line -replace 'Get "[^"]*": ', '')
+    # The end of a docker failure is the actionable part ("open //./pipe/...: The system cannot find
+    # the file specified"), so an over-long line is clipped from the front, not from the back.
+    if ($line.Length -gt 150) { $line = '...' + $line.Substring($line.Length - 147) }
+    return $line
+}
+
 function Test-DockerDaemon {
     <# Test-DockerDaemon - true when the Docker CLI and a reachable daemon are both present. #>
+    # Why it said no is kept in $script:DockerDaemonReason, one line: -Status prints it beside the
+    # FAIL so a closed Docker Desktop is diagnosable from the status alone.
+    $script:DockerDaemonReason = 'docker.exe is not on PATH (install Docker Desktop)'
     if (-not (Have 'docker')) { return $false }
     if ($script:DryRun) { return $true }
     # The CLI alone proves nothing: Docker Desktop installs it whether or not the engine behind it
     # is up, and every command below fails with "cannot connect to the Docker daemon" until it is.
-    $server = @(& docker version --format '{{.Server.Version}}' 2>$null)
-    if ($LASTEXITCODE -ne 0) { return $false }
-    $text = ($server -join '').Trim()
-    if (-not $text) { return $false }
+    # Through Invoke-Native: the failure arrives on stderr, which a bare '&' would turn into a fatal
+    # error record and end the status with a stack trace instead of this line (see Invoke-Native).
+    $server = Invoke-Native -FilePath 'docker' -Arguments @('version', '--format', '{{.Server.Version}}')
+    if ($LASTEXITCODE -ne 0) {
+        $brief = Get-BriefText $server
+        if (-not $brief) { $brief = ('docker version exited {0} without a message' -f $LASTEXITCODE) }
+        $script:DockerDaemonReason = $brief
+        return $false
+    }
+    $text = $server.Trim()
+    if (-not $text) {
+        $script:DockerDaemonReason = 'docker version reported no server version'
+        return $false
+    }
+    $script:DockerDaemonReason = ''
     return $true
 }
 
@@ -3268,12 +3384,14 @@ function Test-DockerPrerequisites {
     if (-not (Have 'docker')) {
         Die 'the Docker CLI is not on PATH: install Docker Desktop (https://www.docker.com/products/docker-desktop/), open it once, and re-run'
     }
-    $cli = ((@(& docker --version 2>$null)) -join ' ').Trim()
+    # -StdOutOnly: the CLI answers on stdout, and a warning on stderr must not be mixed into the
+    # version line this prints (both calls go through Invoke-Native so neither can abort the run).
+    $cli = (Invoke-Native -FilePath 'docker' -Arguments @('--version') -StdOutOnly).Trim()
     Log ("docker CLI: {0}" -f $cli)
     if (-not (Test-DockerDaemon)) {
-        Die 'the Docker daemon is not reachable: start Docker Desktop and wait until it reports that it is running (the CLI without its daemon cannot run the realm)'
+        Die ("the Docker daemon is not reachable ({0}): start Docker Desktop and wait until it reports that it is running, then re-run (nothing has been changed)" -f $script:DockerDaemonReason)
     }
-    $compose = ((@(& docker compose version 2>$null)) -join ' ').Trim()
+    $compose = (Invoke-Native -FilePath 'docker' -Arguments @('compose', 'version') -StdOutOnly).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $compose) {
         Die 'the docker compose plugin is missing: it ships with Docker Desktop, so update or reinstall it'
     }
@@ -3339,15 +3457,29 @@ function Set-DockerEnvironment {
     $env:BOOT_TIMEOUT = [string]$script:BootTimeout
 }
 
+function Get-DockerInspectField {
+    <# Get-DockerInspectField -Id ID -Format TEMPLATE - one field of a container, '' on failure. #>
+    # A status line reads this, so a failed inspect is an empty answer, not a crash: the text is
+    # 'docker inspect' through Invoke-Native (its complaint is on stderr, which must not abort the
+    # run) and an exit code of non-zero is reported as "no answer" rather than as a value.
+    param(
+        [string]$Id,
+        [string]$Format
+    )
+    $text = (Invoke-Native -FilePath 'docker' -Arguments @('inspect', '--format', $Format, $Id)).Trim()
+    if ($LASTEXITCODE -ne 0) { return '' }
+    return $text
+}
+
 function Test-DockerWorldReady {
     <# Test-DockerWorldReady - 'ok', 'down' or 'waiting' for the acore container. #>
     $id = ([string](Invoke-Compose -Arguments @('ps', '-q', 'acore') -Capture -AllowFailure)).Trim()
     if (-not $id) { return 'waiting' }
-    $status = ((@(& docker inspect --format '{{.State.Status}}' $id 2>$null)) -join '').Trim()
+    $status = Get-DockerInspectField -Id $id -Format '{{.State.Status}}'
     # A container that is still being created or has just been restarted is "waiting", not "down":
     # the entrypoint has not had its say yet.
     if ($status -eq 'exited' -or $status -eq 'dead') { return 'down' }
-    $health = ((@(& docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' $id 2>$null)) -join '').Trim()
+    $health = Get-DockerInspectField -Id $id -Format '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
     if ($health -eq 'healthy') { return 'ok' }
     # The acore service has no healthcheck of its own: the entrypoint's first boot is the thing that
     # takes the time, and its "World initialized" line is the only progress signal there is.
@@ -3473,22 +3605,44 @@ function Invoke-DockerSummary {
 
 function Invoke-DockerStatus {
     Step 'Components'
-    Log ("mode        : docker   (staged in {0}, recorded in {1})" -f $script:DockerDir, $script:ModeFile)
-    if (Test-DockerDaemon) {
+    # The mode line reports what is on disk, not the mode the arguments asked for: no state file
+    # means nothing was installed in this root, and naming a mode there is how a clean machine read
+    # as an installed one (the rest of the table then reads like a broken install instead of none).
+    if (-not (Test-Path -LiteralPath $script:StateFile)) {
+        Log ("mode        : nothing installed in {0} (no {1})" -f $script:Root, $script:StateFile)
+    } else {
+        $recorded = Get-ModeText
+        if (-not $recorded) { $recorded = 'not recorded' }
+        Log ("mode        : {0}   (staged in {1}, recorded in {2})" -f $recorded, $script:DockerDir, $script:ModeFile)
+    }
+    $daemonUp = Test-DockerDaemon
+    if ($daemonUp) {
         Ok 'the Docker daemon is reachable'
     } else {
-        Bad 'the Docker daemon is not reachable (start Docker Desktop and re-check)'
+        Bad ("the Docker daemon is not reachable ({0}); start Docker Desktop and re-check" -f $script:DockerDaemonReason)
     }
+    # One line for the four staged files: on a clean machine they are all absent, and four "missing"
+    # lines say nothing the one line does not. A partly staged directory names what is missing.
+    $missing = @()
     foreach ($rel in $DockerFiles) {
         $dest = Join-Path $script:DockerDir ($rel.Replace('/', '\'))
-        if ((Test-Path -LiteralPath $dest) -and ((Get-Item -LiteralPath $dest).Length -gt 0)) {
-            Ok ("container file: {0}" -f $dest)
-        } else {
-            Bad ("container file missing or empty: {0}" -f $dest)
-        }
+        if (-not (Test-Path -LiteralPath $dest)) { $missing += $rel; continue }
+        if ((Get-Item -LiteralPath $dest).Length -le 0) { $missing += $rel }
     }
-    # Nothing below can be read without the daemon, and every line of it would be a false FAIL.
-    if (-not (Test-DockerDaemon)) { Complete-Checks }
+    if ($missing.Count -eq 0) {
+        Ok ("staged files: {0} present in {1}" -f $DockerFiles.Count, $script:DockerDir)
+    } else {
+        Bad ("staged files: absent ({0} of {1} missing from {2}: {3})" -f $missing.Count, $DockerFiles.Count, $script:DockerDir, ($missing -join ', '))
+    }
+    # Nothing below can be read without the daemon: compose ps, the container states and the
+    # published ports all come from it. The services and the ports are still reported, as down, so
+    # the table says which components are missing instead of stopping at the daemon.
+    if (-not $daemonUp) {
+        Bad 'services: not running (the daemon is unreachable, so compose cannot address them)'
+        Bad ("ports: {0} and {1} not published (nothing is listening)" -f $AuthPort, $WorldPort)
+        Complete-Checks
+        return
+    }
 
     Step 'Containers'
     $table = Invoke-Compose -Arguments @('ps') -Capture -AllowFailure
@@ -3499,7 +3653,7 @@ function Invoke-DockerStatus {
             Bad ("{0}: no container (docker compose up has not run, or removed it)" -f $service)
             continue
         }
-        $status = ((@(& docker inspect --format '{{.State.Status}}' $id 2>$null)) -join '').Trim()
+        $status = Get-DockerInspectField -Id $id -Format '{{.State.Status}}'
         if ($status -eq 'running') {
             Ok ("{0}: running" -f $service)
         } else {
@@ -3512,7 +3666,7 @@ function Invoke-DockerStatus {
     # what actually says the world came up.
     $acoreId = ([string](Invoke-Compose -Arguments @('ps', '-q', 'acore') -Capture -AllowFailure)).Trim()
     if ($acoreId) {
-        $health = ((@(& docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' $acoreId 2>$null)) -join '').Trim()
+        $health = Get-DockerInspectField -Id $acoreId -Format '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
         $log = Invoke-Compose -Arguments @('logs', '--no-color', '--tail', '400', 'acore') -Capture -AllowFailure
         $worldUp = ($log -match 'World initialized')
         if ($health -eq 'healthy') {
