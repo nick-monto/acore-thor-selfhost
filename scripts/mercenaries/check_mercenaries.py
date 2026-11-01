@@ -10,6 +10,8 @@ breaks:
   * every Mercenary.* key the C++ reads is defined, uncommented, in conf/mod-mercenaries.conf.dist;
   * the installer's MERCENARY_CONF_DEFAULTS and the shipped conf agree, both ways: the repair path
     restores exactly what the conf ships, and no key can be added to one without the other;
+  * the Windows installer's copy of the same conf halves - the default values and both range
+    guards - agrees with write-confs.sh key for key and range for range;
   * every column the roster code writes exists in the table it creates, the vanity columns
     survive a save, and the one text column is quoted by the statement and escaped by the
     caller, because Execute's variadic overload formats a std::string raw;
@@ -47,6 +49,10 @@ INSTALLER = ROOT / "scripts" / "thor-install.sh"
 # Docker entrypoint can write the same confs, so the checks that used to read them out of
 # thor-install.sh read them out of this file.
 WRITE_CONFS = ROOT / "scripts" / "write-confs.sh"
+# The Windows installer carries its own copy of the conf halves - a different shell, so the same
+# library cannot be sourced - which means the two can drift apart silently. The checks below hold
+# the copy to the original: the same keys, the same shipped values, the same accepted ranges.
+WINDOWS_INSTALLER = ROOT / "scripts" / "windows-install.ps1"
 # Sibling checkouts on a developer host, present in CI as the workflow clones them. Both can be
 # pointed anywhere with AC_PLAYERBOTS and AC_CORE, which is what .github/workflows/module-checks.yml
 # does. The checks that need them degrade to a note when they are absent rather than failing.
@@ -217,6 +223,113 @@ def check_installer_defaults(keys: dict[str, str]) -> None:
 
     notes.append(f"installer: {len(defaults)} conf defaults agree with the shipped conf, and "
                  f"mercenary_value_ok judges every one of them")
+
+
+def _accepted_range(text: str) -> tuple[int, int] | None:
+    """The (low, high) a validator arm accepts, or None when the arm is not a numeric band."""
+    if re.search(r"-eq\s+0\b[\s\S]*?-eq\s+1\b", text):
+        return (0, 1)
+    low = re.search(r"-ge\s+(\d+)", text)
+    high = re.search(r"-le\s+(\d+)", text)
+    if low and high:
+        return (int(low.group(1)), int(high.group(1)))
+    return None
+
+
+def _bash_arms(src: str, function: str) -> dict[str, tuple[int, int] | None]:
+    body = re.search(rf"^{function}\(\) *\{{(.*?)^\}}", src, re.S | re.M)
+    if not body:
+        return {}
+    # A long key list is wrapped with a trailing backslash, so the arm starts on an earlier line:
+    # join the continuations before matching, or every key but the last line of such an arm is
+    # missed and the arm looks absent.
+    joined: list[str] = []
+    carried = ""
+    for line in body.group(1).splitlines():
+        if line.rstrip().endswith("\\"):
+            carried += line.rstrip()[:-1]
+            continue
+        joined.append(carried + line.lstrip() if carried else line)
+        carried = ""
+    text = "\n".join(joined)
+    arms: dict[str, tuple[int, int] | None] = {}
+    for match in re.finditer(r"^\s+([A-Za-z_.|]+)\)(.*?);;", text, re.S | re.M):
+        for key in match.group(1).split("|"):
+            arms[key] = _accepted_range(match.group(2))
+    return arms
+
+
+def _powershell_arms(src: str, function: str) -> dict[str, tuple[int, int] | None]:
+    body = re.search(rf"function {function} \{{(.*?)\n\}}", src, re.S)
+    if not body:
+        return {}
+    arms: dict[str, tuple[int, int] | None] = {}
+    for match in re.finditer(r"'([A-Za-z_.]+)'\s*\{\s*return \(([^)]*)\)\s*\}", body.group(1)):
+        arms[match.group(1)] = _accepted_range(match.group(2))
+    return arms
+
+
+def _default_array(src: str, name: str, quote: str) -> dict[str, str]:
+    body = re.search(rf"{name}\s*=\s*[@]?\((.*?)\n\s*\)", src, re.S)
+    if not body:
+        return {}
+    pairs = re.findall(rf"{quote}([A-Za-z_.]+)=([^{quote}]*){quote}", body.group(1))
+    return {key: value for key, value in pairs}
+
+
+def check_windows_mirror() -> None:
+    """The Windows installer must write the same confs the bash library writes.
+
+    The two are separate files by necessity - one is sourced by thor-install.sh and the container
+    entrypoint, the other runs under PowerShell - and a copy drifts: Mercenary.DismissGraceSeconds
+    was added to the bash guard as 0-3600 (MercenaryMgr.cpp:170 clamps it there) while the
+    PowerShell arm still accepted 0-86400, so a value the module then ran at 3600 passed the
+    Windows repair untouched.
+    """
+    bash = read(WRITE_CONFS)
+    ps = read(WINDOWS_INSTALLER)
+    if not bash or not ps:
+        return
+
+    for bash_name, ps_name in (("SURVIVOR_CONF_DEFAULTS", "SurvivorConfDefaults"),
+                               ("MERCENARY_CONF_DEFAULTS", "MercenaryConfDefaults")):
+        mine = _default_array(bash, bash_name, '"')
+        theirs = _default_array(ps, ps_name, "'")
+        if not mine or not theirs:
+            fail(f"windows installer: {bash_name} or ${ps_name} is missing or empty")
+            continue
+        for key in sorted(set(mine) - set(theirs)):
+            fail(f"windows installer: ${ps_name} lacks {key}; a Windows repair would leave that "
+                 f"key at whatever the conf holds")
+        for key in sorted(set(theirs) - set(mine)):
+            fail(f"windows installer: ${ps_name} has {key}, which {bash_name} does not; the two "
+                 f"installers would write different confs")
+        for key in sorted(set(mine) & set(theirs)):
+            if mine[key] != theirs[key]:
+                fail(f"windows installer: {key} ships {theirs[key]} on Windows and {mine[key]} "
+                     f"from {bash_name}; the same realm would differ by install host")
+
+    for bash_fn, ps_fn in (("survivor_value_ok", "Test-SurvivorValueOk"),
+                           ("mercenary_value_ok", "Test-MercenaryValueOk")):
+        mine = _bash_arms(bash, bash_fn)
+        theirs = _powershell_arms(ps, ps_fn)
+        if not mine or not theirs:
+            fail(f"windows installer: {bash_fn} or {ps_fn} is missing or has no arms")
+            continue
+        for key in sorted(set(mine) - set(theirs)):
+            fail(f"windows installer: {key} has no arm in {ps_fn}; the Windows repair reports the "
+                 f"shipped value as drift and rewrites it on every run")
+        for key in sorted(set(theirs) - set(mine)):
+            fail(f"windows installer: {key} has an arm in {ps_fn} but not in {bash_fn}")
+        for key in sorted(set(mine) & set(theirs)):
+            if mine[key] != theirs[key]:
+                mine_band = "-".join(str(n) for n in mine[key]) if mine[key] else "any"
+                ps_band = "-".join(str(n) for n in theirs[key]) if theirs[key] else "any"
+                fail(f"windows installer: {key} is accepted as {ps_band} on Windows and "
+                     f"{mine_band} in {bash_fn}; one host writes a value the module replaces")
+
+    notes.append(f"windows installer: the conf defaults and both value guards match "
+                 f"write-confs.sh key for key")
 
 
 def check_picker(keys: dict[str, str]) -> None:
@@ -972,6 +1085,7 @@ def main() -> int:
     check_files()
     keys = check_config_keys()
     check_installer_defaults(keys)
+    check_windows_mirror()
     check_picker(keys)
     check_personality(keys)
     check_voice_lines(keys)

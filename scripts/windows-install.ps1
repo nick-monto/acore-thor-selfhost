@@ -1038,7 +1038,10 @@ function Test-MercenaryValueOk {
         'Mercenary.MaxMercenaries' { return ($n -ge 0 -and $n -le 4) }
         'Mercenary.LevelWindow' { return ($n -ge 0 -and $n -le 10) }
         'Mercenary.GainXP' { return ($n -eq 0 -or $n -eq 1) }
-        'Mercenary.DismissGraceSeconds' { return ($n -ge 0 -and $n -le 86400) }
+        # MercenaryMgr.cpp:170 clamps it to 0-3600, so a larger value is accepted here and then
+        # silently run at 3600: the file and the server would disagree, which is what the repair
+        # path exists to prevent. check_mercenaries.py holds the two shells to the same range.
+        'Mercenary.DismissGraceSeconds' { return ($n -ge 0 -and $n -le 3600) }
         'Mercenary.OfferedPerPage' { return ($n -ge 1 -and $n -le 14) }
         'Mercenary.HireFeePercent' { return ($n -ge 0 -and $n -le 10000) }
         'Mercenary.HireFeeHeldPercent' { return ($n -ge 0 -and $n -le 1000) }
