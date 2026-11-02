@@ -158,6 +158,7 @@ The default install is `C:\acore`. Add `-Root D:\acore` to move it.
 | `-Root DIR` | `C:\acore` | Install root |
 | `-ReleaseUrl URL` | the `server-build-win64` asset | Where to download the artifact zip |
 | `-DataZip URL\|PATH\|none` | the pinned client-data URL | Source of the client data (`none` skips the fetch) |
+| `-ClientData DIR\|none` | remembered, else one question | The 3.3.5a client folder (the one holding `Data\common.MPQ`). Writes the loot-bag `Item.dbc` records into the server's `data\dbc` and a patch archive into `<client>\Data`. `none` skips it; the answer is kept in `%USERPROFILE%\.win-wow\client-data`. Needs Python 3 on the host |
 | `-BootTimeout SECS` | `1800` | How long the first boot may take to report the world is up: `World initialized` in the log on the native path, the entrypoint's readiness line under `-Docker` |
 | `-MysqlUrl URL` | the pinned portable MySQL zip | Where to download MySQL 8.4.9 winx64 |
 
@@ -191,7 +192,12 @@ modify that install.
    thread - the only reader of stdin - only when that key is 1; the live conf keeps the `0` the
    realm wants, so a first boot that dies half way leaves nothing behind that would kill the next
    start on stdin EOF.
-7. **Helpers and state.** Writes the start/stop scripts described below, `credentials.txt`, the
+7. **Loot-bag items.** Runs `scripts/item-dbc/patch_item_dbc.py` (fetched at `-SelfRef`) with the
+   client folder: it adds the 64 bag records (91000-91063) to the server's `data\dbc\Item.dbc` and
+   writes a patch archive under the highest free name into `<client>\Data`, then verifies that the
+   client's patch load order picks that archive up. Skipped with a warning when Python 3 is missing
+   or no client folder was chosen; the server half still runs.
+8. **Helpers and state.** Writes the start/stop scripts described below, `credentials.txt`, the
    state and the manifest, and with `-LanIp` adds the inbound firewall rules for 3724 and 8085.
 
 ### Root layout
@@ -247,6 +253,28 @@ rewrites drifted conf keys, restores the bot count, starts a stopped database, r
 database, re-creates a missing account, and then re-checks. `-Uninstall` stops both servers and
 MySQL, then deletes the root and every manifest path; `-KeepDb` dumps the four schemas to
 one dump per schema under `%USERPROFILE%\.win-wow\dumps\<stamp>-<schema>.sql` first.
+
+## The client half: the bags need `Item.dbc`
+
+The loot bags are custom items, and a 3.3.5a client draws an inventory item from its **own**
+`Item.dbc`: without a record there the bag shows the red question mark once it is in the player's
+bags, even though the loot window draws the icon from the packet. Two halves close that gap, and
+this installer writes both:
+
+| Half | Where | Written by |
+|---|---|---|
+| server | `<root>\data\dbc\Item.dbc` | phase 7, so `sItemStore` agrees with `item_template` and the DBC attribute checks run |
+| client | `<client>\Data\patch-*.MPQ` | phase 7, under the highest free patch name so it loads after everything already there |
+
+The client is part of neither install - it lives wherever the player put it - so this runs on the
+host in **both** modes. Under `-Docker` the server half is copied out of the data volume with
+`docker compose cp`, patched, copied back, and the `acore` service is restarted so the running world
+reads it. `-Status` reports the remembered folder, whether a `patch-*.MPQ` is in it, and whether the
+server's `Item.dbc` is present; `-Repair` re-applies the patch.
+
+Python 3 is the one extra requirement, and a fresh Windows often resolves `python.exe` to the
+Microsoft Store alias instead of an interpreter - the installer says so by name and points at
+`winget install --id Python.Python.3.12 -e`.
 
 ## The container path: easy to serve, easy to delete
 

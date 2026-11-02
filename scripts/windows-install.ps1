@@ -103,6 +103,14 @@
     Client data (dbc/maps/vmaps/mmaps): an http(s) URL, a local file, or "none" to skip it.
     Default: the pinned wowgaming client-data 20.0 zip, whose sha256 is checked.
 
+.PARAMETER ClientData
+    The 3.3.5a client folder (the one holding Data\common.MPQ), or "none". The loot bags are
+    custom items, and a client draws an inventory item from its own Item.dbc, so this folder
+    gets a patch archive with the 64 bag records and the server's data\dbc\Item.dbc gets the
+    same records. The client lives outside the install root and outside the container, so this
+    half always runs on the host, for both modes. Default: the remembered folder, or one
+    question when the install starts; the answer is kept in %USERPROFILE%\.win-wow\client-data.
+
 .PARAMETER BootTimeout
     Seconds the first boot may take to report that the world is up (default 1800): the
     native path waits for "World initialized" in the log, the -Docker path for the
@@ -172,6 +180,7 @@ param(
     [string]$Root = 'C:\acore',
     [string]$ReleaseUrl = 'https://github.com/nick-monto/acore-thor-selfhost/releases/download/server-build-win64/acore-server-win64.zip',
     [string]$DataZip = 'https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip',
+    [string]$ClientData = '',
     [int]$BootTimeout = 1800,
     [string]$MysqlUrl = 'https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.9-winx64.zip',
     [switch]$Docker,
@@ -290,6 +299,8 @@ $script:AccountPass = $AccountPass
 $script:LanIp = $LanIp
 $script:ReleaseUrl = $ReleaseUrl
 $script:DataZip = $DataZip
+$script:ClientData = $ClientData
+$script:PythonProblem = ''
 $script:BootTimeout = $BootTimeout
 $script:MysqlUrl = $MysqlUrl
 $script:Docker = [bool]$Docker
@@ -350,8 +361,14 @@ function Die {
 # Note prints what -Check would have done. Call sites guard with $script:DryRun and return, the
 # way thor-install.sh guards its write steps with [ "$CHECK" = 1 ].
 function Note {
+    # -Check is the only mode where nothing happens, so it is the only one where "would" is true:
+    # -Status reports the same lines about an install that already exists.
     param([string]$Message)
-    Write-Host "  would: $Message"
+    if ($script:DryRun) {
+        Write-Host "  would: $Message"
+    } else {
+        Write-Host "  note : $Message"
+    }
 }
 
 function Ok {
@@ -636,6 +653,17 @@ function Confirm-Arguments {
         }
         if ($script:DockerDir -match '^[A-Za-z]:\\?$') {
             Die ("-DockerDir must be a private directory, not the drive root {0}" -f $script:DockerDir)
+        }
+    }
+    # -ClientData is the player's own folder, so it is not created or removed here - but it is
+    # resolved once, up front, so a typo is an error at the start rather than a warning at the end.
+    if ($script:ClientData -and $script:ClientData -ne 'none') {
+        if (-not [System.IO.Path]::IsPathRooted($script:ClientData)) {
+            Die ("-ClientData must be an absolute path or 'none' (got '{0}')" -f $script:ClientData)
+        }
+        $script:ClientData = [System.IO.Path]::GetFullPath($script:ClientData)
+        while ($script:ClientData.Length -gt 3 -and $script:ClientData.EndsWith('\')) {
+            $script:ClientData = $script:ClientData.Substring(0, $script:ClientData.Length - 1)
         }
     }
     # -SelfRef becomes part of a URL and of nothing else, but a space or a quote in it would break
@@ -2441,6 +2469,278 @@ function Disable-FirewallRule {
 
 # ---------------------------------------------------------------- summary
 
+# ---------------------------------------------------------------- the client's Item.dbc
+#
+# The loot bags are custom items (91000-91063), and a 3.3.5a client draws an inventory item from its
+# own Item.dbc: with no record there the bag shows the red question mark once it is in the player's
+# bags, even though the loot window draws it from the packet. Two halves close that - the server's
+# data\dbc\Item.dbc, so sItemStore agrees with item_template and the DBC attribute checks run, and
+# the client's, shipped as a patch archive under its Data directory.
+#
+# The client is part of neither install: it sits wherever the player put it, outside the root and
+# outside the container, which is why this phase runs on the host for both modes. Under -Docker the
+# server half is reached with "docker compose cp" against the data volume.
+
+function Get-ClientDataFile {
+    <# Get-ClientDataFile - the file the chosen client folder is remembered in. #>
+    return (Join-Path $script:HostState 'client-data')
+}
+
+function Read-ClientDataChoice {
+    <# Read-ClientDataChoice - the remembered folder, '' when nothing has been recorded. #>
+    $file = Get-ClientDataFile
+    if (-not (Test-Path -LiteralPath $file)) { return '' }
+    $lines = @(Get-Content -LiteralPath $file -TotalCount 1 -ErrorAction SilentlyContinue)
+    if ($lines.Count -eq 0 -or -not $lines[0]) { return '' }
+    return ([string]$lines[0]).Trim()
+}
+
+function Save-ClientDataChoice {
+    param([string]$Value)
+    if ($script:DryRun) {
+        Note ("record the client folder '{0}' in {1}" -f $Value, (Get-ClientDataFile))
+        return
+    }
+    [void][System.IO.Directory]::CreateDirectory($script:HostState)
+    [System.IO.File]::WriteAllText((Get-ClientDataFile), ($Value + [Environment]::NewLine))
+}
+
+function Test-ClientDataDir {
+    <# Test-ClientDataDir PATH - true when PATH is a 3.3.5a client folder. #>
+    # common.MPQ is what every 3.3.5a install has and nothing else does; the loot-bag patch goes into
+    # <client>\Data, and a folder without it is either the wrong game or the wrong directory.
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $data = Join-Path $Path 'Data'
+    if (-not (Test-Path -LiteralPath $data)) { return $false }
+    return (Test-Path -LiteralPath (Join-Path $data 'common.MPQ'))
+}
+
+function Resolve-ClientRoot {
+    <# Resolve-ClientRoot PATH - the client folder, accepting the Data directory itself too. #>
+    param([string]$Path)
+    if (-not $Path) { return '' }
+    if (Test-ClientDataDir $Path) { return $Path }
+    if ((Split-Path -Leaf $Path) -ieq 'Data') {
+        $parent = Split-Path -Parent $Path
+        if ($parent -and (Test-Path -LiteralPath (Join-Path $Path 'common.MPQ'))) { return $parent }
+    }
+    return ''
+}
+
+function Get-ClientRoot {
+    <# Get-ClientRoot - -ClientData, else the remembered folder, else one question. '' means skip. #>
+    if ($script:ClientData) {
+        if ($script:ClientData -eq 'none') { return '' }
+        $root = Resolve-ClientRoot $script:ClientData
+        if (-not $root) {
+            Die ("-ClientData '{0}' holds no Data\common.MPQ, so it is not a 3.3.5a client folder (pass 'none' to skip the client half)" -f $script:ClientData)
+        }
+        Save-ClientDataChoice $root
+        return $root
+    }
+    $remembered = Read-ClientDataChoice
+    if ($remembered) {
+        if ($remembered -eq 'none') { return '' }
+        if (Test-ClientDataDir $remembered) { return $remembered }
+        Warn ("the remembered client folder '{0}' is gone or is not a 3.3.5a client; asking again" -f $remembered)
+    }
+    if ($script:DryRun -or -not [Environment]::UserInteractive) { return '' }
+    Log 'the loot bags are custom items, so the client needs a patch archive to draw their icons.'
+    Log 'Point this at the folder that holds Data\common.MPQ (the World of Warcraft folder), or press Enter to skip.'
+    $answer = [string](Read-Host 'Client folder')
+    if (-not $answer) {
+        Note 'skipped; pass -ClientData DIR (or -Repair) to do it later'
+        return ''
+    }
+    if ($answer -eq 'none') { Save-ClientDataChoice 'none'; return '' }
+    $root = Resolve-ClientRoot $answer
+    if (-not $root) {
+        Warn ("'{0}' holds no Data\common.MPQ, so the client half is left alone (pass -ClientData DIR next time)" -f $answer)
+        return ''
+    }
+    Save-ClientDataChoice $root
+    return $root
+}
+
+function Get-PythonCommand {
+    <# Get-PythonCommand - the argv prefix that runs Python 3, or $null. #>
+    # python.exe on Windows may be the Microsoft Store stub, which opens the Store instead of
+    # running anything and exits non-zero: the version probe is what tells them apart.
+    $candidates = @(
+        @('python.exe'),
+        @('python3.exe'),
+        @('py.exe', '-3')
+    )
+    $seen = @()
+    foreach ($candidate in $candidates) {
+        $exe = $candidate[0]
+        $cmd = Get-Command $exe -ErrorAction SilentlyContinue
+        if (-not $cmd) { continue }
+        $prefix = @()
+        for ($i = 1; $i -lt $candidate.Count; $i++) { $prefix += $candidate[$i] }
+        $argv = @($prefix) + @('-c', 'import sys; print("%d.%d" % sys.version_info[:2])')
+        $out = [string](Invoke-Native -FilePath $cmd.Source -Arguments $argv -StdOutOnly)
+        if ($LASTEXITCODE -eq 0 -and $out.Trim() -match '^3\.') {
+            return (@($cmd.Source) + $prefix)
+        }
+        # The Microsoft Store ships an app-execution alias under WindowsApps that opens the Store
+        # instead of running anything, and it is what a fresh Windows resolves python.exe to.
+        if ($cmd.Source -match '\\WindowsApps\\') {
+            $seen += ("{0} is the Microsoft Store alias, not a Python install" -f $exe)
+        } else {
+            $seen += ("{0} at {1} did not answer as Python 3" -f $exe, $cmd.Source)
+        }
+    }
+    $seen = @($seen | Select-Object -Unique)
+    if ($seen.Count -gt 0) {
+        $script:PythonProblem = ($seen -join '; ')
+    } else {
+        $script:PythonProblem = 'no python.exe, python3.exe or py.exe on PATH'
+    }
+    return $null
+}
+
+function Get-ItemDbcTool {
+    <# Get-ItemDbcTool - fetch patch_item_dbc.py at -SelfRef; '' when it cannot be fetched. #>
+    $dir = Join-Path $script:HostState 'tools'
+    $tool = Join-Path $dir 'patch_item_dbc.py'
+    $uri = $DockerRepoBase + $script:SelfRef + '/scripts/item-dbc/patch_item_dbc.py'
+    if ($script:DryRun) {
+        if (-not (Test-Path -LiteralPath $tool)) { Note "download $uri to $tool" }
+        return $tool
+    }
+    if (Test-Path -LiteralPath $tool) { return $tool }
+    [void][System.IO.Directory]::CreateDirectory($dir)
+    if (-not (Get-RemoteFile -Uri $uri -Destination $tool)) { return '' }
+    return $tool
+}
+
+function Get-ServerDbcDir {
+    <# Get-ServerDbcDir - a host directory holding the server's Item.dbc, or '' when there is none. #>
+    # Native: the tree the installer unpacked. Docker: the data volume, reached through the running
+    # container, because the volume is not a host path on either engine.
+    if ((Resolve-Mode) -ne 'docker') {
+        $dir = Join-Path $script:DataDir 'dbc'
+        if (Test-Path -LiteralPath (Join-Path $dir 'Item.dbc')) { return $dir }
+        return ''
+    }
+    $dir = Join-Path $env:TEMP ('acore-itemdbc-' + [guid]::NewGuid().ToString('N'))
+    [void][System.IO.Directory]::CreateDirectory($dir)
+    $null = Invoke-Compose -Arguments @('cp', 'acore:/opt/acore/data/dbc/Item.dbc', $dir) -AllowFailure
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'Item.dbc'))) { return '' }
+    return $dir
+}
+
+function Show-ClientPatchStatus {
+    <# Show-ClientPatchStatus - report the loot-bag client half; shared by -Status and -Docker -Status. #>
+    # Reported, not fixed: the client folder is the player's, so the only automatic fix is -Repair,
+    # which runs Install-ClientPatch.
+    $clientRoot = Read-ClientDataChoice
+    if (-not $clientRoot) {
+        Note 'client folder: none recorded (pass -ClientData DIR to write the loot-bag patch into it)'
+    } elseif ($clientRoot -eq 'none') {
+        Note 'client folder: skipped on purpose (the bags keep the red question mark in the bags)'
+    } elseif (-not (Test-ClientDataDir $clientRoot)) {
+        Bad ("client folder: {0} is gone or holds no Data\common.MPQ" -f $clientRoot)
+    } else {
+        $clientData = Join-Path $clientRoot 'Data'
+        $patches = @(Get-ChildItem -LiteralPath $clientData -Filter 'patch-*.MPQ' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^patch-[A-Za-z0-9]+\.MPQ$' })
+        $serverDbc = Join-Path $script:DataDir 'dbc\Item.dbc'
+        if ($patches.Count -gt 0) {
+            Ok ("client folder: {0} ({1} patch archive(s))" -f $clientRoot, $patches.Count)
+        } else {
+            Bad ("client folder: {0} holds no patch-*.MPQ, so the bags keep the red question mark" -f $clientRoot)
+        }
+        if (-not (Test-Path -LiteralPath $serverDbc)) {
+            Bad ("server Item.dbc: {0} is missing (the client data is not installed)" -f $serverDbc)
+        }
+    }
+}
+
+function Install-ClientPatch {
+    Step 'Loot-bag items in Item.dbc'
+    if ($script:DryRun) {
+        $where = $script:DataDir + '\dbc\Item.dbc'
+        if ((Resolve-Mode) -eq 'docker') { $where = '/opt/acore/data/dbc/Item.dbc in the data volume' }
+        Note ("add the 64 bag records to {0}" -f $where)
+        $root = Get-ClientRoot
+        if ($root) { Note ("write a patch archive into {0}" -f (Join-Path $root 'Data')) }
+        $py = Get-PythonCommand
+        if (-not $py) { Note ("python 3 is missing ({0}), so the patch would be skipped" -f $script:PythonProblem) }
+        [void](Get-ItemDbcTool)
+        return
+    }
+    $dbcDir = Get-ServerDbcDir
+    if (-not $dbcDir) {
+        if ($script:DryRun) {
+            Note "add the 64 bag records to $script:DataDir\dbc\Item.dbc once the client data is installed"
+        } else {
+            Warn "no $script:DataDir\dbc\Item.dbc yet, so the bag records were not added (install the client data first)"
+        }
+        return
+    }
+    $clientRoot = Get-ClientRoot
+    $clientData = ''
+    if ($clientRoot) { $clientData = Join-Path $clientRoot 'Data' }
+
+    $py = Get-PythonCommand
+    $tool = Get-ItemDbcTool
+    if (-not $py -or -not $tool) {
+        if (-not $py) {
+            Warn ("python 3 is missing ({0}), so the loot-bag Item.dbc patch is skipped" -f $script:PythonProblem)
+            Warn '  install it with: winget install --id Python.Python.3.12 -e, then re-run -Repair'
+        } else {
+            Warn 'the Item.dbc tool could not be fetched, so the bags keep the red question mark'
+        }
+        return
+    }
+    $out = Join-Path $script:StateDir 'item-dbc'
+    $argv = @($py[1..($py.Count - 1)]) + @($tool, '--dbc', (Join-Path $dbcDir 'Item.dbc'), '--server-dbc', $dbcDir, '--out', $out)
+    if ($clientData) { $argv += @('--client-data', $clientData) }
+    $display = (($py[0] + ' ' + ($argv -join ' ')) -replace [regex]::Escape($tool), $tool)
+    if ($script:DryRun) {
+        Note ("run {0}" -f $display)
+        if ($clientData) { Note ("write a patch archive into {0}" -f $clientData) }
+        return
+    }
+    Log ("running the Item.dbc patch ({0} of 64 bag records)" -f 'patch_item_dbc.py')
+    $null = Invoke-Native -FilePath $py[0] -Arguments $argv
+    if ($LASTEXITCODE -ne 0) {
+        Warn ("the Item.dbc patch failed (exit {0}); the bags keep the red question mark until it runs" -f $LASTEXITCODE)
+        return
+    }
+    Ok ("server Item.dbc: the 64 bag records are in {0}" -f (Join-Path $dbcDir 'Item.dbc'))
+
+    # The container's worldserver read Item.dbc at startup, so the patched copy only counts after a
+    # restart; the data volume is what makes the copy survive one.
+    if ((Resolve-Mode) -eq 'docker') {
+        $null = Invoke-Compose -Arguments @('cp', (Join-Path $dbcDir 'Item.dbc'), 'acore:/opt/acore/data/dbc/Item.dbc') -AllowFailure
+        if (-not $script:DryRun) {
+            Step 'Restarting the realm so it reads the patched Item.dbc'
+            $null = Invoke-Compose -Arguments @('restart', 'acore') -AllowFailure
+            if (-not (Wait-DockerWorld -TimeoutSeconds $script:BootTimeout)) { $script:FirstBootOk = $false }
+        }
+    }
+
+    if (-not $clientData) {
+        Warn 'no client folder was chosen, so the client half was not written: pass -ClientData DIR, or re-run -Repair to be asked'
+        Warn ("  (or copy {0}\item-dbc.MPQ into the client's Data as patch-9.MPQ)" -f $out)
+        return
+    }
+    # --verify reads the client's Data directory back in patch-load order and says which archive the
+    # client will actually use, which is the only thing that decides whether the icon appears.
+    $verifyArgv = @($py[1..($py.Count - 1)]) + @($tool, '--verify', '--client-data', $clientData)
+    $null = Invoke-Native -FilePath $py[0] -Arguments $verifyArgv
+    if ($LASTEXITCODE -eq 0) {
+        Ok ("client Item.dbc: {0} reads the patched file" -f $clientData)
+    } else {
+        Bad ("client Item.dbc: {0} does not read the patched file (run the patch by hand to see why)" -f $clientData)
+    }
+}
+
 function Invoke-Summary {
     Step 'Summary'
     if ($script:DryRun) {
@@ -2828,6 +3128,7 @@ function Invoke-Checks {
             }
         }
     }
+    Show-ClientPatchStatus
     $sqlSources = @(
         (Join-Path $script:SrcDir 'data\sql')
         (Join-Path $script:SrcDir 'modules\mod-playerbots\data\sql')
@@ -3060,6 +3361,10 @@ function Invoke-Repair {
     # comes back without a full reinstall.
     Write-HostWrappers
     Invoke-Checks -Fix
+    # The client half is not a conf key or a file this script owns: it is a Python run against the
+    # player's client folder and the server's Item.dbc, so -Repair re-applies it rather than checking
+    # it, and the re-check below reports what it produced.
+    Install-ClientPatch
     $repaired = $script:Fixes
     $script:Problems = 0
     Log ''
@@ -3234,6 +3539,7 @@ function Invoke-Install {
     New-Schema
     Write-Configs
     Invoke-FirstBoot
+    Install-ClientPatch
     Write-Helpers
     Write-HostWrappers
     Enable-Firewall
@@ -3582,6 +3888,9 @@ function Invoke-DockerInstall {
         $script:FirstBootOk = $false
     }
     Set-DockerRealmPin
+    # After the first boot, because the container's data volume - and with it the server's
+    # Item.dbc - only exists once the entrypoint has unpacked the client data.
+    Install-ClientPatch
     # -LanIp opens the same two rules as the native path, through the same helper and the same
     # manifest entries, so -Uninstall removes them whichever mode installed them.
     Enable-Firewall
@@ -3719,6 +4028,8 @@ function Invoke-DockerStatus {
         Log '--    realm 1 address: not readable (the db container is not up)'
     }
 
+    Show-ClientPatchStatus
+
     if ($script:LanIp -and (Have 'Get-NetFirewallRule')) {
         foreach ($port in @($AuthPort, $WorldPort)) {
             $name = Get-FirewallRuleName -Port $port
@@ -3754,6 +4065,7 @@ function Invoke-DockerRepair {
         $script:FirstBootOk = $false
     }
     Set-DockerRealmPin
+    Install-ClientPatch
     Save-Mode -Mode 'docker'
     Save-State
     Log ''
