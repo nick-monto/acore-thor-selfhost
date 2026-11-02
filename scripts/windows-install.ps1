@@ -1602,8 +1602,7 @@ function Install-MySql {
 function New-Schema {
     Step 'Databases and user'
     if ($script:DryRun) {
-        Log ("would create acore_auth, acore_world, acore_characters and the MySQL user '{0}'" -f $script:DbUser)
-        Log '(acore_playerbots is created by the module''s own updater on first boot)'
+        Log ("would create acore_auth, acore_world, acore_characters, acore_playerbots and the MySQL user '{0}'" -f $script:DbUser)
         return
     }
     # The same statements create_schema runs on the Thor. The user is created for 127.0.0.1 only:
@@ -1613,6 +1612,10 @@ function New-Schema {
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
+-- acore_playerbots is created here, not left to the playerbots module: the core's DBUpdater opens
+-- every database in the conf at startup and asks on stdin "Do you want to create it?"
+-- (DBUpdater.cpp:228-232) when one is missing, which a headless first boot can only wait on.
+CREATE DATABASE IF NOT EXISTS acore_playerbots;
 CREATE USER IF NOT EXISTS '$($script:DbUser)'@'127.0.0.1' IDENTIFIED BY '$($script:DbPass)';
 ALTER USER '$($script:DbUser)'@'127.0.0.1' IDENTIFIED BY '$($script:DbPass)';
 GRANT ALL PRIVILEGES ON acore_auth.*       TO '$($script:DbUser)'@'127.0.0.1';
@@ -1923,6 +1926,10 @@ function Invoke-WorldConsole {
     # so "configs\worldserver.conf" and a full path are not interchangeable.
     $confArg = 'configs\worldserver.conf'
     if ($ConfPath) { $confArg = '"' + $ConfPath + '"' }
+    # The core asks on stdin before it creates a database it cannot find (DBUpdater.cpp:228-232).
+    # With no console attached that question can only wait, so every worldserver this installer
+    # starts is told to answer it: anything missing is created.
+    $env:AC_DISABLE_INTERACTIVE = '1'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $env:ComSpec
     if (-not $psi.FileName -or -not (Test-Path -LiteralPath $psi.FileName)) {
@@ -2162,6 +2169,9 @@ foreach ($dir in @($logs, $state)) {
     if (-not (Test-Path -LiteralPath $dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
 }
 Remove-Item -LiteralPath $request -ErrorAction SilentlyContinue
+# Nothing here may wait on a question: the core asks on stdin before creating a missing database
+# (DBUpdater.cpp:228-232), and this process never answers.
+$env:AC_DISABLE_INTERACTIVE = '1'
 Invoke-Child (Join-Path $root 'start-db.cmd')
 if ($LASTEXITCODE -ne 0) { Write-Host 'the database did not start'; exit 1 }
 

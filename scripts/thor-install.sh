@@ -578,7 +578,10 @@ world_console() {   # world_console TIMEOUT "console command" ...
     : > "$aslog"
     "$BIN_DIR/authserver" -c "$CONF_DIR/authserver.conf" > "$aslog" 2>&1 &
     local as_pid=$!
-    "$BIN_DIR/worldserver" -c "$console_conf" < "$fifo" > "$wslog" 2>&1 &
+    # AC_DISABLE_INTERACTIVE: the core asks on stdin before creating a database it cannot find
+    # (DBUpdater.cpp:228-232), and this stdin is the fifo below, so the question would swallow
+    # the first console command and block until the timeout.
+    AC_DISABLE_INTERACTIVE=1 "$BIN_DIR/worldserver" -c "$console_conf" < "$fifo" > "$wslog" 2>&1 &
     local ws_pid=$!
     exec 9<> "$fifo"         # read-write, so this cannot block when the server failed to start
                              # (opening for write alone waits for a reader that a dead process never opens)
@@ -1609,13 +1612,17 @@ create_schema() {
     # DB_PASS and ACCOUNT_PASS were settled by default_credentials() in main().
     if [ "$CHECK" = 1 ]; then
         log "would create acore_auth, acore_world, acore_characters and the MySQL user '$DB_USER'"
-        log "(acore_playerbots is created by the module's own updater on first boot)"
+        log "(acore_playerbots is created here too: the core asks on stdin before making one)"
         return 0
     fi
     if ! mysql_admin <<SQL
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
+# acore_playerbots is created here, not left to the playerbots module: the core's DBUpdater opens
+# every database in the conf at startup and asks on stdin "Do you want to create it?"
+# (DBUpdater.cpp:228-232) when one is missing, which the fifo-driven first boot cannot answer.
+CREATE DATABASE IF NOT EXISTS acore_playerbots;
 CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
 ALTER USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
 GRANT ALL PRIVILEGES ON acore_auth.*       TO '$DB_USER'@'127.0.0.1';

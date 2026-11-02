@@ -53,6 +53,11 @@ AS_LOG="$LOGS/authserver.out"
 # compose healthcheck for this service and the -Docker readiness probe both read it.
 READY="$STATE/world-ready"
 
+# The core asks on stdin before creating a database it cannot find (DBUpdater.cpp:228-232). This
+# container has no console, so the answer is pre-given: anything missing is created. AC_* is the
+# core's own switch for exactly this.
+export AC_DISABLE_INTERACTIVE=1
+
 for required in DB_PASS DB_ROOT_PASS ACCOUNT_PASS; do
     [ -n "${!required}" ] || die "$required is empty: set it (docker/docker-compose.yml gives it a default, docker run does not)"
 done
@@ -93,8 +98,13 @@ init_schemas() {
     #
     # CREATE IF NOT EXISTS plus ALTER USER makes this idempotent and keeps the password in step
     # with DB_PASS across restarts, which is what the mysql image's one-shot MYSQL_PASSWORD cannot
-    # do. The playerbots module creates its own schema on first boot; the grant on a database that
-    # does not exist yet is what lets the realm's own user create it.
+    # do.
+    #
+    # acore_playerbots is created here, not left to the playerbots module: the core's DBUpdater
+    # opens every database in the conf at startup, and for one that is missing it asks on stdin
+    # "Do you want to create it?" (DBUpdater.cpp:228-232). This container's worldserver reads stdin
+    # from a fifo, so that question blocks the first boot until the timeout, and the module's own
+    # updater never gets to run.
     local user pass
     user="$(sql_escape "$DB_USER")"
     pass="$(sql_escape "$DB_PASS")"
@@ -102,6 +112,7 @@ init_schemas() {
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
+CREATE DATABASE IF NOT EXISTS acore_playerbots;
 CREATE USER IF NOT EXISTS '$user'@'%' IDENTIFIED BY '$pass';
 ALTER USER '$user'@'%' IDENTIFIED BY '$pass';
 GRANT ALL PRIVILEGES ON acore_auth.*       TO '$user'@'%';
@@ -113,7 +124,7 @@ SQL
     then
         die "mysql rejected the schema setup as root@$DB_HOST (is DB_ROOT_PASS the same one the db service was initialised with?)"
     fi
-    log "schemas acore_auth/acore_world/acore_characters and user '$DB_USER'@'%' are in place"
+    log "schemas acore_auth/acore_world/acore_characters/acore_playerbots and user '$DB_USER'@'%' are in place"
 }
 
 # --- 3. client data ----------------------------------------------------------------------------
