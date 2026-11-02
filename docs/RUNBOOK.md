@@ -77,6 +77,25 @@ Neither check proves the module links or behaves — the arm64 build and a clien
 
 ---
 
+## Part 0b — What the installer fetches, and the commit it fetches from
+
+Both installers download code and then run it: `docker/entrypoint.sh`, `docker/Dockerfile`, `docker/docker-compose.yml` and `scripts/write-confs.sh` as root inside the container, and `scripts/item-dbc/patch_item_dbc.py` with `scripts/loot-bags/gen_loot_bags.py` as you. A branch is a moving pointer, so the ref is resolved to a commit on the first fetch and recorded:
+
+| installer | ref | recorded as |
+|---|---|---|
+| `scripts/thor-install.sh` | `SELF_REF` (default `main`) | `SELF_REF_SHA` in `state.env` |
+| `scripts/windows-install.ps1` | `-SelfRef` (default `main`) | `SELF_REF_SHA` in `.win-state\state.env` |
+
+Every download then addresses the commit, never the branch: `raw.githubusercontent.com/<repo>/<commit>/…` and `codeload.github.com/<repo>/tar.gz/<commit>`. A commit is content-addressed — GitHub cannot serve different bytes for the same commit — so a repair re-fetches what the install was pinned to, and a branch or tag that moves after the install cannot change what an installed realm runs.
+
+- **Install from a known commit:** `SELF_REF=<40-hex>` / `-SelfRef <40-hex>`. Nothing is resolved; the commit is used directly.
+- **Move an existing install to the tip:** name the ref explicitly — `SELF_REF=main thor-install.sh --repair` on the device, `-SelfRef main -Docker -Repair` on Windows. An explicitly named ref is resolved again and the new commit recorded.
+- **When GitHub's API is unreachable** the installer says so and falls back to the ref itself for that run. The lookup is one unauthenticated request per install, or authenticated when `--github-token` / `THOR_GH_TOKEN` is set.
+
+The server artifact is a separate download and is checked against the `.sha256` beside it; the client data is pinned by a hard-coded SHA-256 that fails the install on a mismatch.
+
+---
+
 ## Part 0 — What you need
 1. Termux from **F-Droid** (the Play Store build is deprecated) [R].
 2. ~12 GB free: server ~5 GB (binaries, `maps`/`vmaps`/`mmaps` ~1.2 GB packed, world/characters DB ~1.5–2 GB) + client ~10 GB.

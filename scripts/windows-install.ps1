@@ -306,6 +306,7 @@ $script:MysqlUrl = $MysqlUrl
 $script:Docker = [bool]$Docker
 $script:DockerDir = $DockerDir
 $script:SelfRef = $SelfRef
+$script:SelfRefSha = ''   # resolved once by Resolve-SelfRef; every download uses it
 # Root password of the db container. Generated at a container install and read back from the state
 # file afterwards: the mysql image initialises its volume with the password it is given once, so a
 # second, different one would leave the entrypoint unable to log in as root.
@@ -473,6 +474,55 @@ function Get-FreeSpaceGb {
     } catch {
         return -1
     }
+}
+
+function Get-FetchRef {
+    <# Get-FetchRef - the ref every download uses: the resolved commit, or the ref as given. #>
+    if ($script:SelfRefSha) { return $script:SelfRefSha }
+    return $script:SelfRef
+}
+
+function Resolve-SelfRef {
+    <# Resolve-SelfRef - pin -SelfRef to a commit, once, and fetch from that commit from then on. #>
+    # -SelfRef defaults to a branch, and a branch is a moving pointer: the entrypoint.sh this installer
+    # fetches and runs as root inside the acore container, the compose file, and the two python files
+    # it runs as the user are whatever main holds at that moment. A commit is content-addressed -
+    # GitHub cannot serve different bytes for the same commit - so the first run resolves the ref once
+    # and records the commit in the state file; every later -Repair fetches from the recorded commit,
+    # and a branch or tag that moves afterwards cannot change what an installed realm runs.
+    # Passing -SelfRef explicitly asks for that ref, so it is resolved again.
+    if ($script:SelfRef -match '^[0-9a-fA-F]{40}$') {
+        $script:SelfRefSha = $script:SelfRef.ToLowerInvariant()
+        return
+    }
+    if ($script:SelfRefSha -and -not $script:Bound.ContainsKey('SelfRef')) {
+        Note ("-SelfRef '{0}' is pinned to {1} (recorded at install time)" -f $script:SelfRef, $script:SelfRefSha.Substring(0, 12))
+        return
+    }
+    if ($script:DryRun) {
+        Note ("would resolve -SelfRef '{0}' to a commit and fetch from that" -f $script:SelfRef)
+        return
+    }
+    $sha = ''
+    try {
+        $api = 'https://api.github.com/repos/nick-monto/acore-thor-selfhost/commits/' + $script:SelfRef
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $api -Headers @{
+            'Accept' = 'application/vnd.github+json'
+            'User-Agent' = 'acore-thor-installer'
+        }
+        $json = $response.Content | ConvertFrom-Json
+        if ($json -and ([string]$json.sha) -match '^[0-9a-fA-F]{40}$') { $sha = ([string]$json.sha).ToLowerInvariant() }
+    } catch {
+        $sha = ''
+    }
+    if ($sha) {
+        $script:SelfRefSha = $sha
+        Save-State
+        Note ("-SelfRef '{0}' pinned to commit {1}" -f $script:SelfRef, $sha.Substring(0, 12))
+        return
+    }
+    Warn ("-SelfRef '{0}' is not a commit and could not be resolved, so the files fetched below are whatever that ref holds when they are fetched" -f $script:SelfRef)
+    Warn '  pass -SelfRef <40-character commit> to pin them'
 }
 
 function Get-RemoteFile {
@@ -770,6 +820,7 @@ function Save-State {
         ('DOCKER_DIR="{0}"' -f $script:DockerDir)
         ('DB_ROOT_PASS="{0}"' -f $script:DockerRootPass)
         ('SELF_REF="{0}"' -f $script:SelfRef)
+        ('SELF_REF_SHA="{0}"' -f $script:SelfRefSha)
         ('VERSION="{0}"' -f $ScriptVersion)
         ('INSTALLED_AT="{0}"' -f $stamp)
     )
@@ -817,6 +868,8 @@ function Import-State {
             'DOCKER_DIR' { if ($value -and -not $script:Bound.ContainsKey('DockerDir')) { $script:DockerDir = $value } }
             'DB_ROOT_PASS' { $script:DockerRootPass = $value }
             'SELF_REF' { if ($value -and -not $script:Bound.ContainsKey('SelfRef')) { $script:SelfRef = $value } }
+            # Recorded once, at the run that resolved the ref; the command line can still override it.
+            'SELF_REF_SHA' { if (-not $script:Bound.ContainsKey('SelfRef')) { $script:SelfRefSha = $value } }
         }
     }
     Reset-Paths
@@ -2735,13 +2788,13 @@ function Get-ItemDbcTool {
     $missing = @($files | Where-Object { -not (Test-Path -LiteralPath $_.Path) })
     if ($script:DryRun) {
         foreach ($entry in $missing) {
-            Note ("download {0}{1}/{2} to {3}" -f $DockerRepoBase, $script:SelfRef, $entry.Rel, $entry.Path)
+            Note ("download {0}{1}/{2} to {3}" -f $DockerRepoBase, (Get-FetchRef), $entry.Rel, $entry.Path)
         }
         return $tool
     }
     foreach ($entry in $missing) {
         [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $entry.Path))
-        $uri = $DockerRepoBase + $script:SelfRef + '/' + $entry.Rel
+        $uri = $DockerRepoBase + (Get-FetchRef) + '/' + $entry.Rel
         if (-not (Get-RemoteFile -Uri $uri -Destination $entry.Path)) { return '' }
     }
     return $tool
@@ -3500,7 +3553,9 @@ function Invoke-Repair {
     Invoke-Checks -Fix
     # The client half is not a conf key or a file this script owns: it is a Python run against the
     # player's client folder and the server's Item.dbc, so -Repair re-applies it rather than checking
-    # it, and the re-check below reports what it produced.
+    # it, and the re-check below reports what it produced. The tool it runs comes from the commit the
+    # install is pinned to, so the ref is resolved here too when this mode did not do it already.
+    Resolve-SelfRef
     Install-ClientPatch
     $repaired = $script:Fixes
     $script:Problems = 0
@@ -3676,6 +3731,7 @@ function Invoke-Install {
     New-Schema
     Write-Configs
     Invoke-FirstBoot
+    Resolve-SelfRef
     Install-ClientPatch
     Write-Helpers
     Write-HostWrappers
@@ -3858,7 +3914,7 @@ function Test-DockerPrerequisites {
 function Install-DockerAssets {
     <# Install-DockerAssets - fetch the four container files into <root>\docker-src at -SelfRef. #>
     Step 'Container files'
-    $base = $DockerRepoBase + $script:SelfRef + '/'
+    $base = $DockerRepoBase + (Get-FetchRef) + '/'
     if ($script:DryRun) {
         foreach ($rel in $DockerFiles) {
             Note ("download {0}{1} to {2}" -f $base, $rel, (Join-Path $script:DockerDir ($rel.Replace('/', '\'))))
@@ -3871,7 +3927,7 @@ function Install-DockerAssets {
         if ($dir) { [void][System.IO.Directory]::CreateDirectory($dir) }
         Log ("fetching {0}{1}" -f $base, $rel)
         if (-not (Get-RemoteFile -Uri ($base + $rel) -Destination $dest)) {
-            Die ("could not fetch {0}{1}: check -SelfRef (currently '{2}') and the network" -f $base, $rel, $script:SelfRef)
+            Die ("could not fetch {0}{1}: check -SelfRef (currently '{2}') and the network" -f $base, $rel, (Get-FetchRef))
         }
     }
     # A 404 from raw.githubusercontent.com lands as a file with the error text in it on some
@@ -4013,6 +4069,7 @@ function Invoke-DockerInstall {
     # leave no record of it - every later -Repair then generated a different one, could not log in
     # as root, and reported "Access denied for user 'root'@'172.18.0.3'".
     Save-State
+    Resolve-SelfRef
     Install-DockerAssets
     Set-DockerEnvironment
     # The staging directory is this mode's own tree. Recorded like any other path outside the root,
@@ -4216,7 +4273,9 @@ function Invoke-DockerRepair {
         Warn '    docker stop acore-reset   (then run this again)'
     }
     # Re-fetching is cheap (four small text files) and it is how a drifted compose file or a fixed
-    # entrypoint comes back without touching the volumes.
+    # entrypoint comes back without touching the volumes - from the commit the install was pinned to,
+    # not from whatever the branch holds now.
+    Resolve-SelfRef
     Install-DockerAssets
     Set-DockerEnvironment
     Assert-DockerRootPassword

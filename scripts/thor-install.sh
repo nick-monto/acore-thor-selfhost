@@ -72,7 +72,16 @@ PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
 # well when the script is installed from a copy of the repo. --github-token (THOR_GH_TOKEN) is what
 # makes that work while private.
 SELF_REPO="nick-monto/acore-thor-selfhost"
+# A branch is a moving pointer: the two python files this script runs, and the tarball it extracts the
+# modules and the SQL from, are whatever that branch holds at that moment. A commit is content
+# addressed, so SELF_REF is resolved to one on the first fetch and recorded in the state; a --repair
+# then fetches from the recorded commit. Setting SELF_REF yourself asks for that ref, so it is
+# resolved again.
+SELF_REF_GIVEN=0
+[ -n "${SELF_REF:-}" ] && SELF_REF_GIVEN=1
 SELF_REF="${SELF_REF:-main}"
+SELF_REF_SHA="${SELF_REF_SHA:-}"   # recorded in state.env; the commit this install is pinned to
+FETCH_REF=""                        # set by resolve_self_ref: what every download below uses
 RELEASE_URL="${THOR_RELEASE_URL:-https://github.com/nick-monto/acore-thor-selfhost/releases/latest/download/acore-server-arm64.tar.zst}"
 GH_TOKEN_OPT="${THOR_GH_TOKEN:-}"
 DATA_URL="https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
@@ -232,6 +241,50 @@ default_credentials() {
 
 sha256_file() { sha256sum "$1" | awk '{print $1}'; }
 
+is_commit() {   # is_commit TEXT - true when TEXT is a full git commit id
+    printf '%s' "$1" | grep -Eq '^[0-9a-f]{40}$'
+}
+
+short_commit() { printf '%s' "$1" | cut -c1-12; }
+
+resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and fetch from that commit
+    [ -n "$FETCH_REF" ] && return 0
+    FETCH_REF="$SELF_REF"
+    is_commit "$SELF_REF" && return 0
+    if [ "$SELF_REF_GIVEN" = 0 ] && is_commit "$SELF_REF_SHA"; then
+        FETCH_REF="$SELF_REF_SHA"
+        note "fetching from the commit this install is pinned to ($(short_commit "$SELF_REF_SHA"))"
+        return 0
+    fi
+    if [ "$CHECK" = 1 ]; then
+        note "would resolve $SELF_REF to a commit and fetch from that commit"
+        return 0
+    fi
+    local api sha
+    api="https://api.github.com/repos/$SELF_REPO/commits/$SELF_REF"
+    sha=""
+    if have curl; then
+        # grep -o, not sed with .*"sha": the JSON is one line and .* is greedy, so sed returns the
+        # last 40-hex after "sha" - a tree or parent id - instead of the commit's own. The first
+        # match wins: the commit object starts with {"sha":"<the commit>".
+        sha="$(curl_gh -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: acore-thor-installer' \
+            "$api" 2>/dev/null \
+            | grep -oE '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' | head -1 | grep -oE '[0-9a-f]{40}')"
+    fi
+    if is_commit "$sha"; then
+        SELF_REF_SHA="$sha"
+        FETCH_REF="$sha"
+        note "$SELF_REF pinned to commit $(short_commit "$sha")"
+        # Persisted here as well as at the end of the install: the first fetch can run after that
+        # save, and an unrecorded pin is a pin the next --repair does not use.
+        state_save
+        return 0
+    fi
+    warn "$SELF_REF is not a commit and could not be resolved, so the files fetched below are whatever that ref holds when they are fetched"
+    warn "  set SELF_REF to a 40-character commit to pin them"
+    return 0
+}
+
 curl_gh() {   # curl_gh ARGS... - adds the token when one is set, i.e. for a private repository
     if [ -n "$GH_TOKEN_OPT" ]; then
         curl -H "Authorization: Bearer $GH_TOKEN_OPT" -H "Accept: application/octet-stream" "$@"
@@ -369,6 +422,8 @@ DATA_SRC="$DATA_SRC"
 GH_TOKEN_OPT="$GH_TOKEN_OPT"
 ARTIFACT_SHA="$ARTIFACT_SHA"
 SCRIPT_VERSION="$SCRIPT_VERSION"
+SELF_REF="$SELF_REF"
+SELF_REF_SHA="$SELF_REF_SHA"
 EOF
     umask 022
     chmod 600 "$file"
@@ -927,6 +982,7 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
 
 fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the two python files
     local base="$1" rel dest
+    resolve_self_ref
     if [ "$CHECK" = 1 ]; then
         note "fetch scripts/item-dbc/patch_item_dbc.py and scripts/loot-bags/gen_loot_bags.py from $SELF_REPO@$SELF_REF into $base"
         return 0
@@ -942,7 +998,7 @@ fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the two python f
     for rel in scripts/item-dbc/patch_item_dbc.py scripts/loot-bags/gen_loot_bags.py; do
         dest="$base/${rel#scripts/}"
         mkdir -p "$(dirname "$dest")"
-        if ! curl_gh -fsSL --retry 3 -o "$dest.tmp" "https://raw.githubusercontent.com/$SELF_REPO/$SELF_REF/$rel"; then
+        if ! curl_gh -fsSL --retry 3 -o "$dest.tmp" "https://raw.githubusercontent.com/$SELF_REPO/$FETCH_REF/$rel"; then
             rm -f "$dest.tmp"
             warn "cannot fetch $rel from $SELF_REPO@$SELF_REF (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
             # Offline or a wrong ref: an older copy still beats not running the step at all.
@@ -1420,6 +1476,7 @@ apply_playerbots_patch() {   # apply_playerbots_patch MODULE-DIR PATCH-FILE
 fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's module and custom SQL
     local parent="$1" sql_parent="${2:-}"
     have curl || die "curl is needed to fetch the module source (apt-get install curl)"
+    resolve_self_ref
     mkdir -p "$parent"
     if [ -n "$GH_TOKEN_OPT" ]; then
         log "fetching $SELF_REPO@$SELF_REF as a tarball (private repository: using the token)"
@@ -1431,8 +1488,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     # history and no checkout.
     local tarball
     tarball="$(mktemp)"
-    curl_gh -fL --retry 3 -o "$tarball" "https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF" \
-        || die "cannot download https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
+    curl_gh -fL --retry 3 -o "$tarball" "https://codeload.github.com/$SELF_REPO/tar.gz/$FETCH_REF" \
+        || die "cannot download https://codeload.github.com/$SELF_REPO/tar.gz/$FETCH_REF (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
     # --strip-components=2 removes "<repo>-<ref>/modules/" so each tree lands as
     # $parent/<module-name>.
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
@@ -1487,9 +1544,10 @@ refresh_custom_sql() {   # fetch only sql/custom from this repo into $SRC_DIR/da
         # just download the same tarball again.
         return 0
     fi
-    url="https://codeload.github.com/$SELF_REPO/tar.gz/$SELF_REF"
+    resolve_self_ref
+    url="https://codeload.github.com/$SELF_REPO/tar.gz/$FETCH_REF"
     if [ "$CHECK" = 1 ]; then
-        log "would fetch $SELF_REPO@$SELF_REF sql/custom into $sql_parent"
+        log "would fetch $SELF_REPO@$FETCH_REF sql/custom into $sql_parent"
         return 0
     fi
     if [ ! -d "$sql_parent" ]; then
