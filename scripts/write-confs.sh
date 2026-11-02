@@ -279,6 +279,8 @@ conf_defaults() {
 #   WC_MYSQL_EXEC the mysql client the server runs SQL with
 #   WC_DB_USER    / WC_DB_PASS   credentials in the three *DatabaseInfo strings
 #   WC_BOTS       playerbots population (Min and Max)
+#   WC_HORDE_RATIO  percentage of random bots on the Horde side; Alliance is 100 minus it. Empty
+#                   leaves the pair alone, which is what the Thor's set-ratio.sh relies on.
 #   WC_BIND_IP    the worldserver/authserver bind address
 #   WC_NEAR_BOTS, WC_NEAR_MIN_DISTANCE, WC_NEAR_VISIT_MIN, WC_NEAR_VISIT_MAX,
 #   WC_NEAR_AWAY_MIN, WC_NEAR_AWAY_MAX  the playerbots near-player window
@@ -332,6 +334,13 @@ wc_write_all() {
         wc_set_conf "$pb" Playerbots.RandomBotAutologin    1
         wc_set_conf "$pb" Playerbots.MinRandomBots         "$WC_BOTS"
         wc_set_conf "$pb" Playerbots.MaxRandomBots         "$WC_BOTS"
+        # Faction split. Alliance is the remainder, so the pair always sums to 100 - the same rule
+        # the Thor's set-ratio.sh applies, kept here so a container render and a device render
+        # cannot disagree. Unset leaves whatever the file already holds.
+        if [ -n "$WC_HORDE_RATIO" ]; then
+            wc_set_conf "$pb" Playerbots.RandomBotHordeRatio    "$WC_HORDE_RATIO"
+            wc_set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - WC_HORDE_RATIO))"
+        fi
         # Solo-friendly default: keep the bot population level-appropriate for, and inside the zone
         # of, real players instead of spreading it over the whole world. The keys are ignored by an
         # unpatched playerbots build, so an older artifact still starts normally.

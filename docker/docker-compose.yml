@@ -89,6 +89,9 @@ services:
       # Root is used once, by the entrypoint, to create the schemas and DB_USER.
       DB_ROOT_PASS: ${DB_ROOT_PASS:-acore}
       BOTS: ${BOTS:-50}
+      # Percentage of the random bots on the Horde side; Alliance is the remainder. Rendered into
+      # playerbots.conf on every start, the same way BOTS is.
+      HORDE_RATIO: ${HORDE_RATIO:-50}
       BIND_IP: ${BIND_IP:-0.0.0.0}
       ACCOUNT: ${ACCOUNT:-admin}
       ACCOUNT_PASS: ${ACCOUNT_PASS:-password}

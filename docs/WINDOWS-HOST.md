@@ -150,6 +150,7 @@ The default install is `C:\acore`. Add `-Root D:\acore` to move it.
 | `-Force` | | Replace an installed build: re-download and re-unpack over it. Without it an existing `<root>` is left alone and only the missing pieces are added |
 | `-Help` | | Print the usage text and exit |
 | `-Bots N` | `50` | Number of random bots (`Playerbots.MinRandomBots` and `MaxRandomBots`) |
+| `-HordeRatio P` | `50` | Percentage of random bots on the Horde side, 0-100; Alliance is the remainder, so the pair always sums to 100. Under `-Docker` it is the container's `HORDE_RATIO` and `write-confs.sh` renders it at every start; natively it is written into `playerbots.conf` and reconciled by `-Repair` |
 | `-DbUser` | `acore` | MySQL user created for the server, over `127.0.0.1` |
 | `-DbPass` | generated | That user's password; generated and recorded in `credentials.txt` when not given |
 | `-Account` | `admin` | First GM account name |
@@ -356,7 +357,9 @@ populated realm untouched: only the binaries under `/opt/acore` are replaced.
 The entrypoint sources `scripts/write-confs.sh` and calls `wc_write_all`, which is the same library
 `scripts/thor-install.sh` delegates to - its `write_configs()` maps the installer's variables to the
 `WC_*` ones and calls the same function. All three paths therefore write the same keys with the same
-values: bots and the near-player window, the loot keys that make mercenaries pass,
+values: bots and the near-player window, the faction split (the container renders it from
+`HORDE_RATIO`, the device writes it with `set-ratio.sh`, and both keep Alliance as the remainder so
+the pair sums to 100), the loot keys that make mercenaries pass,
 `Playerbots.AddClassCommand = 0`, instant flight paths, the hardcore death policy, and the survivor
 and interact dials. That is the point of the refactor: a key is added or changed in one file, and no
 host shape can silently disagree with another. The library produces byte-identical confs to the

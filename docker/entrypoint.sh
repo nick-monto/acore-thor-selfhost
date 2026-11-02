@@ -27,6 +27,7 @@ DB_USER="${DB_USER:-acore}"
 DB_PASS="${DB_PASS:-}"
 DB_ROOT_PASS="${DB_ROOT_PASS:-}"
 BOTS="${BOTS:-50}"
+HORDE_RATIO="${HORDE_RATIO:-50}"
 BIND_IP="${BIND_IP:-0.0.0.0}"
 ACCOUNT="${ACCOUNT:-admin}"
 ACCOUNT_PASS="${ACCOUNT_PASS:-}"
@@ -62,6 +63,8 @@ for required in DB_PASS DB_ROOT_PASS ACCOUNT_PASS; do
     [ -n "${!required}" ] || die "$required is empty: set it (docker/docker-compose.yml gives it a default, docker run does not)"
 done
 case "$BOTS" in ''|*[!0-9]*) die "BOTS must be a number, got '$BOTS'" ;; esac
+case "$HORDE_RATIO" in ''|*[!0-9]*) die "HORDE_RATIO must be a number, got '$HORDE_RATIO'" ;; esac
+[ "$HORDE_RATIO" -le 100 ] || die "HORDE_RATIO must be 0-100, got '$HORDE_RATIO'"
 case "$BOOT_TIMEOUT" in ''|*[!0-9]*) die "BOOT_TIMEOUT must be a number, got '$BOOT_TIMEOUT'" ;; esac
 
 # sql_escape VALUE - VALUE as the body of a MySQL string literal. Credentials are user input; a
@@ -186,6 +189,7 @@ write_confs() {
     WC_DB_USER="$DB_USER"
     WC_DB_PASS="$DB_PASS"
     WC_BOTS="$BOTS"
+    WC_HORDE_RATIO="$HORDE_RATIO"
     WC_BIND_IP="$BIND_IP"
     WC_NEAR_BOTS="$NEAR_BOTS"
     WC_NEAR_MIN_DISTANCE="$NEAR_MIN_DISTANCE"
