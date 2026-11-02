@@ -254,6 +254,9 @@ resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and 
     if [ "$SELF_REF_GIVEN" = 0 ] && is_commit "$SELF_REF_SHA"; then
         FETCH_REF="$SELF_REF_SHA"
         note "fetching from the commit this install is pinned to ($(short_commit "$SELF_REF_SHA"))"
+        # The pin is why a --repair after a push keeps running the old files. Say what moves it here,
+        # where the confusion happens, and not only in the runbook.
+        note "  a newer $SELF_REF does not apply by itself: set SELF_REF=$SELF_REF to resolve and record it"
         return 0
     fi
     if [ "$CHECK" = 1 ]; then

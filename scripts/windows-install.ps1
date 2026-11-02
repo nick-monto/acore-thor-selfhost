@@ -497,6 +497,9 @@ function Resolve-SelfRef {
     }
     if ($script:SelfRefSha -and -not $script:Bound.ContainsKey('SelfRef')) {
         Note ("-SelfRef '{0}' is pinned to {1} (recorded at install time)" -f $script:SelfRef, $script:SelfRefSha.Substring(0, 12))
+        # The pin is why a repair after a push keeps running the old files. Say what moves it, where
+        # the confusion happens, rather than only in the runbook.
+        Note ("  a newer {0} does not apply by itself: pass -SelfRef {0} to resolve and record it" -f $script:SelfRef)
         return
     }
     if ($script:DryRun) {
