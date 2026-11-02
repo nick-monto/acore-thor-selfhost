@@ -1341,6 +1341,37 @@ function Stop-Db {
 
 # ---------------------------------------------------------------- install phases
 
+function Test-DockerRootPassword {
+    <# Test-DockerRootPassword -Password P - true when the running db accepts P as root. #>
+    param([string]$Password)
+    if (-not $Password) { return $false }
+    if ($script:DryRun) { return $false }
+    $id = ([string](Invoke-Compose -Arguments @('ps', '-q', 'db') -Capture -AllowFailure)).Trim()
+    if (-not $id) { return $false }
+    if ((Get-DockerInspectField -Id $id -Format '{{.State.Status}}') -ne 'running') { return $false }
+    $probe = @('exec', '-T', '-e', ('MYSQL_PWD=' + $Password), 'db',
+        'mysql', '--protocol=TCP', '-h', '127.0.0.1', '-uroot', '-N', '-e', 'select 1')
+    $null = Invoke-Compose -Arguments $probe -Capture -AllowFailure
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Resolve-DockerRootPassword {
+    <# Resolve-DockerRootPassword - adopt the compose default when the volume answers to it. #>
+    # The recorded password is authoritative; this only covers a volume created before the state
+    # existed (or by hand), where the password is the compose file's own default. Adopting it is the
+    # difference between a -Repair that continues and one that stops and tells the user to wipe the
+    # realm for a password that is already correct.
+    if ($script:DockerRootPass) { return }
+    if ($script:DryRun) { return }
+    $id = ([string](Invoke-Compose -Arguments @('ps', '-q', 'db') -Capture -AllowFailure)).Trim()
+    if (-not $id) { return }
+    if (Test-DockerRootPassword -Password 'acore') {
+        $script:DockerRootPass = 'acore'
+        Save-State
+        Note "the db volume answers to the compose default root password; recording it in $script:StateFile"
+    }
+}
+
 function Assert-DockerRootPassword {
     <# Assert-DockerRootPassword - the recorded root password has to be the volume's, or stop now. #>
     # The db volume keeps the root password it was initialised with and nothing can read it back out.
@@ -3899,6 +3930,7 @@ function Invoke-DockerInstall {
     [void](Import-State -Quiet)
     Invoke-Preflight
     Test-DockerPrerequisites
+    Resolve-DockerRootPassword
     if (-not $script:DockerRootPass -and -not $script:DryRun) {
         $script:DockerRootPass = New-RandomPassword
     }
@@ -4087,6 +4119,7 @@ function Invoke-DockerStatus {
 function Invoke-DockerRepair {
     [void](Import-State -Quiet)
     Test-DockerPrerequisites
+    Resolve-DockerRootPassword
     if (-not $script:DockerRootPass) {
         # Without the recorded password the entrypoint cannot log in as root on the next start, and
         # there is no way to read it back out of the volume. The volumes are still there, so this is
