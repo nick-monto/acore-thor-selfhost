@@ -1341,6 +1341,30 @@ function Stop-Db {
 
 # ---------------------------------------------------------------- install phases
 
+function Assert-DockerRootPassword {
+    <# Assert-DockerRootPassword - the recorded root password has to be the volume's, or stop now. #>
+    # The db volume keeps the root password it was initialised with and nothing can read it back out.
+    # Without this probe the mismatch surfaces as the entrypoint's
+    # "ERROR 1045 (28000): Access denied for user 'root'@'172.18.0.3'" after the image build and the
+    # data download, and the remedy is a sentence in a log nobody is watching.
+    if (-not $script:DockerRootPass) { return }
+    if ($script:DryRun) { return }
+    $id = ([string](Invoke-Compose -Arguments @('ps', '-q', 'db') -Capture -AllowFailure)).Trim()
+    if (-not $id) { return }   # a fresh volume: the db service has not been created yet
+    # A stopped db cannot be probed, and the start that follows is the right place for its failure.
+    if ((Get-DockerInspectField -Id $id -Format '{{.State.Status}}') -ne 'running') { return }
+    $probe = @('exec', '-T', '-e', ('MYSQL_PWD=' + $script:DockerRootPass), 'db',
+        'mysql', '--protocol=TCP', '-h', '127.0.0.1', '-uroot', '-N', '-e', 'select 1')
+    $null = Invoke-Compose -Arguments $probe -Capture -AllowFailure
+    if ($LASTEXITCODE -eq 0) { return }
+    $compose = Get-DockerComposeFile
+    Die ("the db volume does not accept the root password recorded in {0}, so the entrypoint cannot create the schemas or the realm user. Nothing below this point can succeed.`n" +
+        "  the volume keeps the password it was first initialised with, and it cannot be read back; either`n" +
+        ("    docker compose -f {0} down -v   and install again (this drops the realm), or`n" -f $compose) +
+        "  reset it inside the volume: docker run --rm -v acore-realm_db:/var/lib/mysql mysql:8.4 --init-file=/reset.sql`n" +
+        "  (with a reset.sql that ALTERs root's password, then remove the container)")
+}
+
 function Invoke-Preflight {
     Step 'Preflight'
     $arch = Get-ProcessorArchitecture
@@ -1630,7 +1654,8 @@ function Install-MySql {
 function New-Schema {
     Step 'Databases and user'
     if ($script:DryRun) {
-        Log ("would create acore_auth, acore_world, acore_characters, acore_playerbots and the MySQL user '{0}'" -f $script:DbUser)
+        Log ("would create acore_auth, acore_world, acore_characters and the MySQL user '{0}'" -f $script:DbUser)
+        Log '(acore_playerbots is created by the module itself, which also applies its base SQL)'
         return
     }
     # The same statements create_schema runs on the Thor. The user is created for 127.0.0.1 only:
@@ -1640,10 +1665,10 @@ function New-Schema {
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
--- acore_playerbots is created here, not left to the playerbots module: the core's DBUpdater opens
--- every database in the conf at startup and asks on stdin "Do you want to create it?"
--- (DBUpdater.cpp:228-232) when one is missing, which a headless first boot can only wait on.
-CREATE DATABASE IF NOT EXISTS acore_playerbots;
+-- acore_playerbots is NOT created here: the module creates its own database and then applies its
+-- base SQL, and a database that already exists but is empty skips that base set - the world then
+-- aborts at PrepareStatements on the module's missing tables. The grant below is what it needs,
+-- and MySQL accepts it for a database that does not exist yet.
 CREATE USER IF NOT EXISTS '$($script:DbUser)'@'127.0.0.1' IDENTIFIED BY '$($script:DbPass)';
 ALTER USER '$($script:DbUser)'@'127.0.0.1' IDENTIFIED BY '$($script:DbPass)';
 GRANT ALL PRIVILEGES ON acore_auth.*       TO '$($script:DbUser)'@'127.0.0.1';
@@ -2673,18 +2698,25 @@ function Install-ClientPatch {
         [void](Get-ItemDbcTool)
         return
     }
+    # The client folder is asked for first, and recorded, even when the server half cannot run: the
+    # question is the only thing here that cannot be repeated unattended, and a realm whose container
+    # failed must not also lose the answer.
+    $clientRoot = Get-ClientRoot
+    $clientData = ''
+    if ($clientRoot) { $clientData = Join-Path $clientRoot 'Data' }
+
     $dbcDir = Get-ServerDbcDir
     if (-not $dbcDir) {
         if ($script:DryRun) {
             Note "add the 64 bag records to $script:DataDir\dbc\Item.dbc once the client data is installed"
         } else {
             Warn "no $script:DataDir\dbc\Item.dbc yet, so the bag records were not added (install the client data first)"
+            if ($clientData) {
+                Warn ("  the client folder {0} is recorded, so -Repair picks it up once the server data exists" -f $clientRoot)
+            }
         }
         return
     }
-    $clientRoot = Get-ClientRoot
-    $clientData = ''
-    if ($clientRoot) { $clientData = Join-Path $clientRoot 'Data' }
 
     $py = Get-PythonCommand
     $tool = Get-ItemDbcTool
@@ -3870,6 +3902,11 @@ function Invoke-DockerInstall {
     if (-not $script:DockerRootPass -and -not $script:DryRun) {
         $script:DockerRootPass = New-RandomPassword
     }
+    # Written before anything starts, not after the install finishes: the db volume keeps the root
+    # password it was initialised with forever, and an install that dies in the first boot used to
+    # leave no record of it - every later -Repair then generated a different one, could not log in
+    # as root, and reported "Access denied for user 'root'@'172.18.0.3'".
+    Save-State
     Install-DockerAssets
     Set-DockerEnvironment
     # The staging directory is this mode's own tree. Recorded like any other path outside the root,
@@ -3882,6 +3919,7 @@ function Invoke-DockerInstall {
     # removable by -Uninstall, and the mode file is what makes -Uninstall run compose down instead
     # of the native path (which would find no <root>\db and leave the containers running).
     Save-Mode -Mode 'docker'
+    Assert-DockerRootPassword
     Step 'Containers (build and start)'
     [void](Invoke-Compose -Arguments @('up', '-d', '--build'))
     if (-not (Wait-DockerWorld -TimeoutSeconds $script:BootTimeout)) {
@@ -4050,15 +4088,19 @@ function Invoke-DockerRepair {
     [void](Import-State -Quiet)
     Test-DockerPrerequisites
     if (-not $script:DockerRootPass) {
-        # Without the recorded password the entrypoint cannot log in as root on the next start. The
-        # volumes are still there, so this is a warning rather than a refusal: a compose file edited
-        # by hand may set it.
+        # Without the recorded password the entrypoint cannot log in as root on the next start, and
+        # there is no way to read it back out of the volume. The volumes are still there, so this is
+        # a warning rather than a refusal - but it is the one failure a repair cannot fix.
         Warn "no recorded db root password in $script:StateFile; the containers keep the one their volume was initialised with"
+        Warn '  if the entrypoint then fails with "Access denied for user ''root''", the two ways out are:'
+        Warn ("    docker compose -f {0} down -v   then install again (drops the realm), or" -f (Get-DockerComposeFile))
+        Warn '    reset root inside the volume: docker run --rm -v acore-realm_db:/var/lib/mysql mysql:8.4 --init-file=/reset.sql'
     }
     # Re-fetching is cheap (four small text files) and it is how a drifted compose file or a fixed
     # entrypoint comes back without touching the volumes.
     Install-DockerAssets
     Set-DockerEnvironment
+    Assert-DockerRootPassword
     Step 'Containers (rebuild and restart)'
     [void](Invoke-Compose -Arguments @('up', '-d', '--build'))
     if (-not (Wait-DockerWorld -TimeoutSeconds $script:BootTimeout)) {

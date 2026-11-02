@@ -100,11 +100,13 @@ init_schemas() {
     # with DB_PASS across restarts, which is what the mysql image's one-shot MYSQL_PASSWORD cannot
     # do.
     #
-    # acore_playerbots is created here, not left to the playerbots module: the core's DBUpdater
-    # opens every database in the conf at startup, and for one that is missing it asks on stdin
-    # "Do you want to create it?" (DBUpdater.cpp:228-232). This container's worldserver reads stdin
-    # from a fifo, so that question blocks the first boot until the timeout, and the module's own
-    # updater never gets to run.
+    # acore_playerbots is deliberately NOT created here. The playerbots module creates its own
+    # database and then applies its base SQL (Playerbots.cpp:59-84: ER_BAD_DB_ERROR ->
+    # ModuleDBUpdater::Create -> Populate); a database that already exists but is empty skips the
+    # base set, so the module's tables are missing and the world aborts at PrepareStatements with
+    # "Table 'acore_playerbots.playerbots_weightscales' doesn't exist". What the module needs from
+    # this container is only the grant below, which MySQL accepts for a database that does not exist
+    # yet, and AC_DISABLE_INTERACTIVE so its create step does not wait on a question.
     local user pass
     user="$(sql_escape "$DB_USER")"
     pass="$(sql_escape "$DB_PASS")"
@@ -112,7 +114,6 @@ init_schemas() {
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
-CREATE DATABASE IF NOT EXISTS acore_playerbots;
 CREATE USER IF NOT EXISTS '$user'@'%' IDENTIFIED BY '$pass';
 ALTER USER '$user'@'%' IDENTIFIED BY '$pass';
 GRANT ALL PRIVILEGES ON acore_auth.*       TO '$user'@'%';
@@ -124,7 +125,7 @@ SQL
     then
         die "mysql rejected the schema setup as root@$DB_HOST (is DB_ROOT_PASS the same one the db service was initialised with?)"
     fi
-    log "schemas acore_auth/acore_world/acore_characters/acore_playerbots and user '$DB_USER'@'%' are in place"
+    log "schemas acore_auth/acore_world/acore_characters and user '$DB_USER'@'%' are in place (acore_playerbots is the module's)"
 }
 
 # --- 3. client data ----------------------------------------------------------------------------

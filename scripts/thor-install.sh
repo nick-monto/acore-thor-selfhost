@@ -1612,17 +1612,15 @@ create_schema() {
     # DB_PASS and ACCOUNT_PASS were settled by default_credentials() in main().
     if [ "$CHECK" = 1 ]; then
         log "would create acore_auth, acore_world, acore_characters and the MySQL user '$DB_USER'"
-        log "(acore_playerbots is created here too: the core asks on stdin before making one)"
+        log "(acore_playerbots is created by the module, which also applies its base SQL)"
         return 0
     fi
     if ! mysql_admin <<SQL
 CREATE DATABASE IF NOT EXISTS acore_auth;
 CREATE DATABASE IF NOT EXISTS acore_world;
 CREATE DATABASE IF NOT EXISTS acore_characters;
-# acore_playerbots is created here, not left to the playerbots module: the core's DBUpdater opens
-# every database in the conf at startup and asks on stdin "Do you want to create it?"
-# (DBUpdater.cpp:228-232) when one is missing, which the fifo-driven first boot cannot answer.
-CREATE DATABASE IF NOT EXISTS acore_playerbots;
+# acore_playerbots is NOT created here: the module creates it and applies its base SQL, and a
+# database that exists but is empty skips that base set. The grant below is what it needs.
 CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
 ALTER USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
 GRANT ALL PRIVILEGES ON acore_auth.*       TO '$DB_USER'@'127.0.0.1';

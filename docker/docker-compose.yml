@@ -31,15 +31,16 @@ services:
     volumes:
       - db:/var/lib/mysql
     healthcheck:
-      # mysqladmin ping exits 0 as soon as mysqld answers, even when it refuses the credentials, so
-      # this asks "may the realm start yet", not "is the password right" - the entrypoint's schema
-      # step is what proves the login.
+      # A real login, not mysqladmin ping: ping exits 0 as soon as mysqld answers, even when it
+      # refuses the credentials, so a volume whose root password no longer matches the one this
+      # project passes reported "healthy" while the entrypoint could never create a schema. The
+      # query is what the entrypoint does next, so unhealthy here means the realm cannot start and
+      # `docker compose ps` says so instead of a 1045 in a log twenty minutes later.
       # The password is interpolated here rather than read from the container's environment: compose
       # substitutes $VAR in every value at parse time, so "$MYSQL_ROOT_PASSWORD" would reach the shell
-      # already expanded to nothing and the ping would run with no password - mysqladmin reports that
-      # as a failure, so db never turns healthy and acore never starts. It is the same secret the
-      # container already carries in MYSQL_ROOT_PASSWORD, so nothing new is exposed.
-      test: ['CMD-SHELL', 'MYSQL_PWD="${DB_ROOT_PASS:-acore}" mysqladmin ping --protocol=TCP -h 127.0.0.1 -u root --silent']
+      # already expanded to nothing - the login would then be made without a password and fail. It is
+      # the same secret the container already carries in MYSQL_ROOT_PASSWORD, so nothing new is exposed.
+      test: ['CMD-SHELL', 'MYSQL_PWD="${DB_ROOT_PASS:-acore}" mysql --protocol=TCP -h 127.0.0.1 -u root -N -e "select 1" >/dev/null 2>&1']
       interval: 5s
       timeout: 5s
       retries: 30
