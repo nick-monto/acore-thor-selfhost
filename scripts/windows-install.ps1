@@ -724,6 +724,25 @@ function New-RandomPassword {
 
 # ---------------------------------------------------------------- state and manifest
 
+function Protect-SecretFile {
+    <# Protect-SecretFile PATH - drop inherited ACLs and leave the current user alone on it. #>
+    # These files hold the db passwords and the gm password in plain text. They live under a -Root the
+    # user chooses, so they inherit whatever that directory has - C:\acore inherits from C:\, where
+    # Users may read. The Thor side already does this with umask 077.
+    param([string]$Path)
+    if ($script:DryRun) { return }
+    try {
+        $acl = Get-Acl -LiteralPath $Path
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
+        Set-Acl -LiteralPath $Path -AclObject $acl
+    } catch {
+        Warn ("could not restrict {0} to the current user: {1}" -f $Path, $_.Exception.Message)
+    }
+}
+
 function Save-State {
     if ($script:DryRun) {
         Note "record the install state in $script:StateFile"
@@ -755,6 +774,7 @@ function Save-State {
         ('INSTALLED_AT="{0}"' -f $stamp)
     )
     [System.IO.File]::WriteAllLines($script:StateFile, $lines)
+    Protect-SecretFile -Path $script:StateFile
 }
 
 function Import-State {
@@ -1341,6 +1361,31 @@ function Stop-Db {
 
 # ---------------------------------------------------------------- install phases
 
+function Get-DockerRootExecBase {
+    <# Get-DockerRootExecBase - argv prefix for a root client inside the db container. #>
+    # 'MYSQL_PWD' by name, not 'MYSQL_PWD=secret': the value form puts the root password in the
+    # docker CLI's own argv, where /proc/<pid>/cmdline shows it to every local user for as long as
+    # the call runs - seconds to minutes for a mysqldump. The name-only form takes the value from
+    # this process's environment, which other users cannot read. Set it with Use-DockerRootPassword.
+    return @('exec', '-T', '-e', 'MYSQL_PWD', 'db')
+}
+
+function Use-DockerRootPassword {
+    <# Use-DockerRootPassword SCRIPTBLOCK - run it with MYSQL_PWD set to the root password. #>
+    param([scriptblock]$Action)
+    $previous = $env:MYSQL_PWD
+    $env:MYSQL_PWD = $script:DockerRootPass
+    try {
+        return (& $Action)
+    } finally {
+        if ($null -eq $previous) {
+            Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue
+        } else {
+            $env:MYSQL_PWD = $previous
+        }
+    }
+}
+
 function Test-DockerRootPassword {
     <# Test-DockerRootPassword -Password P - true when the running db accepts P as root. #>
     param([string]$Password)
@@ -1349,10 +1394,15 @@ function Test-DockerRootPassword {
     $id = ([string](Invoke-Compose -Arguments @('ps', '-q', 'db') -Capture -AllowFailure)).Trim()
     if (-not $id) { return $false }
     if ((Get-DockerInspectField -Id $id -Format '{{.State.Status}}') -ne 'running') { return $false }
-    $probe = @('exec', '-T', '-e', ('MYSQL_PWD=' + $Password), 'db',
-        'mysql', '--protocol=TCP', '-h', '127.0.0.1', '-uroot', '-N', '-e', 'select 1')
-    $null = Invoke-Compose -Arguments $probe -Capture -AllowFailure
-    return ($LASTEXITCODE -eq 0)
+    $probe = @(Get-DockerRootExecBase) + @('mysql', '--protocol=TCP', '-h', '127.0.0.1', '-uroot', '-N', '-e', 'select 1')
+    $previous = $script:DockerRootPass
+    $script:DockerRootPass = $Password
+    try {
+        $null = Use-DockerRootPassword { Invoke-Compose -Arguments $probe -Capture -AllowFailure }
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        $script:DockerRootPass = $previous
+    }
 }
 
 function Resolve-DockerRootPassword {
@@ -1369,6 +1419,11 @@ function Resolve-DockerRootPassword {
         $script:DockerRootPass = 'acore'
         Save-State
         Note "the db volume answers to the compose default root password; recording it in $script:StateFile"
+        # Adopted, not rotated: rotating needs the ALTER USER this password cannot run yet, and
+        # replacing a working credential behind the user's back is worse than saying so. It is still
+        # the password published in docker/docker-compose.yml, so say so.
+        Warn '  that default is published in docker/docker-compose.yml: anything that can reach the db container can log in as root'
+        Warn '  to change it, set DB_ROOT_PASS and DB_PASS in a .env beside the compose file and reinstall, or ALTER USER inside the volume'
     }
 }
 
@@ -1384,16 +1439,15 @@ function Assert-DockerRootPassword {
     if (-not $id) { return }   # a fresh volume: the db service has not been created yet
     # A stopped db cannot be probed, and the start that follows is the right place for its failure.
     if ((Get-DockerInspectField -Id $id -Format '{{.State.Status}}') -ne 'running') { return }
-    $probe = @('exec', '-T', '-e', ('MYSQL_PWD=' + $script:DockerRootPass), 'db',
-        'mysql', '--protocol=TCP', '-h', '127.0.0.1', '-uroot', '-N', '-e', 'select 1')
-    $null = Invoke-Compose -Arguments $probe -Capture -AllowFailure
-    if ($LASTEXITCODE -eq 0) { return }
+    if (Test-DockerRootPassword -Password $script:DockerRootPass) { return }
     $compose = Get-DockerComposeFile
     Die ("the db volume does not accept the root password recorded in {0}, so the entrypoint cannot create the schemas or the realm user. Nothing below this point can succeed.`n" +
         "  the volume keeps the password it was first initialised with, and it cannot be read back; either`n" +
         ("    docker compose -f {0} down -v   and install again (this drops the realm), or`n" -f $compose) +
-        "  reset it inside the volume: docker run --rm -v acore-realm_db:/var/lib/mysql mysql:8.4 --init-file=/reset.sql`n" +
-        "  (with a reset.sql that ALTERs root's password, then remove the container)")
+        "  reset root inside the volume - skip-grant-tables lets it in without a password:`n" +
+        "    docker run -d --rm --name acore-reset -v acore-realm_db:/var/lib/mysql mysql:8.4 --skip-grant-tables --skip-networking`n" +
+        "    docker exec acore-reset mysql -uroot -e `"FLUSH PRIVILEGES; ALTER USER 'root'@'localhost' IDENTIFIED BY 'acore'; ALTER USER 'root'@'%' IDENTIFIED BY 'acore';`"`n" +
+        "    docker stop acore-reset   (then run this again)")
 }
 
 function Invoke-Preflight {
@@ -2429,7 +2483,9 @@ Write-Host ("min={0} max={1}" -f (Read-Key 'MinRandomBots'), (Read-Key 'MaxRando
         'this file is the only place the servers'' credentials are written down.'
         ("Everything this install owns lives in {0}; see {1} for the rest." -f $root, $script:ManifestFile)
     ) -join $nl
-    Write-TextFile -Path (Join-Path $root 'credentials.txt') -Text ($credentials + $nl)
+    $credentialsPath = Join-Path $root 'credentials.txt'
+    Write-TextFile -Path $credentialsPath -Text ($credentials + $nl)
+    Protect-SecretFile -Path $credentialsPath
     Log ("wrote {0}\start.ps1, stop.ps1, set-bots.ps1 (and the two database helpers)" -f $root)
 }
 
@@ -3924,17 +3980,17 @@ function Set-DockerRealmPin {
         Note ("run UPDATE realmlist SET address='{0}' WHERE id=1 inside the db container" -f $script:LanIp)
         return
     }
-    $execBase = @('exec', '-T', '-e', ('MYSQL_PWD={0}' -f $script:DockerRootPass), 'db', 'mysql', '-uroot')
+    $execBase = @(Get-DockerRootExecBase) + @('mysql', '-uroot')
     $sql = "UPDATE realmlist SET address='{0}', localAddress='{0}' WHERE id=1;" -f $script:LanIp
     $argv = @()
     foreach ($item in $execBase) { $argv += $item }
     $argv += @('acore_auth', '-e', $sql)
-    [void](Invoke-Compose -Arguments $argv)
+    [void](Use-DockerRootPassword { Invoke-Compose -Arguments $argv })
     # UPDATE prints nothing, so the row is read back rather than the exit code trusted.
     $argv = @()
     foreach ($item in $execBase) { $argv += $item }
     $argv += @('-N', '-B', 'acore_auth', '-e', ("SELECT COUNT(*) FROM realmlist WHERE id=1 AND address='{0}'" -f $script:LanIp))
-    $rows = ([string](Invoke-Compose -Arguments $argv -Capture -AllowFailure)).Trim()
+    $rows = ([string](Use-DockerRootPassword { Invoke-Compose -Arguments $argv -Capture -AllowFailure })).Trim()
     if ($rows -eq '1') {
         Log ("realm 1 pinned to {0}:{1}" -f $script:LanIp, $WorldPort)
     } else {
@@ -4103,8 +4159,18 @@ function Invoke-DockerStatus {
         }
     }
 
-    $address = ([string](Invoke-Compose -Arguments @('exec', '-T', '-e', ('MYSQL_PWD={0}' -f $script:DockerRootPass), 'db', 'mysql', '-uroot', '-N', '-B', 'acore_auth', '-e', 'SELECT address FROM realmlist WHERE id=1') -Capture -AllowFailure)).Trim()
-    if ($address) {
+    # -Status writes nothing, so the default is used for this one query rather than recorded: without
+    # it the read below is a refused login and the status says the realm address is broken.
+    if (-not $script:DockerRootPass -and (Test-DockerRootPassword -Password 'acore')) {
+        $script:DockerRootPass = 'acore'
+        Note 'no recorded db root password; using the compose default for this read-only check'
+    }
+    $pinArgv = @(Get-DockerRootExecBase) + @('mysql', '-uroot', '-N', '-B', 'acore_auth', '-e', 'SELECT address FROM realmlist WHERE id=1')
+    $address = ([string](Use-DockerRootPassword { Invoke-Compose -Arguments $pinArgv -Capture -AllowFailure })).Trim()
+    # A refused login is text too, and 'ok realm 1 address: ERROR 1045 ...' reads as a pass.
+    if ($address -match '^ERROR \d+') {
+        Bad ("realm 1 address: the db refused the login ({0})" -f (Get-BriefText -Text $address))
+    } elseif ($address) {
         if ($script:LanIp -and $address -ne $script:LanIp) {
             Bad ("realm 1 address is {0}, state records LAN IP {1}" -f $address, $script:LanIp)
         } else {
@@ -4145,7 +4211,9 @@ function Invoke-DockerRepair {
         Warn "no recorded db root password in $script:StateFile; the containers keep the one their volume was initialised with"
         Warn '  if the entrypoint then fails with "Access denied for user ''root''", the two ways out are:'
         Warn ("    docker compose -f {0} down -v   then install again (drops the realm), or" -f (Get-DockerComposeFile))
-        Warn '    reset root inside the volume: docker run --rm -v acore-realm_db:/var/lib/mysql mysql:8.4 --init-file=/reset.sql'
+        Warn '    reset root inside the volume: docker run -d --rm --name acore-reset -v acore-realm_db:/var/lib/mysql mysql:8.4 --skip-grant-tables --skip-networking'
+        Warn "    docker exec acore-reset mysql -uroot -e `"FLUSH PRIVILEGES; ALTER USER 'root'@'localhost' IDENTIFIED BY 'acore'; ALTER USER 'root'@'%' IDENTIFIED BY 'acore';`""
+        Warn '    docker stop acore-reset   (then run this again)'
     }
     # Re-fetching is cheap (four small text files) and it is how a drifted compose file or a fixed
     # entrypoint comes back without touching the volumes.
@@ -4190,11 +4258,11 @@ function Invoke-DockerUninstall {
         # accented name in the world database. UTF-8 for the length of the dump, then back.
         $savedEncoding = [Console]::OutputEncoding
         [Console]::OutputEncoding = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false
-        $execBase = @('exec', '-T', '-e', ('MYSQL_PWD={0}' -f $script:DockerRootPass), 'db', 'mysql', '-uroot')
+        $execBase = @(Get-DockerRootExecBase) + @('mysql', '-uroot')
         $argv = @()
         foreach ($item in $execBase) { $argv += $item }
         $argv += @('-N', '-B', '-e', "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'acore%'")
-        $schemaText = Invoke-Compose -Arguments $argv -Capture -AllowFailure
+        $schemaText = Use-DockerRootPassword { Invoke-Compose -Arguments $argv -Capture -AllowFailure }
         $schemas = @()
         foreach ($line in @($schemaText -split "`r?`n")) {
             if ($line.Trim()) { $schemas += $line.Trim() }
@@ -4205,9 +4273,9 @@ function Invoke-DockerUninstall {
         $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
         foreach ($schema in $schemas) {
             $file = Join-Path $dumpDir ('{0}-{1}.sql' -f $stamp, $schema)
-            $argv = @('exec', '-T', '-e', ('MYSQL_PWD={0}' -f $script:DockerRootPass), 'db', 'mysqldump', '-uroot',
+            $argv = @(Get-DockerRootExecBase) + @('mysqldump', '-uroot',
                 '--single-transaction', '--routines', '--events', '--databases', $schema)
-            $dump = Invoke-Compose -Arguments $argv -Capture -AllowFailure
+            $dump = Use-DockerRootPassword { Invoke-Compose -Arguments $argv -Capture -AllowFailure }
             if ($dump) {
                 # WriteAllText, not Out-File: the latter goes through PowerShell's encoding and adds
                 # a BOM to the first line, which mysql chokes on when the dump is restored.
