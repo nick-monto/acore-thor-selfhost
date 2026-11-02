@@ -2636,9 +2636,13 @@ function Get-PythonCommand {
         if (-not $cmd) { continue }
         $prefix = @()
         for ($i = 1; $i -lt $candidate.Count; $i++) { $prefix += $candidate[$i] }
-        $argv = @($prefix) + @('-c', 'import sys; print("%d.%d" % sys.version_info[:2])')
+        # -V, not -c with a quoted payload: Windows PowerShell 5.1 drops the embedded double quotes
+        # when it passes an argument to a native program, so 'import sys; print("%d.%d" ...)' reaches
+        # python as print(%d.%d ...) and fails with a SyntaxError - a working interpreter reported as
+        # missing. -V is one token and prints "Python 3.12.10" on stdout.
+        $argv = @($prefix) + @('-V')
         $out = [string](Invoke-Native -FilePath $cmd.Source -Arguments $argv -StdOutOnly)
-        if ($LASTEXITCODE -eq 0 -and $out.Trim() -match '^3\.') {
+        if ($LASTEXITCODE -eq 0 -and $out.Trim() -match '^Python 3\.') {
             return (@($cmd.Source) + $prefix)
         }
         # The Microsoft Store ships an app-execution alias under WindowsApps that opens the Store
@@ -2659,17 +2663,31 @@ function Get-PythonCommand {
 }
 
 function Get-ItemDbcTool {
-    <# Get-ItemDbcTool - fetch patch_item_dbc.py at -SelfRef; '' when it cannot be fetched. #>
+    <# Get-ItemDbcTool - fetch the two Item.dbc tools at -SelfRef; '' when they cannot be fetched. #>
+    # Both, and in the repository's own layout: patch_item_dbc.py loads scripts/loot-bags/
+    # gen_loot_bags.py from its parent directory (GENERATOR = HERE.parent / 'loot-bags' / ...) to get
+    # the bag ids and display ids. Fetching only the patch script fails at run time with
+    # "FileNotFoundError: ...\loot-bags\gen_loot_bags.py".
     $dir = Join-Path $script:HostState 'tools'
-    $tool = Join-Path $dir 'patch_item_dbc.py'
-    $uri = $DockerRepoBase + $script:SelfRef + '/scripts/item-dbc/patch_item_dbc.py'
+    $tool = Join-Path (Join-Path $dir 'item-dbc') 'patch_item_dbc.py'
+    # Objects, not nested arrays: @(@('a','b'), @('c','d')) is flattened by PowerShell into one
+    # four-element array, and then $entry[0] is a character rather than a path.
+    $files = @(
+        [pscustomobject]@{ Rel = 'scripts/item-dbc/patch_item_dbc.py'; Path = $tool }
+        [pscustomobject]@{ Rel = 'scripts/loot-bags/gen_loot_bags.py'; Path = (Join-Path (Join-Path $dir 'loot-bags') 'gen_loot_bags.py') }
+    )
+    $missing = @($files | Where-Object { -not (Test-Path -LiteralPath $_.Path) })
     if ($script:DryRun) {
-        if (-not (Test-Path -LiteralPath $tool)) { Note "download $uri to $tool" }
+        foreach ($entry in $missing) {
+            Note ("download {0}{1}/{2} to {3}" -f $DockerRepoBase, $script:SelfRef, $entry.Rel, $entry.Path)
+        }
         return $tool
     }
-    if (Test-Path -LiteralPath $tool) { return $tool }
-    [void][System.IO.Directory]::CreateDirectory($dir)
-    if (-not (Get-RemoteFile -Uri $uri -Destination $tool)) { return '' }
+    foreach ($entry in $missing) {
+        [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $entry.Path))
+        $uri = $DockerRepoBase + $script:SelfRef + '/' + $entry.Rel
+        if (-not (Get-RemoteFile -Uri $uri -Destination $entry.Path)) { return '' }
+    }
     return $tool
 }
 
