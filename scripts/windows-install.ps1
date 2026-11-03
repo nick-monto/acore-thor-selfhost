@@ -2816,7 +2816,10 @@ function Get-PythonCommand {
         $argv = @($prefix) + @('-V')
         $out = [string](Invoke-Native -FilePath $cmd.Source -Arguments $argv -StdOutOnly)
         if ($LASTEXITCODE -eq 0 -and $out.Trim() -match '^Python 3\.') {
-            return (@($cmd.Source) + $prefix)
+            # The comma keeps the shape: a bare `return @('C:\...\python.exe')` is enumerated by the
+            # pipeline and arrives as a String, which then has no .Count under Set-StrictMode and
+            # makes the caller's argv slice throw.
+            return ,(@($cmd.Source) + $prefix)
         }
         # The Microsoft Store ships an app-execution alias under WindowsApps that opens the Store
         # instead of running anything, and it is what a fresh Windows resolves python.exe to.
@@ -2952,7 +2955,14 @@ function Install-ClientPatch {
         return
     }
     $out = Join-Path $script:StateDir 'item-dbc'
-    $argv = @($py[1..($py.Count - 1)]) + @($tool, '--dbc', (Join-Path $dbcDir 'Item.dbc'), '--server-dbc', $dbcDir, '--out', $out)
+    # Normalised only now: @($null) is a one-element array and would pass the guard above.
+    $py = @($py)
+    # The argv prefix is the exe plus the arguments that must precede the script: 'py.exe -3' has one,
+    # a plain 'python.exe' has none, and 1..($py.Count - 1) on a single-entry list yields index 0 and
+    # 1 back, so the exe would be passed to itself as its first argument.
+    $pyPrefix = @()
+    if ($py.Count -gt 1) { $pyPrefix = @($py[1..($py.Count - 1)]) }
+    $argv = $pyPrefix + @($tool, '--dbc', (Join-Path $dbcDir 'Item.dbc'), '--server-dbc', $dbcDir, '--out', $out)
     if ($clientData) { $argv += @('--client-data', $clientData) }
     $display = (($py[0] + ' ' + ($argv -join ' ')) -replace [regex]::Escape($tool), $tool)
     if ($script:DryRun) {
@@ -2986,7 +2996,7 @@ function Install-ClientPatch {
     }
     # --verify reads the client's Data directory back in patch-load order and says which archive the
     # client will actually use, which is the only thing that decides whether the icon appears.
-    $verifyArgv = @($py[1..($py.Count - 1)]) + @($tool, '--verify', '--client-data', $clientData)
+    $verifyArgv = $pyPrefix + @($tool, '--verify', '--client-data', $clientData)
     $null = Invoke-Native -FilePath $py[0] -Arguments $verifyArgv
     if ($LASTEXITCODE -eq 0) {
         Ok ("client Item.dbc: {0} reads the patched file" -f $clientData)
