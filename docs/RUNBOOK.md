@@ -471,6 +471,43 @@ mercenaries pass on a drop, that a mercenary stays at its hired level when the p
 (no XP, and `fallen behind` in the party row), and that the party comes back after a relog and a
 world-server restart.
 
+## Part 5d — The skateboard
+
+`mod-skateboard` ships **off**. The installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` and leaves `Skateboard.Enable = 0`; nothing else in the realm depends on it, so leaving it at 0 costs nothing.
+
+```bash
+# turn it on, then apply it without a restart
+sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/' /opt/acore/etc/modules/mod-skateboard.conf
+# in the worldserver console:
+.reload config
+```
+
+The module reads its config in `OnAfterConfigLoad`, so `.reload config` is enough [V]; a restart works too and is what an installer re-run expects.
+
+| Key | Default | What it does |
+|---|---|---|
+| `Skateboard.Enable` | `0` | the whole feature; 0 refuses `.board on` and boards nobody |
+| `Skateboard.Deck` | `log` | `log` is the stock `Log Ride` display id 26609 and needs no client patch; `engravedwall` (90001) and `coffinlid` (90002) are the two shield decks, which only exist once the client patch installs their DBC rows |
+| `Skateboard.MountedPose` | `0` | 0 writes `UNIT_FIELD_MOUNTDISPLAYID` alone (deck under a standing player), 1 mounts properly (deck under a sitting rider) |
+| `Skateboard.MaxSpeed` | `21.0` | the cap in yd/s, three times the base run rate [V] |
+| `Skateboard.OffInCombat` | `1` | leaves the board when the player enters combat (a 21 yd/s cap is a free disengage) |
+
+A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `engravedwall`/`coffinlid` on an unpatched client looks like `log`, not like a bug.
+
+`.board` is a player command, one handler per verb:
+
+| Command | Effect |
+|---|---|
+| `.board on` / `.board off` / `.board toggle` | board, leave, or the other one |
+| `.board status` | one line: `boarded=<0\|1> tricks=<n> push=<0\|1> deck=<displayId>` |
+| `.board speed` | `v=<yd/s> rate=<rate> pending=<n>` — the deck speed, the rate the server holds, the speed-change ACKs still outstanding |
+| `.board push` | one push impulse; a message and no change when not boarded |
+| `.board trick <1\|2\|3>` | play trick clip 1, 2 or 3 by hand |
+
+The client half is the launcher's Skateboard add-on. It registers **five click bindings** — board/leave, push, trick 1, trick 2 and bail — and sends each as `board <verb>` through the AzerothCore add-on channel, so it claims no physical button itself. All five appear in the stock **Key Bindings** frame under the `Skateboard` entries, where a keyboard player rebinds them like any other action; ConsolePort lists the same five in its `/cp` binding list, which is where a pad button is assigned to one. Its movable bar carries push, the three trick clips and bail, and the speed readout shows the cap the module publishes. While the player is on the board and out of combat, the add-on also re-points the keys already on action buttons 1-3 at the board's buttons, so the bar's own keys become board actions without touching ConsolePort; every original binding is restored on leaving, on logout and on the next login after a crash. Bail is `.board off` whatever the state, and is the bind to reach for when a deck behaves oddly.
+
+No add-on is required to play: any chat line that starts with `.` is executed and never broadcast, so a `/say .board toggle` macro (or typing `.board on` in chat) still works when the add-on is missing [V]. A missing add-on costs the bar, the speed readout and the bindings, not the board.
+
 ## Part 6 — Prove it with a client before touching the launcher
 
 On a PC with the same 3.3.5a client: set `Data/<locale>/realmlist.wtf` to `set realmlist <thor-lan-ip>`, log in with the account from Part 5. This closes **G3** without any Android-specific risk.

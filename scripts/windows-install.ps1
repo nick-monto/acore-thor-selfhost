@@ -295,6 +295,31 @@ $MercenaryConfDefaults = @(
     'Mercenary.Debug=0'
 )
 
+# mod-skateboard's conf keys with the values its shipped .dist carries. Same contract as the
+# survivor list: a key absent from the file or outside its range is silently replaced by the
+# module's own fallback, so Write-Configs() and Invoke-Checks() restore it from here. These are the
+# module's whole conf - eighteen scalars, no lists - and Skateboard.Enable ships as 0.
+$SkateboardConfDefaults = @(
+    'Skateboard.Enable=0'
+    'Skateboard.Deck=log'
+    'Skateboard.MountedPose=0'
+    'Skateboard.MaxSpeed=21.0'
+    'Skateboard.PushImpulse=4.0'
+    'Skateboard.Friction.Static=1.5'
+    'Skateboard.Friction.Rolling=0.004'
+    'Skateboard.SlopeGain=9.0'
+    'Skateboard.LandingBonus=2.0'
+    'Skateboard.Tricks=1'
+    'Skateboard.Trick.VisualKit=5036'
+    'Skateboard.Crash.Enable=1'
+    'Skateboard.Crash.DamagePct=8'
+    'Skateboard.Crash.StaggerMs=1500'
+    'Skateboard.HardcoreSafe=1'
+    'Skateboard.OffInCombat=1'
+    'Skateboard.AckTimeoutMs=500'
+    'Skateboard.Debug=0'
+)
+
 # ---------------------------------------------------------------- mutable state
 
 $script:Action = 'install'      # install | check | status | repair | uninstall
@@ -1228,6 +1253,46 @@ function Test-SurvivorValueOk {
     }
 }
 
+function Test-SkateboardValueOk {
+    <# Test-SkateboardValueOk KEY VALUE - true when mod-skateboard accepts VALUE. #>
+    param(
+        [string]$Key,
+        [string]$Value
+    )
+    # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s,
+    # PushImpulse and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain
+    # 0-90, the visual kit 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000
+    # ms and the ACK timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is
+    # settled before the numeric guard can see it; the momentum keys carry decimals, so the
+    # comparison is a double, not an int64.
+    if ($Key -ceq 'Skateboard.Deck') {
+        if ($Value -ceq 'log' -or $Value -ceq 'engravedwall' -or $Value -ceq 'coffinlid') { return $true }
+        if ($Value -notmatch '^[0-9]+$') { return $false }
+        return ([int64]$Value -gt 0)
+    }
+    # The switches are checked as text first: an integer-only guard would accept 1.0, which the
+    # core's sConfigMgr does not read as a switch.
+    if (@('Skateboard.Enable', 'Skateboard.MountedPose', 'Skateboard.Tricks', 'Skateboard.Crash.Enable',
+          'Skateboard.HardcoreSafe', 'Skateboard.OffInCombat', 'Skateboard.Debug') -ccontains $Key) {
+        return ($Value -ceq '0' -or $Value -ceq '1')
+    }
+    if ($Value -notmatch '^[0-9]+(\.[0-9]+)?$') { return $false }
+    $n = [double]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    switch -CaseSensitive ($Key) {
+        'Skateboard.MaxSpeed' { return ($n -ge 1 -and $n -le 40) }
+        'Skateboard.PushImpulse' { return ($n -ge 0 -and $n -le 20) }
+        'Skateboard.Friction.Static' { return ($n -ge 0 -and $n -le 20) }
+        'Skateboard.Friction.Rolling' { return ($n -ge 0 -and $n -le 1) }
+        'Skateboard.SlopeGain' { return ($n -ge 0 -and $n -le 90) }
+        'Skateboard.LandingBonus' { return ($n -ge 0 -and $n -le 20) }
+        'Skateboard.Trick.VisualKit' { return ($n -ge 0 -and $n -le 100000) }
+        'Skateboard.Crash.DamagePct' { return ($n -ge 0 -and $n -le 99) }
+        'Skateboard.Crash.StaggerMs' { return ($n -ge 0 -and $n -le 10000) }
+        'Skateboard.AckTimeoutMs' { return ($n -ge 50 -and $n -le 5000) }
+        default { return $false }
+    }
+}
+
 function Add-MercenaryPoolKeys {
     <# Add-MercenaryPoolKeys -Live F -Dist F - append the shipped pool keys the live file lacks. #>
     # The pool keys are lists, not scalars, so they stay out of the defaults list: Set-Conf would
@@ -1874,7 +1939,7 @@ function Write-Configs {
     Step 'Configuration'
     if ($script:DryRun) {
         Log "would write $script:ConfDir\{authserver,worldserver}.conf"
-        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-mercenaries}.conf"
+        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-mercenaries,mod-skateboard}.conf"
         Log "would create $script:LogsDir"
         return
     }
@@ -2080,6 +2145,23 @@ function Write-Configs {
             (Get-Conf $pw 'Mercenary.GearFloorPercent'), (Get-Conf $pw 'Mercenary.GearCapPercent'))
     } else {
         Warn "no $moduleConf\mod-mercenaries.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
+    }
+
+    if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-skateboard.conf.dist')) -or
+        (Test-Path -LiteralPath (Join-Path $moduleConf 'mod-skateboard.conf'))) {
+        $sb = Get-ConfPair 'modules\mod-skateboard'
+        # The shipped .dist already holds these values, and Skateboard.Enable ships as 0: the board
+        # exists but nobody is on it until the player turns it on. Each key is still read back,
+        # because a key the module cannot use is silently replaced by its own fallback and a deck
+        # id the DBC does not carry falls back to the stock display. Only a value outside its range
+        # is rewritten - a deliberate Enable=0 is left alone.
+        Set-ConfDefaults -File $sb -Check { param($k, $v) Test-SkateboardValueOk -Key $k -Value $v } `
+            -Label 'mod-skateboard.conf' -Defaults $SkateboardConfDefaults
+        Log ("mod-skateboard.conf: Enable={0} Deck={1} MaxSpeed={2} Crash.Enable={3}" -f `
+            (Get-Conf $sb 'Skateboard.Enable'), (Get-Conf $sb 'Skateboard.Deck'), `
+            (Get-Conf $sb 'Skateboard.MaxSpeed'), (Get-Conf $sb 'Skateboard.Crash.Enable'))
+    } else {
+        Warn "no $moduleConf\mod-skateboard.conf.dist - the artifact was built without the module, the skateboard is unavailable"
     }
     Log ("worldserver.conf: DataDir={0} BindIP={1}" -f (Get-Conf $ws 'DataDir'), (Get-Conf $ws 'BindIP'))
 }
@@ -3116,13 +3198,14 @@ function Invoke-Checks {
     $ei = Join-Path $moduleConf 'mod_e_interact.conf'
     $sv = Join-Path $moduleConf 'mod-survivor.conf'
     $pw = Join-Path $moduleConf 'mod-mercenaries.conf'
-    $confFiles = @($ws, $as, $pb, $cg, $hc, $ei, $sv, $pw)
+    $sb = Join-Path $moduleConf 'mod-skateboard.conf'
+    $confFiles = @($ws, $as, $pb, $cg, $hc, $ei, $sv, $pw, $sb)
     $confMissing = @()
     foreach ($file in $confFiles) {
         if (-not (Test-Path -LiteralPath $file)) { $confMissing += $file }
     }
     if ($confMissing.Count -eq 0) {
-        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod_e_interact.conf, modules\mod-survivor.conf, modules\mod-mercenaries.conf'
+        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod_e_interact.conf, modules\mod-survivor.conf, modules\mod-mercenaries.conf, modules\mod-skateboard.conf'
     } else {
         Bad ("configs incomplete, missing: {0}" -f ($confMissing -join ', '))
         if ($Fix) {
@@ -3308,6 +3391,35 @@ function Invoke-Checks {
                 $script:Fixes = $script:Fixes + 1
                 Set-ConfDefaults -File $pw -Check { param($k, $v) Test-MercenaryValueOk -Key $k -Value $v } `
                     -Label 'mod-mercenaries.conf' -Defaults $MercenaryConfDefaults
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $sb) {
+        # A missing key is filled with the module's own fallback at load and a bad one is ignored
+        # the same way, so a config that still starts the server can be wrong here without saying
+        # so. The two are reported apart: absent means the live conf is older than the artifact,
+        # bad means it says something the module will not take.
+        $sbAbsent = @()
+        $sbBad = @()
+        foreach ($default in $SkateboardConfDefaults) {
+            $eq = $default.IndexOf('=')
+            $key = $default.Substring(0, $eq)
+            $value = Get-Conf $sb $key
+            if ($value -eq '') { $sbAbsent += $key }
+            elseif (-not (Test-SkateboardValueOk -Key $key -Value $value)) { $sbBad += ("{0}={1}" -f $key, $value) }
+        }
+        if ($sbAbsent.Count -eq 0 -and $sbBad.Count -eq 0) {
+            Ok ("mod-skateboard.conf: Enable={0} Deck={1} MaxSpeed={2} Crash.Enable={3}" -f `
+                (Get-Conf $sb 'Skateboard.Enable'), (Get-Conf $sb 'Skateboard.Deck'), `
+                (Get-Conf $sb 'Skateboard.MaxSpeed'), (Get-Conf $sb 'Skateboard.Crash.Enable'))
+        } else {
+            if ($sbBad.Count -gt 0) { Bad ("mod-skateboard.conf: unusable value(s): {0}" -f ($sbBad -join ' ')) }
+            if ($sbAbsent.Count -gt 0) { Bad ("mod-skateboard.conf: key(s) the live file predates: {0} (--Repair appends the shipped defaults)" -f ($sbAbsent -join ' ')) }
+            if ($Fix) {
+                $script:Fixes = $script:Fixes + 1
+                Set-ConfDefaults -File $sb -Check { param($k, $v) Test-SkateboardValueOk -Key $k -Value $v } `
+                    -Label 'mod-skateboard.conf' -Defaults $SkateboardConfDefaults
             }
         }
     }

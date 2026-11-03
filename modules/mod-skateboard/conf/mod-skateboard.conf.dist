@@ -1,0 +1,190 @@
+[worldserver]
+
+########################################
+# mod-skateboard configuration
+########################################
+#
+# A skateboard, not a mount: the character keeps walking, and the module turns
+# its run speed into a cap it has to earn. '.board on' puts a deck under the
+# character, '.board push' kicks the speed up, terrain slope and friction fight
+# it back, and the jump button becomes the trick button.
+#
+# Nothing here needs a client patch: the stock deck is the "Log Ride" display
+# 26609 that every 3.3.5a client already has. The two wall decks (90001, 90002)
+# only look right once the step-4 DBC patch is installed; until then the module
+# warns once at startup and uses 26609 instead.
+#
+# Two ways to draw the board (Skateboard.MountedPose):
+#
+#   0 - the module writes UNIT_FIELD_MOUNTDISPLAYID only. The character keeps
+#       its standing pose, which is what a skateboard wants. This is the first
+#       thing to look at in game: whether the 3.3.5a client draws a mount
+#       display without UNIT_FLAG_MOUNT is unverified, and if it does not, use 1.
+#   1 - the module calls Unit::Mount(). The client draws a sitting rider and the
+#       mount flag is set, which also makes the core's own UpdateSpeed take the
+#       mounted branch. The module re-asserts the rate when it is wiped, so the
+#       cap still holds.
+#
+# The speed gate: the cap travels to the client as SMSG_FORCE_RUN_SPEED_CHANGE
+# and the core kicks a client that claims a higher speed than the server holds,
+# so exactly one change is in flight at a time. The gate reopens on the client's
+# ACK, or after Skateboard.AckTimeoutMs if the ACK never comes, and the next
+# send waits 100 ms. On a self-hosted realm the RTT is 1-5 ms, so the deck
+# still updates many times per second.
+#
+# Nothing is persisted: the deck lives in memory and is dropped on death,
+# logout, a map change, water, flying, a battleground, an arena and (optionally)
+# combat.
+#
+
+#
+#    Skateboard.Enable
+#        Master on/off switch. 0 = the module loads, '.board' still exists but
+#        every refusal says the skateboard is disabled, and nothing updates.
+#        Default: 0, range: 0/1
+#
+Skateboard.Enable = 0
+
+#
+#    Skateboard.Deck
+#        The board to draw. A name, or a raw CreatureDisplayInfo id:
+#          log          = 26609 (stock, no client patch)
+#          engravedwall = 90001 (step-4 DBC patch)
+#          coffinlid    = 90002 (step-4 DBC patch)
+#        An id missing from the client's DBC warns once at startup and falls
+#        back to 26609.
+#        Default: log
+#
+Skateboard.Deck = log
+
+#
+#    Skateboard.MountedPose
+#        0 = write the mount display field only, character keeps its standing
+#        pose. 1 = Unit::Mount(), sitting rider with the mount flag set.
+#        Default: 0, range: 0/1
+#
+Skateboard.MountedPose = 0
+
+#
+#    Skateboard.MaxSpeed
+#        Hard ceiling for the deck, in yd/s. The default is three times the 7.0
+#        yd/s base run speed.
+#        Default: 21.0, range: 1.0 - 40.0
+#
+Skateboard.MaxSpeed = 21.0
+
+#
+#    Skateboard.PushImpulse
+#        Speed added by one '.board push', in yd/s. One kick per press, never a
+#        hold-to-accelerate. 0 makes push a no-op (and reports push=0 in
+#        '.board status').
+#        Default: 4.0, range: 0.0 - 20.0
+#
+Skateboard.PushImpulse = 4.0
+
+#
+#    Skateboard.Friction.Static
+#        Constant deceleration in yd/s^2, applied whether the deck is moving or
+#        not. With the default rolling term this stops a full-speed deck in
+#        about eight seconds.
+#        Default: 1.5, range: 0.0 - 20.0
+#
+Skateboard.Friction.Static = 1.5
+
+#
+#    Skateboard.Friction.Rolling
+#        Quadratic drag: subtracted as this value times v squared, in yd/s^2.
+#        Grows with speed, so it mostly matters at the top end.
+#        Default: 0.004, range: 0.0 - 1.0
+#
+Skateboard.Friction.Rolling = 0.004
+
+#
+#    Skateboard.SlopeGain
+#        Multiplier on the terrain gradient under the character's heading,
+#        sampled over 2 yd. 0 = flat ground everywhere; higher values make
+#        hills matter more. Only terrain, never vmaps.
+#        Default: 9.0, range: 0.0 - 90.0
+#
+Skateboard.SlopeGain = 9.0
+
+#
+#    Skateboard.LandingBonus
+#        Speed added by a clean landing, in yd/s, clamped to MaxSpeed.
+#        Default: 2.0, range: 0.0 - 20.0
+#
+Skateboard.LandingBonus = 2.0
+
+#
+#    Skateboard.Tricks
+#        1 = take-offs queue a clip for the speed band (500/900/1400 ms), play
+#        the band's emote and the visual kit, and score the landing: landing
+#        before the clip ends crashes the deck, landing at or after it is clean.
+#        0 = no automatic clips and no crash from a jump; '.board trick <n>' can
+#        still play one by hand.
+#        Default: 1, range: 0/1
+#
+Skateboard.Tricks = 1
+
+#
+#    Skateboard.Trick.VisualKit
+#        SpellVisualKit id sent on take-off and when a trick is played by hand.
+#        0 = no flair.
+#        Default: 5036, range: 0 - 100000
+#
+Skateboard.Trick.VisualKit = 5036
+
+#
+#    Skateboard.Crash.Enable
+#        1 = a mistimed landing wrecks the deck and hurts, 0 = the character
+#        simply steps off.
+#        Default: 1, range: 0/1
+#
+Skateboard.Crash.Enable = 1
+
+#
+#    Skateboard.Crash.DamagePct
+#        Crash damage as a percentage of maximum health.
+#        Default: 8, range: 0 - 99
+#
+Skateboard.Crash.DamagePct = 8
+
+#
+#    Skateboard.Crash.StaggerMs
+#        How long the character is rooted after a crash. 0 = no root.
+#        Default: 1500, range: 0 - 10000
+#
+Skateboard.Crash.StaggerMs = 1500
+
+#
+#    Skateboard.HardcoreSafe
+#        1 = a crash can never kill: the damage is clamped to leave at least one
+#        point of health. 0 = let the fall kill.
+#        Default: 1, range: 0/1
+#
+Skateboard.HardcoreSafe = 1
+
+#
+#    Skateboard.OffInCombat
+#        1 = entering combat drops the deck, because a 21 yd/s cap is a free
+#        disengage. 0 = the deck survives combat.
+#        Default: 1, range: 0/1
+#
+Skateboard.OffInCombat = 1
+
+#
+#    Skateboard.AckTimeoutMs
+#        How long a forced run speed change waits for the client's ACK before
+#        the gate is reopened anyway. A lost ACK must never wedge a deck.
+#        Default: 500, range: 50 - 5000
+#
+Skateboard.AckTimeoutMs = 500
+
+#
+#    Skateboard.Debug
+#        1 = one log line per boarded player every five seconds with the real
+#        numbers (v, rate, pending acks, slope), plus the ACK-timeout message at
+#        info level instead of as a warning.
+#        Default: 0, range: 0/1
+#
+Skateboard.Debug = 0

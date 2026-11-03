@@ -14,6 +14,10 @@ name: module-checks
 # by scripts/syntax-check.sh --dump-flags and carries placeholders for the checkouts,
 # so it works here as well as on a development host. scripts/mercenaries/check_mercenaries.py fails
 # when it no longer matches the core commit in pins.toml.
+#
+# The per-module offline checkers are scripts/mercenaries/check_mercenaries.py and
+# scripts/skateboard/check_skateboard.py: each reads its module's files and fails when they
+# disagree with each other, the confs or the plan docs.
 
 on:
   push:
@@ -92,6 +96,13 @@ jobs:
           AC_CORE: ${{ github.workspace }}/core
           AC_PLAYERBOTS: ${{ github.workspace }}/playerbots
         run: python3 scripts/mercenaries/check_mercenaries.py
+
+      - name: Check the skateboard module's files agree
+        # The conf keys against the module's own fallbacks and both installers, the `.board` verbs
+        # against the plan and the add-on, and the deck ids against the plan's deck table. The
+        # add-on lives in the launcher repository, which this workflow does not clone, so that one
+        # comparison prints a skip line here and runs on a host that has both checkouts.
+        run: python3 scripts/skateboard/check_skateboard.py
 
       - name: No module commits a characters transaction synchronously
         # CharacterDatabase.DirectCommitTransaction runs the transaction on the synchronous

@@ -66,11 +66,10 @@ CORE_REPO="https://github.com/mod-playerbots/azerothcore-wotlk"
 CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
 PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
-# mod-creature-gear, mod-hardcore, mod-e-interact, mod-survivor and mod-mercenaries live in *this*
-# repository
-# (modules/), not in repositories of their own, so --from-source has to fetch this one's tarball as
-# well when the script is installed from a copy of the repo. --github-token (THOR_GH_TOKEN) is what
-# makes that work while private.
+# mod-creature-gear, mod-hardcore, mod-e-interact, mod-survivor, mod-mercenaries and
+# mod-skateboard live in *this* repository (modules/), not in repositories of their own, so
+# --from-source has to fetch this one's tarball as well when the script is installed from a copy of
+# the repo. --github-token (THOR_GH_TOKEN) is what makes that work while private.
 SELF_REPO="nick-monto/acore-thor-selfhost"
 # A branch is a moving pointer: the two python files this script runs, and the tarball it extracts the
 # modules and the SQL from, are whatever that branch holds at that moment. A commit is content
@@ -1394,7 +1393,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-mercenaries, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-mercenaries, modules/mod-skateboard, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -1497,8 +1496,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     # $parent/<module-name>.
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
         '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' '*/modules/mod-e-interact*' \
-        '*/modules/mod-survivor*' '*/modules/mod-mercenaries*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor and modules/mod-mercenaries out of $SELF_REPO@$SELF_REF"; }
+        '*/modules/mod-survivor*' '*/modules/mod-mercenaries*' '*/modules/mod-skateboard*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-mercenaries and modules/mod-skateboard out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -1531,7 +1530,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-survivor (wrong SELF_REF?)"
     [ -d "$parent/mod-mercenaries" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-mercenaries (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-e-interact, $parent/mod-survivor and $parent/mod-mercenaries"
+    [ -d "$parent/mod-skateboard" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-skateboard (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-e-interact, $parent/mod-survivor, $parent/mod-mercenaries and $parent/mod-skateboard"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1708,7 +1709,7 @@ SQL
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-mercenaries}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-mercenaries,mod-skateboard}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -2057,10 +2058,11 @@ run_checks() {   # run_checks FIX(0|1)
     local cg="$CONF_DIR/modules/mod-creature-gear.conf" hc="$CONF_DIR/modules/mod_hardcore.conf"
     local ei="$CONF_DIR/modules/mod_e_interact.conf" sv="$CONF_DIR/modules/mod-survivor.conf"
     local pw="$CONF_DIR/modules/mod-mercenaries.conf"
-    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$ei" ] && [ -f "$sv" ] && [ -f "$pw" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf, modules/mod-survivor.conf, modules/mod-mercenaries.conf"
+    local sb="$CONF_DIR/modules/mod-skateboard.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$ei" ] && [ -f "$sv" ] && [ -f "$pw" ] && [ -f "$sb" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf, modules/mod-survivor.conf, modules/mod-mercenaries.conf, modules/mod-skateboard.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf/modules/mod-survivor.conf/modules/mod-mercenaries.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf/modules/mod-survivor.conf/modules/mod-mercenaries.conf/modules/mod-skateboard.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -2216,6 +2218,30 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then
                 FIXES=$((FIXES + 1))
                 conf_defaults "$pw" mercenary_value_ok mod-mercenaries.conf "${MERCENARY_CONF_DEFAULTS[@]}"
+            fi
+        fi
+    fi
+    if [ -f "$sb" ] && load_conf_lib 1; then
+        # Every key the module reads, with the range it accepts. A missing key is filled with the
+        # module's own fallback at load and a bad one is ignored the same way, so a config that
+        # still starts the server can be wrong here without saying so. The two are reported apart:
+        # an absent key means the live conf is older than the artifact, a bad one means it says
+        # something the module will not take.
+        local sb_default sb_key sb_val sb_bad="" sb_absent=""
+        for sb_default in "${SKATEBOARD_CONF_DEFAULTS[@]}"; do
+            sb_key="${sb_default%%=*}"
+            sb_val="$(conf_get "$sb" "$sb_key")"
+            if [ -z "$sb_val" ]; then sb_absent="$sb_absent $sb_key"
+            elif ! skateboard_value_ok "$sb_key" "$sb_val"; then sb_bad="$sb_bad $sb_key=$sb_val"; fi
+        done
+        if [ -z "$sb_bad" ] && [ -z "$sb_absent" ]; then
+            ok "mod-skateboard.conf: Enable=$(conf_get "$sb" Skateboard.Enable) Deck=$(conf_get "$sb" Skateboard.Deck) MaxSpeed=$(conf_get "$sb" Skateboard.MaxSpeed) Crash.Enable=$(conf_get "$sb" Skateboard.Crash.Enable)"
+        else
+            if [ -n "$sb_bad" ]; then bad "mod-skateboard.conf: unusable value(s):$sb_bad"; fi
+            if [ -n "$sb_absent" ]; then bad "mod-skateboard.conf: key(s) the live file predates:$sb_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
             fi
         fi
     fi

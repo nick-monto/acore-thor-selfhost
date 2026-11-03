@@ -4,7 +4,9 @@ Companion to [`SKATEBOARDING-DESIGN.md`](SKATEBOARDING-DESIGN.md), which establi
 feasible and why. This document is the build plan for the first shippable slice: the module, the two
 shield decks, the packaging, and the acceptance check for each step.
 
-Status: **plan only, nothing implemented.** The deck rows are chosen (`Engraved Wall`, `Iron Coffin
+Status: **steps 1-3 implemented and gated; step 4 (the deck rows) and step 5 (docs) are open.** The
+module, the add-on, the wiring and the offline checker are in the tree; the two shields still ride on
+the client patch from step 4, so the shipped deck is the stock log. The deck rows are chosen (`Engraved Wall`, `Iron Coffin
 Lid`); the momentum model, the limits and the evidence are in the design document.
 
 Confidence: **[V]** verified here from source, artifact or API, **[R]** reported, **[I]** inference.
@@ -147,13 +149,15 @@ is ever boarded.
 | Key | Default | Meaning |
 |---|---|---|
 | `Skateboard.Enable` | 0 | whole feature |
-| `Skateboard.Deck` | `engravedwall` | `engravedwall`, `coffinlid`, `log`, or a raw display id |
+| `Skateboard.Deck` | `log` | `log` (26609, no client patch), `engravedwall` (90001) or `coffinlid` (90002) once step 4 lands the rows, or a raw display id |
 | `Skateboard.MountedPose` | 0 | §2.5 |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
 | `Skateboard.SlopeGain` | 9.0 | multiplier on the terrain gradient |
 | `Skateboard.LandingBonus` | 2.0 | `v` added by a clean landing |
+| `Skateboard.Tricks` | 1 | auto tricks on take-off, and the bar's trick slots |
+| `Skateboard.Trick.VisualKit` | 5036 | stock `SpellVisualKit` id sent with each clip, 0 = no flair |
 | `Skateboard.Crash.Enable` / `.DamagePct` / `.StaggerMs` | 1 / 8 / 1500 | the wipeout |
 | `Skateboard.HardcoreSafe` | 1 | a crash can never kill |
 | `Skateboard.OffInCombat` | 1 | a 21 yd/s cap is a free disengage |
@@ -161,9 +165,11 @@ is ever boarded.
 | `Skateboard.Debug` | 0 | one log line per 5 s: `v`, slope, rate, `pendingAcks` |
 
 Commands, `CommandScript` (`Acore::ChatCommands`, so both the chat line and the add-on channel can
-reach them): `.board on|off|toggle`, `.board status`, `.board speed`, `.board trick <n>`,
-`.sb key <binding> <key>`. Config is read in `WorldScript::OnAfterConfigLoad`, so `.reload config`
-applies it without a restart.
+reach them): `.board on`, `.board off`, `.board toggle`, `.board status`, `.board speed`,
+`.board push`, `.board trick <1|2|3>`. `.board status` answers one parseable line,
+`boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId>`, which is what the add-on builds its slots
+from, and `.board speed` answers `v=<yd/s> rate=<rate> pending=<n>`. Config is read in
+`WorldScript::OnAfterConfigLoad`, so `.reload config` applies it without a restart.
 
 ## 2.9 Activation, and how the binds take over
 
@@ -182,11 +188,13 @@ button itself. `EInteract.lua:203-233` is the working precedent.
 | Binding | Action |
 |---|---|
 | `Skateboard` | board / leave (`.board toggle`) |
-| `Skateboard Trick 1`, `Skateboard Trick 2` | `.board trick 1`, `.board trick 2` |
-| `Skateboard Bail` | `.board off`, whatever the state |
+| `Skateboard: push` | `.board push` |
+| `Skateboard: trick 1`, `Skateboard: trick 2` | `.board trick 1`, `.board trick 2` |
+| `Skateboard: bail` | `.board off`, whatever the state |
 
-Three or four bindings is the whole activation surface. None of them needs a client DBC, an item or a
-spell, and all of them are reachable from the launcher's external pad, which emits key presses.
+Five bindings is the whole activation surface — the bar offers the same actions plus trick 3. None of
+them needs a client DBC, an item or a spell, and all of them are reachable from the launcher's
+external pad, which emits key presses.
 
 ### How a press reaches the server
 
@@ -204,20 +212,22 @@ with **no client files at all**, so a missing add-on can only cost the bar, neve
 
 Three client-side options, all in the add-on, all reachable without server work beyond the commands:
 
-1. **its own bar** — `SecureActionButtonTemplate` buttons with `macrotext`, each bound with
-   `SetBindingClick`. Slots are built from `.board status`, so the board and push buttons exist from
-   step 1 and the trick slots appear when the module starts advertising them in step 3. This is the
-   bar; it ships with the activation.
-2. **bar page** — write macros into a spare action bar page, switch to it while boarded, restore on
-   leave. The player's existing `1`/`2`/`3` then do board things, which is the closest thing to a form
-   or vehicle bar without client data. Protected in combat, and ConsolePort may own the page: a device
-   test, so it lives behind a toggle in step 3 rather than inside the bar.
-3. **vehicle bar** — rejected below.
+1. **binding takeover** — while boarded and out of combat, the add-on remembers
+   `GetBindingKey("ACTIONBUTTON1..3")` and re-points those keys at the skateboard buttons
+   (`SetBinding`), restoring them on leave. It is the most literal reading of "the other binds take
+   over": the keys the player already presses for the action bar become board actions, and nothing
+   touches ConsolePort or the action bar pages. Guarded by `InCombatLockdown()`, and the saved table
+   is restored on the next login if a reload or a crash cut the ride short. This is what ships.
+2. **its own bar** — the add-on's frame with push, trick and bail buttons, plus the five click
+   bindings. Always available; it is what the takeover re-points at.
+3. **bar page** — a spare action bar page filled with macros. Dropped: `PlaceAction` with a macro
+   action needs the macro to exist client-side first, so it is more moving parts than the binding swap
+   for the same result.
 
 The HUD is the fourth piece and needs nothing from the server: `GetUnitSpeed("player")` returns the
 rate the module publishes as the cap, so the readout is the same number the `Debug` log line carries.
 It reads non-zero while coasting without input, because the cap is momentum and the client's
-displacement is its own. It ships with step 2, when `v` first exists.
+displacement is its own.
 
 ### Why not the vehicle system
 
@@ -305,7 +315,7 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | cleanup | logout, die, change map, `.board off` | no `UNIT_FIELD_MOUNTDISPLAYID` left, no state left in the map |
 | bar | click the add-on's board button, then its push button | same result as the bindings; a slot the module has not advertised is hidden rather than failing |
 | HUD | ride boarded with `Debug` on | the readout matches the `Debug` line's `v`; it is the published rate, so it reads non-zero while coasting without input |
-| page swap (toggle) | board with the swap on | the player's own bar keys do board actions, the old page returns on leave; if ConsolePort refuses the page, the bar keys still work |
+| takeover (toggle) | board out of combat with the takeover on | the player's own action bar keys do board actions, and every original binding is restored on leave, on reload and on the next login after a crash |
 | deck rows | step 4 on the device | both shields render, `--verify` finds all three members in one archive, the server boots with the patched DBCs |
 
 ## 6. Risks and unknowns
@@ -322,7 +332,7 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | A bot is boarded | `WorldSession::IsHeadless()` gate (`Hardcore.cpp:140-149`) |
 | ConsolePort hides or rewrites the click binding | it lists custom bindings by design (`EInteract.lua:221-233`), and the `/say` macro path needs no add-on at all |
 | The add-on command channel is refused with no party and no guild | send the add-on message as a self-whisper; the parse happens before any target or channel check (`ChatHandler.cpp:255-310`), and the macro path stays as the fallback |
-| The bar page swap is protected in combat, or ConsolePort owns the page | a step 3 toggle, never a dependency: the bar's own buttons work either way |
+| Rebinding the player's action bar keys fails or is refused in combat | guarded by `InCombatLockdown()`; the saved table restores on leave and on the next login, and the bar's own buttons work either way |
 | A bar takeover is a spell bar (the vehicle route) | deferred with the cost table in §2.9; four `Spell.dbc` rows plus a physics retarget |
 
 ## 7. Order of work
@@ -332,14 +342,14 @@ Each step lands alone and is verifiable on its own.
 The bar and the HUD are not their own step any more: both are pure Lua with no dependency on the
 module beyond the commands it already has, and the HUD reads `GetUnitSpeed("player")`, which is the
 same number the module publishes as the cap. The only client behaviour that is genuinely unknown is
-the bar **page swap** (ConsolePort may own the page), so it stays a toggle inside step 3's bar rather
-than a step of its own.
+the **binding takeover** (mutating the player's own bindings out of combat), so it stays a toggle
+inside step 3's bar rather than a step of its own.
 
 | # | Step | Content | Acceptance |
 |---|---|---|---|
 | 1 | skeleton, activation and bar | module dirs, loader, config, `.board on/off/toggle`, deck display (stock `26609`), all wiring, the offline checker; add-on: the click bindings, the bar (board/leave, push), the `/say .board` macro fallback | §5 rows 1-4 and the bar row: boots, deck renders, pose answered, a bound key and the bar both board and leave |
 | 2 | momentum and HUD | integrator, cap gate, drift re-assert, `Debug` logging; the readout over `GetUnitSpeed` | §5 momentum, cap and HUD rows: the curve, no kicks, the readout matches the log |
-| 3 | tricks, crash and takeover | airtime bands, emote + visual, landing bonus, crash, cleanup hooks; the bar's trick slots appear once `.board status` advertises them; the page swap behind a toggle | §5 tricks, cleanup and page-swap rows |
+| 3 | tricks, crash and takeover | airtime bands, emote + visual, landing bonus, crash, cleanup hooks; the bar's trick slots appear once `.board status` advertises them; the binding takeover behind a toggle | §5 tricks, cleanup and takeover rows |
 | 4 | deck rows | rename and extend the patch tool, both shield rows, installers, server-side DBCs | §5 deck-row row: both decks on the device, `--verify` clean |
 | 5 | docs | this plan's status line, design-doc status, README, RUNBOOK | — |
 

@@ -55,6 +55,16 @@ ref = "main"                                                # SELF_REF in thor-i
 # from SELF_REPO ($SELF_REF, default main). The module ships one world SQL file (the container
 # gameobject template) and creates its three character tables programmatically.
 
+[module.skateboard]
+repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
+path = "modules/mod-skateboard"                            # loader symbol Addmod_skateboardScripts()
+ref = "main"                                                # SELF_REF in thor-install.sh (overridable)
+# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-skateboard out of
+# its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a tarball
+# from SELF_REPO ($SELF_REF, default main). The module ships no SQL and is config-only: every knob
+# lives in conf/mod-skateboard.conf.dist and its state is per-session, so there is no table to create
+# and nothing for the DB updater to apply.
+
 [data.client_data]
 url = "https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
 size = 1196168257
@@ -69,7 +79,7 @@ runner = "windows-2022"
 toolchain = "MSVC (Visual Studio 2022, x64)"
 prefix = "C:/acore"                                    # windows-install.ps1 -Root default
 installer = "scripts/windows-install.ps1"
-# Same core pin, same six modules, same patches and same custom SQL as the arm64 artifact; the zip
+# Same core pin, same seven modules, same patches and same custom SQL as the arm64 artifact; the zip
 # is flat (worldserver.exe and authserver.exe at the root, configs/, src/) because AzerothCore's
 # Windows install has no prefix layout: ConfigMgr::GetConfigPath() returns "configs/" under
 # AC_PLATFORM_WINDOWS (src/common/Configuration/Config.cpp:709) and it is CWD-relative.
@@ -88,7 +98,7 @@ release_tag = "server-build-x86_64"                    # deliberately NOT marked
 asset = "acore-server-x86_64.tar.zst"
 runner = "ubuntu-24.04"
 prefix = "/opt/acore"
-# Same core pin, same six modules, same patches and same custom SQL as the other two artifacts:
+# Same core pin, same seven modules, same patches and same custom SQL as the other two artifacts:
 # server-aarch64.yml with the platform swapped, on a native x86_64 runner so the sonames match the
 # arm64 artifact's generation. The tarball layout is the Docker image's (bin/ etc/ lib/ src/ under
 # /opt/acore), which is also what thor-install.sh expects from a tarball. This tag is not marked

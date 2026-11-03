@@ -311,7 +311,8 @@ jobs:
           Copy-Item -Recurse -Force 'modules/mod-e-interact' 'src/core/modules/mod-e-interact'
           Copy-Item -Recurse -Force 'modules/mod-survivor' 'src/core/modules/mod-survivor'
           Copy-Item -Recurse -Force 'modules/mod-mercenaries' 'src/core/modules/mod-mercenaries'
-          foreach ($module in @('mod-playerbots', 'mod-creature-gear', 'mod-hardcore', 'mod-e-interact', 'mod-survivor', 'mod-mercenaries')) {
+          Copy-Item -Recurse -Force 'modules/mod-skateboard' 'src/core/modules/mod-skateboard'
+          foreach ($module in @('mod-playerbots', 'mod-creature-gear', 'mod-hardcore', 'mod-e-interact', 'mod-survivor', 'mod-mercenaries', 'mod-skateboard')) {
             if (-not (Test-Path "src/core/modules/$module/src")) { Fail "$module has no src/ directory under src/core/modules; the core would not discover it" }
           }
 
@@ -443,6 +444,7 @@ jobs:
             @{ File = 'mod_e_interact.conf.dist'; Keys = @('EInteract.Use = 1', 'EInteract.Roll = 1') },
             @{ File = 'mod-survivor.conf.dist'; Keys = @('Survivor.Enable = 1') },
             @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
+            @{ File = 'mod-skateboard.conf.dist'; Keys = @('Skateboard.Enable = 0') },
             @{ File = 'playerbots.conf.dist'; Keys = @('Playerbots.RandomBotNearPlayers = 0') }
           )
           foreach ($conf in $moduleConfs) {
@@ -450,12 +452,12 @@ jobs:
             Assert-File $path "the $($conf.File) module config"
             foreach ($key in $conf.Keys) { Assert-Key $path $key "'$key' in $($conf.File)" }
           }
-          # Cheap census beside the named files: exactly the six modules above are expected, and a
-          # seventh conf means a module was vendored in without this list being extended.
+          # Cheap census beside the named files: exactly the seven modules above are expected, and an
+          # eighth conf means a module was vendored in without this list being extended.
           $installedConfs = @(Get-ChildItem -LiteralPath "$env:PREFIX\configs\modules" -File | Where-Object Name -like '*.conf.dist')
           Write-Host "module confs installed: $($installedConfs.Count)"
           $installedConfs | ForEach-Object { Write-Host "  $($_.Name)" }
-          if ($installedConfs.Count -lt 6) { Fail "only $($installedConfs.Count) module conf(s) installed under $env:PREFIX\configs\modules; a module was not discovered" }
+          if ($installedConfs.Count -lt 7) { Fail "only $($installedConfs.Count) module conf(s) installed under $env:PREFIX\configs\modules; a module was not discovered" }
 
           Get-ChildItem -LiteralPath $env:PREFIX | Select-Object Name, Length | Format-Table | Out-String | Write-Host
           $totalMb = ((Get-ChildItem -LiteralPath $env:PREFIX -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB
@@ -669,7 +671,7 @@ jobs:
           $notes = (@(
             "Rolling windows/x64 server build: AzerothCore core $($env:CORE_COMMIT) + mod-playerbots $($env:PB_COMMIT), this repository at $shortSha (run $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)). Compiled with MSVC (Visual Studio 2022) on windows-2022."
             "Artifact sha256: $hash. Compare it with the downloaded acore-server-win64.zip before unpacking; acore-server-win64.zip.sha256 beside the asset carries the same value in sha256sum form."
-            "Modules: mod-playerbots (the bot population, with the player-centric distribution patch that keeps random bots in the zones real players are in), mod-creature-gear (humanoids visibly wear the gear they can drop), mod-hardcore (opt-in one-death ruleset, ghost by default), mod-e-interact (one interact key, including the local gameobject pass), mod-survivor (death drops everything carried into a lootable container) and mod-mercenaries (named bots recruited at any innkeeper, levelling with you inside a two-level window)."
+            "Modules: mod-playerbots (the bot population, with the player-centric distribution patch that keeps random bots in the zones real players are in), mod-creature-gear (humanoids visibly wear the gear they can drop), mod-hardcore (opt-in one-death ruleset, ghost by default), mod-e-interact (one interact key, including the local gameobject pass), mod-survivor (death drops everything carried into a lootable container), mod-mercenaries (named bots recruited at any innkeeper, levelling with you inside a two-level window) and mod-skateboard (an opt-in board whose momentum is a server-side speed cap, off until Skateboard.Enable = 1)."
             "No PDBs and no client data ride the artifact: the installer downloads the pinned wowgaming/client-data zip and verifies its sha256 itself. Install with scripts/windows-install.ps1 from an elevated PowerShell session; its default -ReleaseUrl points at this release's tag rather than at releases/latest, which stays the arm64 build."
           ) -join "`n`n")
           Set-Content -Path (Join-Path $env:GITHUB_WORKSPACE 'release-notes-win64.md') -Value $notes -Encoding utf8
@@ -720,6 +722,7 @@ jobs:
             @{ File = 'mod_e_interact.conf.dist'; Keys = @('EInteract.Use = 1', 'EInteract.Roll = 1') },
             @{ File = 'mod-survivor.conf.dist'; Keys = @('Survivor.Enable = 1') },
             @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
+            @{ File = 'mod-skateboard.conf.dist'; Keys = @('Skateboard.Enable = 0') },
             @{ File = 'playerbots.conf.dist'; Keys = @('Playerbots.RandomBotNearPlayers = 0') }
           )
           foreach ($conf in $moduleConfs) {

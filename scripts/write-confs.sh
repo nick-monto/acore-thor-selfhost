@@ -6,7 +6,7 @@
 #
 # Callers:
 #   - scripts/thor-install.sh, whose write_configs() maps the installer's variables to the WC_*
-#     ones below and calls wc_write_all (it also uses the two conf-defaults lists and the four
+#     ones below and calls wc_write_all (it also uses the three conf-defaults lists and the five
 #     helpers from run_checks);
 #   - the Docker entrypoint, which has no installer helpers, so logging falls back to plain
 #     stdout/stderr.
@@ -71,6 +71,30 @@ MERCENARY_CONF_DEFAULTS=(
     "Mercenary.PoolRefreshMaxMinutes=60"
     "Mercenary.Debug=0"
 )
+# mod-skateboard's conf keys with the values its shipped .dist carries, as KEY=DEFAULT - the whole
+# set the module reads, the same eighteen the contract and the checkers hold. Same contract as the
+# survivor list: a key absent from the file or outside its range is silently replaced by the
+# module's own fallback, so wc_write_all() and the installer's run_checks() restore it from here.
+SKATEBOARD_CONF_DEFAULTS=(
+    "Skateboard.Enable=0"
+    "Skateboard.Deck=log"
+    "Skateboard.MountedPose=0"
+    "Skateboard.MaxSpeed=21.0"
+    "Skateboard.PushImpulse=4.0"
+    "Skateboard.Friction.Static=1.5"
+    "Skateboard.Friction.Rolling=0.004"
+    "Skateboard.SlopeGain=9.0"
+    "Skateboard.LandingBonus=2.0"
+    "Skateboard.Tricks=1"
+    "Skateboard.Trick.VisualKit=5036"
+    "Skateboard.Crash.Enable=1"
+    "Skateboard.Crash.DamagePct=8"
+    "Skateboard.Crash.StaggerMs=1500"
+    "Skateboard.HardcoreSafe=1"
+    "Skateboard.OffInCombat=1"
+    "Skateboard.AckTimeoutMs=500"
+    "Skateboard.Debug=0"
+)
 
 wc_conf_pair() {   # wc_conf_pair CONF_DIR NAME - print the live config file, creating it from NAME.conf.dist once
     local dist="$1/$2.conf.dist" live="$1/$2.conf"
@@ -112,8 +136,10 @@ wc_get_conf() {   # wc_get_conf FILE KEY - print the live value (last uncommente
     ' "$1"
 }
 
-# The four helpers below keep their unprefixed names: scripts/mercenaries/check_mercenaries.py
-# reads mercenary_value_ok and MERCENARY_CONF_DEFAULTS out of this file with regexes.
+# The five helpers below keep their unprefixed names: scripts/mercenaries/check_mercenaries.py
+# reads mercenary_value_ok and MERCENARY_CONF_DEFAULTS out of this file with regexes, and
+# scripts/skateboard/check_skateboard.py does the same for skateboard_value_ok and
+# SKATEBOARD_CONF_DEFAULTS.
 
 mercenary_value_ok() {   # mercenary_value_ok KEY VALUE - true when VALUE is one mod-mercenaries accepts
     # Mercenary.Enable and Mercenary.Debug are 0|1, MaxMercenaries 0-4 (the gossip page has room for four party
@@ -196,6 +222,41 @@ survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one t
             [ "$val" -gt 0 ] ;;
         *) return 1 ;;
     esac
+}
+
+skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is one the module accepts
+    # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s, PushImpulse
+    # and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain 0-90, the
+    # visual kit 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000 ms and the
+    # ACK timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is settled
+    # before the numeric guard below can see it. The momentum keys carry decimals, so the
+    # comparison is awk's rather than a shell integer test.
+    local key="$1" val="$2" lo hi
+    if [ "$key" = Skateboard.Deck ]; then
+        case "$val" in
+            log|engravedwall|coffinlid) return 0 ;;
+            ''|*[!0-9]*) return 1 ;;
+            *) awk -v v="$val" 'BEGIN { exit !(v ~ /^[0-9]+$/ && v + 0 > 0) }'; return ;;
+        esac
+    fi
+    case "$key" in
+        Skateboard.Enable|Skateboard.MountedPose|Skateboard.Tricks|Skateboard.Crash.Enable|\
+        Skateboard.HardcoreSafe|Skateboard.OffInCombat|Skateboard.Debug)
+            case "$val" in 0|1) return 0 ;; *) return 1 ;; esac ;;
+        Skateboard.MaxSpeed)         lo=1;  hi=40 ;;
+        Skateboard.PushImpulse)      lo=0;  hi=20 ;;
+        Skateboard.Friction.Static)  lo=0;  hi=20 ;;
+        Skateboard.Friction.Rolling) lo=0;  hi=1 ;;
+        Skateboard.SlopeGain)        lo=0;  hi=90 ;;
+        Skateboard.LandingBonus)     lo=0;  hi=20 ;;
+        Skateboard.Trick.VisualKit)  lo=0;  hi=100000 ;;
+        Skateboard.Crash.DamagePct)  lo=0;  hi=99 ;;
+        Skateboard.Crash.StaggerMs)  lo=0;  hi=10000 ;;
+        Skateboard.AckTimeoutMs)     lo=50; hi=5000 ;;
+        *) return 1 ;;
+    esac
+    awk -v v="$val" -v lo="$lo" -v hi="$hi" \
+        'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/ && v + 0 >= lo && v + 0 <= hi) }'
 }
 
 mercenary_append_missing_conf() {   # mercenary_append_missing_conf LIVE DIST - append the shipped keys LIVE lacks
@@ -288,7 +349,7 @@ conf_defaults() {
 # real failure: a missing module conf is a warning, because an artifact built without that module is
 # still a usable realm.
 wc_write_all() {
-    local ws as pb cg hc ei sv pw horde
+    local ws as pb cg hc ei sv pw sb horde
     [ -n "${WC_DATA_DIR:-}" ] || WC_DATA_DIR="$WC_ROOT/data"
     # The database is local to the install on the Thor and on Windows, but a container reaches it
     # through the compose network, so the host and port are inputs like the credentials are.
@@ -476,6 +537,18 @@ wc_write_all() {
         wc_log "mod-mercenaries.conf: Enable=$(wc_get_conf "$pw" Mercenary.Enable) MaxMercenaries=$(wc_get_conf "$pw" Mercenary.MaxMercenaries) LevelWindow=$(wc_get_conf "$pw" Mercenary.LevelWindow) Featured=$(wc_get_conf "$pw" Mercenary.FeaturedMin)-$(wc_get_conf "$pw" Mercenary.FeaturedMax) Refresh=$(wc_get_conf "$pw" Mercenary.PoolRefreshMinMinutes)-$(wc_get_conf "$pw" Mercenary.PoolRefreshMaxMinutes)min Fee=$(wc_get_conf "$pw" Mercenary.HireFeePercent)%+$(wc_get_conf "$pw" Mercenary.HireFeeHeldPercent)% Gear=$(wc_get_conf "$pw" Mercenary.GearFloorPercent)-$(wc_get_conf "$pw" Mercenary.GearCapPercent)%"
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-mercenaries.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
+    fi
+    if [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf" ]; then
+        sb="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-skateboard)"
+        # The shipped .dist already holds these values, and Skateboard.Enable ships as 0: the board
+        # exists but nobody is on it until the player turns it on. Each key is still read back,
+        # because a key the module cannot use is silently replaced by its own fallback and a deck id
+        # the DBC does not carry falls back to the stock display. Only a value outside its range is
+        # rewritten - a deliberate Enable=0 is left alone.
+        conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
+        wc_log "mod-skateboard.conf: Enable=$(wc_get_conf "$sb" Skateboard.Enable) Deck=$(wc_get_conf "$sb" Skateboard.Deck) MaxSpeed=$(wc_get_conf "$sb" Skateboard.MaxSpeed) Crash.Enable=$(wc_get_conf "$sb" Skateboard.Crash.Enable)"
+    else
+        wc_warn "no $WC_CONF_DIR/modules/mod-skateboard.conf.dist - the artifact was built without the module, the skateboard is unavailable"
     fi
     wc_log "worldserver.conf: DataDir=$(wc_get_conf "$ws" DataDir) BindIP=$(wc_get_conf "$ws" BindIP)"
 }
