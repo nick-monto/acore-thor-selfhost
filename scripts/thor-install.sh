@@ -2104,16 +2104,25 @@ run_checks() {   # run_checks FIX(0|1)
             ok "worldserver.conf travel keys set to InstantFlightPaths=2 AllFlightPaths=1 TaxiFlightSpeed=50.0"
         fi
     fi
-    if [ -f "$pb" ] && [ -n "$HORDE_RATIO" ] && [ "$(conf_get "$pb" Playerbots.RandomBotHordeRatio)" != "$HORDE_RATIO" ]; then
-        # 10# so a state file written before set-ratio.sh normalised its input (08, 010) still
-        # reconciles to the number it means instead of aborting the arithmetic.
-        local horde=$((10#${HORDE_RATIO}))
-        bad "playerbots.conf horde ratio is $(conf_get "$pb" Playerbots.RandomBotHordeRatio), state says $HORDE_RATIO"
-        if [ "$fix" = 1 ]; then
-            FIXES=$((FIXES + 1))
-            set_conf "$pb" Playerbots.RandomBotHordeRatio "$horde"
-            set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - horde))"
-            ok "faction split set to $((100 - horde))/$horde (alliance/horde)"
+    if [ -f "$pb" ] && [ -n "$HORDE_RATIO" ]; then
+        # The conf always holds a decimal, and a state file written before set-ratio.sh normalised its
+        # input can hold 010 or 08, so the comparison and the write both use the number. Comparing
+        # the raw text rewrote the pair on every run and could never clear the failure: the fix
+        # stored 10 and the very next check asked whether 10 equalled "010".
+        local horde=''
+        case "$HORDE_RATIO" in
+        [0-9] | [0-9][0-9] | [0-9][0-9][0-9]) horde=$((10#${HORDE_RATIO})) ;;
+        esac
+        if [ -z "$horde" ] || [ "$horde" -gt 100 ]; then
+            bad "state HORDE_RATIO is not a percentage 0-100: $HORDE_RATIO"
+        elif [ "$(conf_get "$pb" Playerbots.RandomBotHordeRatio)" != "$horde" ]; then
+            bad "playerbots.conf horde ratio is $(conf_get "$pb" Playerbots.RandomBotHordeRatio), state says $horde"
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                set_conf "$pb" Playerbots.RandomBotHordeRatio "$horde"
+                set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - horde))"
+                ok "faction split set to $((100 - horde))/$horde (alliance/horde)"
+            fi
         fi
     elif [ -f "$pb" ]; then
         ok "playerbots.conf faction split = $(conf_get "$pb" Playerbots.RandomBotAllianceRatio)/$(conf_get "$pb" Playerbots.RandomBotHordeRatio) (alliance/horde)"
