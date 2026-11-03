@@ -1437,16 +1437,22 @@ fetch_server() {
     local tarball=/tmp/acore-server-arm64.tar.zst
     curl_gh -fL --retry 3 -o "$tarball" "$RELEASE_URL" \
         || die "download failed: $RELEASE_URL (run the server-aarch64 workflow once to publish a release; if the repository is private, pass --github-token; or re-run with --from-source)"
+    local want="" got
     if curl_gh -fsL -o "$tarball.sha256" "$RELEASE_URL.sha256" 2>/dev/null && [ -s "$tarball.sha256" ]; then
-        local want got
         want=$(awk '{print $1}' "$tarball.sha256")
-        got=$(sha256_file "$tarball")
-        [ "$want" = "$got" ] || die "checksum mismatch: expected $want, got $got"
-        ARTIFACT_SHA="$got"
-        log "checksum ok: $got"
+    elif [ -n "${ARTIFACT_SHA:-}" ]; then
+        # No published hash. The hash this install recorded is the stronger pin anyway: it travels
+        # with the install, not with whatever the release tag points at today.
+        want="$ARTIFACT_SHA"
+        log "no .sha256 beside the tarball; verifying against the hash recorded at install time"
     else
-        warn "no .sha256 beside the tarball; skipping verification"
+        rm -f "$tarball" "$tarball.sha256"
+        die "no .sha256 beside $RELEASE_URL and no recorded artifact hash: refusing to unpack an unverified artifact (pass --release-url to a release that publishes one, or use --from-source)"
     fi
+    got=$(sha256_file "$tarball")
+    [ "$want" = "$got" ] || die "checksum mismatch: expected $want, got $got"
+    ARTIFACT_SHA="$got"
+    log "checksum ok: $got"
     mkdir -p "$ROOT"
     tar --zstd -xf "$tarball" -C "$ROOT"
     rm -f "$tarball" "$tarball.sha256"
@@ -1780,6 +1786,9 @@ gm password   : $ACCOUNT_PASS
 MySQL root has no password over the unix socket $SOCKET (rootfs-local only).
 Everything this install owns lives in $ROOT; see $STATE_DIR/manifest.txt for the rest.
 EOF
+    # umask only decides the mode of a file this run creates; a re-run truncates an older one and
+    # keeps whatever mode it had.
+    chmod 600 "$ROOT/credentials.txt"
     umask 022
 
     cat > "$ROOT/start-db.sh" <<EOF
@@ -2469,7 +2478,10 @@ layout_dirs() {   # recover BIN_DIR/CONF_DIR/DATA_DIR/SRC_DIR from what exists o
 # a binary built against the older one no matter which package it installs.
 REFERENCE_RELEASE="noble"
 REFERENCE_VERSION="24.04"
-PORTS_MIRROR="${THOR_PORTS_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}"
+# Over TLS, and that is the whole of the guarantee: the pool .deb is installed with apt-get, but
+# a package installed by path is not signature-checked, so this is transport trust only. Keep it
+# https, and override with THOR_PORTS_MIRROR only for a mirror you trust as much.
+PORTS_MIRROR="${THOR_PORTS_MIRROR:-https://ports.ubuntu.com/ubuntu-ports}"
 
 reference_deb_for_soname() {   # pool path of the deb in $REFERENCE_RELEASE that carries the soname
     case "$1" in

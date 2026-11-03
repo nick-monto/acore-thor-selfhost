@@ -1707,23 +1707,28 @@ function Install-ServerFiles {
         Die "download failed: $script:ReleaseUrl (run the server-win64 workflow once to publish the release, or pass -ReleaseUrl)"
     }
     $shaFile = $zip + '.sha256'
+    $want = ''
     if (Get-RemoteFile -Uri ($script:ReleaseUrl + '.sha256') -Destination $shaFile -Attempts 1) {
         $want = ([System.IO.File]::ReadAllText($shaFile)).Trim()
         if ($want) { $want = ($want -split '\s+')[0].ToLowerInvariant() }
-        $got = Get-Sha256 $zip
-        if ($want) {
-            if ($want -ne $got) {
-                Remove-Item -LiteralPath $zip, $shaFile -Force -ErrorAction SilentlyContinue
-                Die "checksum mismatch: expected $want, got $got"
-            }
-            $script:ArtifactSha = $got
-            Log "checksum ok: $got"
-        }
-    } else {
-        # A release assembled by hand may not carry the file; the download itself already failed
-        # three times before this point, so the artifact is as verified as it can be.
-        Warn 'no .sha256 beside the artifact; skipping verification'
     }
+    if (-not $want -and $script:ArtifactSha) {
+        # No published hash. The hash this install recorded is the stronger pin anyway: it travels
+        # with the install, not with whatever the release URL points at today.
+        $want = $script:ArtifactSha.ToLowerInvariant()
+        Log 'no .sha256 beside the artifact; verifying against the hash recorded at install time'
+    }
+    if (-not $want) {
+        Remove-Item -LiteralPath $zip, $shaFile -Force -ErrorAction SilentlyContinue
+        Die ("no .sha256 beside {0} and no recorded artifact hash: refusing to unpack an unverified artifact" -f $script:ReleaseUrl)
+    }
+    $got = Get-Sha256 $zip
+    if ($want -ne $got) {
+        Remove-Item -LiteralPath $zip, $shaFile -Force -ErrorAction SilentlyContinue
+        Die "checksum mismatch: expected $want, got $got"
+    }
+    $script:ArtifactSha = $got
+    Log "checksum ok: $got"
     [void][System.IO.Directory]::CreateDirectory($script:Root)
     Expand-ZipFile -Zip $zip -Destination $script:Root -Overwrite
     Remove-Item -LiteralPath $zip, $shaFile -Force -ErrorAction SilentlyContinue
@@ -1955,6 +1960,9 @@ function Write-Configs {
 
     $ws = Get-ConfPair 'worldserver'
     $as = Get-ConfPair 'authserver'
+    # Assigned below only when the artifact carries the module; declared here because the conf ACL
+    # pass at the end of this function reads it under Set-StrictMode.
+    $pb = $null
     # DataDir and friends are quoted: the value may contain a space, and the core strips the
     # quotes and nothing else. The database values use the host;port;user;pass;db form, quoted,
     # exactly as the Thor writes them.
@@ -2164,6 +2172,13 @@ function Write-Configs {
         Warn "no $moduleConf\mod-skateboard.conf.dist - the artifact was built without the module, the skateboard is unavailable"
     }
     Log ("worldserver.conf: DataDir={0} BindIP={1}" -f (Get-Conf $ws 'DataDir'), (Get-Conf $ws 'BindIP'))
+
+    # These three carry the database password in LoginDatabaseInfo / WorldDatabaseInfo, and they
+    # inherit the root's ACL - on the default C:\acore that is C:\, where Users may read. Restrict
+    # them the way the state file and credentials.txt already are.
+    foreach ($secretConf in @($ws, $as, $pb)) {
+        if ($secretConf -and (Test-Path -LiteralPath $secretConf)) { Protect-SecretFile -Path $secretConf }
+    }
 }
 
 # ---------------------------------------------------------------- first boot

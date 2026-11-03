@@ -92,7 +92,7 @@ Every download then addresses the commit, never the branch: `raw.githubuserconte
 - **Move an existing install to the tip:** name the ref explicitly — `SELF_REF=main thor-install.sh --repair` on the device, `-SelfRef main -Docker -Repair` on Windows. An explicitly named ref is resolved again and the new commit recorded.
 - **When GitHub's API is unreachable** the installer says so and falls back to the ref itself for that run. The lookup is one unauthenticated request per install, or authenticated when `--github-token` / `THOR_GH_TOKEN` is set.
 
-The server artifact is a separate download and is checked against the `.sha256` beside it; the client data is pinned by a hard-coded SHA-256 that fails the install on a mismatch.
+The server artifact is a separate download and is checked against the `.sha256` beside it; when the release carries none, the hash the install already recorded in `state.env` is used instead, and an artifact that can be verified by neither is refused rather than unpacked - both installers fail closed the way `docker/Dockerfile` already did. The client data is pinned by a hard-coded SHA-256 that fails the install on a mismatch.
 
 ---
 
