@@ -334,6 +334,11 @@ $script:FirstBootOk = $true
 # True unless a repair discovered there is no state file: Resolve-SelfRef saves when it pins a ref,
 # which would otherwise create <root>\.win-state\state.env on a root that was never installed.
 $script:HadState = $true
+# What the state file recorded for the ref, kept even when -SelfRef was passed (Import-State then
+# leaves SelfRefSha empty so this run fetches the ref itself). Save-State writes the pin back when the
+# ref did not change, so a repair whose resolution failed cannot erase it.
+$script:RecordedSelfRef = ''
+$script:RecordedSelfRefSha = ''
 $script:BinDir = ''
 $script:ConfDir = ''
 $script:DataDir = ''
@@ -819,6 +824,10 @@ function Save-State {
     }
     [void][System.IO.Directory]::CreateDirectory($script:StateDir)
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    # A run that asked for another ref leaves this empty until that ref resolves; a repair that names
+    # the ref already recorded must not erase the pin just because the lookup failed or was skipped.
+    $selfRefSha = $script:SelfRefSha
+    if (-not $selfRefSha -and $script:SelfRef -eq $script:RecordedSelfRef) { $selfRefSha = $script:RecordedSelfRefSha }
     $lines = @(
         ('# Written by windows-install.ps1 {0} on {1}' -f $ScriptVersion, $stamp)
         '# Read by -Status, -Repair, -Uninstall and the generated wrappers; edit only if you know what you are doing.'
@@ -840,7 +849,7 @@ function Save-State {
         ('DOCKER_DIR="{0}"' -f $script:DockerDir)
         ('DB_ROOT_PASS="{0}"' -f $script:DockerRootPass)
         ('SELF_REF="{0}"' -f $script:SelfRef)
-        ('SELF_REF_SHA="{0}"' -f $script:SelfRefSha)
+        ('SELF_REF_SHA="{0}"' -f $selfRefSha)
         ('VERSION="{0}"' -f $ScriptVersion)
         ('INSTALLED_AT="{0}"' -f $stamp)
     )
@@ -888,9 +897,15 @@ function Import-State {
             'ARTIFACT_SHA' { $script:ArtifactSha = $value }
             'DOCKER_DIR' { if ($value -and -not $script:Bound.ContainsKey('DockerDir')) { $script:DockerDir = $value } }
             'DB_ROOT_PASS' { $script:DockerRootPass = $value }
-            'SELF_REF' { if ($value -and -not $script:Bound.ContainsKey('SelfRef')) { $script:SelfRef = $value } }
+            'SELF_REF' {
+                if ($value) { $script:RecordedSelfRef = $value }
+                if ($value -and -not $script:Bound.ContainsKey('SelfRef')) { $script:SelfRef = $value }
+            }
             # Recorded once, at the run that resolved the ref; the command line can still override it.
-            'SELF_REF_SHA' { if (-not $script:Bound.ContainsKey('SelfRef')) { $script:SelfRefSha = $value } }
+            'SELF_REF_SHA' {
+                $script:RecordedSelfRefSha = $value
+                if (-not $script:Bound.ContainsKey('SelfRef')) { $script:SelfRefSha = $value }
+            }
         }
     }
     Reset-Paths
@@ -2549,9 +2564,12 @@ if ($Count) {
 if ($HordeRatio) {
     if ($HordeRatio -notmatch '^[0-9]+$') { Write-Host ("refusing '{0}': the horde ratio is a number" -f $HordeRatio); exit 2 }
     if ([int]$HordeRatio -gt 100) { Write-Host ("refusing {0}: the range is 0-100" -f $HordeRatio); exit 2 }
-    Set-Key -Name 'RandomBotHordeRatio' -Value $HordeRatio
+    # Written as the number, not the text: '08' would otherwise sit in the conf and in state while
+    # the installer compares its own integer against it and reports the split as drifted.
+    $ratio = [string]([int]$HordeRatio)
+    Set-Key -Name 'RandomBotHordeRatio' -Value $ratio
     Set-Key -Name 'RandomBotAllianceRatio' -Value ([string](100 - [int]$HordeRatio))
-    Set-State -Key 'HORDE_RATIO' -Value $HordeRatio
+    Set-State -Key 'HORDE_RATIO' -Value $ratio
 }
 Show
 '@
@@ -2990,12 +3008,8 @@ function Install-ClientPatch {
     if ($py.Count -gt 1) { $pyPrefix = @($py[1..($py.Count - 1)]) }
     $argv = $pyPrefix + @($tool, '--dbc', (Join-Path $dbcDir 'Item.dbc'), '--server-dbc', $dbcDir, '--out', $out)
     if ($clientData) { $argv += @('--client-data', $clientData) }
-    $display = (($py[0] + ' ' + ($argv -join ' ')) -replace [regex]::Escape($tool), $tool)
-    if ($script:DryRun) {
-        Note ("run {0}" -f $display)
-        if ($clientData) { Note ("write a patch archive into {0}" -f $clientData) }
-        return
-    }
+    # No dry-run arm here: the function returns at the top when -DryRun, and that block already says
+    # what it would write.
     Log ("running the Item.dbc patch ({0} of 64 bag records)" -f 'patch_item_dbc.py')
     $null = Invoke-Native -FilePath $py[0] -Arguments $argv
     if ($LASTEXITCODE -ne 0) {
