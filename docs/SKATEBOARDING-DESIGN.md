@@ -229,7 +229,7 @@ derived from the fall time — `MOVEMENTFLAG_FALLING` set at take-off, cleared o
 | Phase | Content | Client data | Acceptance |
 |---|---|---|---|
 | **0 — proof** | module: `.board on/off/toggle`, stock deck display, `v` integrator with friction + slope + push, cap published on ACK cadence; add-on: the click bindings that activate it, the bar, and a `GetUnitSpeed` readout | none | on the Thor: roll downhill, feel the coast, stop when `v` hits zero; no `"Incorrect speed"` kick over a 10-minute ride; a bound key boards and leaves |
-| **1 — tricks** | ramp gameobjects that call `KnockbackFrom`, emote + visual kit per trick, landing window, crash (dismount + fall damage), a `.tricks` list | none | a jump lands clean or wipes out per timing; observers see the animation and the FX |
+| **1 — tricks** | emote + visual kit per trick, landing window, crash (dismount + fall damage), the `.board trick` clips - shipped in the build plan's steps 1-3. Ramp gameobjects that call `KnockbackFrom` are not in those steps and remain unplanned | none | a jump lands clean or wipes out per timing; observers see the animation and the FX |
 | **2 — the deck** | custom `.m2`/`.skin`/`.blp`, `CreatureDisplayInfo` + `CreatureModelData` rows, both packed through the existing MPQ writer (`patch_archive` generalised, the `block_count != 2` ownership test relaxed, `patch_item_dbc.py:354,450`) and installed server-side too | yes | the board renders under the rider on the device; the client boots with the patched DBC pair |
 | **3 — physics** | not planned | — | needs client source |
 
@@ -251,7 +251,8 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | `Skateboard.Crash.Enable` | 1 | mistimed landing costs health |
 | `Skateboard.HardcoreSafe` | 1 | a crash can never kill a Hardcore character (§9) |
 
-Commands: `.board on|off|toggle`, `.tricks` (list), `.board speed` (print `v`).
+Commands: `.board on`, `.board off`, `.board toggle`, `.board status`, `.board speed` (print `v`),
+`.board push`, `.board trick <1|2|3>`.
 
 Activation is a click binding in the launcher's add-on, not a console command: `SetBindingClick`
 lists it in the stock Key Bindings frame, so a keyboard player binds a key there and a pad player
