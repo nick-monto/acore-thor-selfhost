@@ -110,7 +110,9 @@ Skateboard.SlopeGain = 9.0
 
 #
 #    Skateboard.LandingBonus
-#        Speed added by a clean landing, in yd/s, clamped to MaxSpeed.
+#        Speed added by a clean landing, in yd/s, clamped to MaxSpeed. Independent
+#        of Skateboard.Tricks: with tricks off there is no clip to mistime, so
+#        every landing is clean and the bonus is the whole of that system.
 #        Default: 2.0, range: 0.0 - 20.0
 #
 Skateboard.LandingBonus = 2.0
@@ -153,6 +155,8 @@ Skateboard.Crash.DamagePct = 8
 #    Skateboard.Crash.StaggerMs
 #        How long the character is rooted after a crash. 0 = no root.
 #        Default: 1500, range: 0 - 10000
+#        The stagger uses the core's own root state, so a spell root that expires
+#        inside the window ends it early: it can be shorter than this, never longer.
 #
 Skateboard.Crash.StaggerMs = 1500
 

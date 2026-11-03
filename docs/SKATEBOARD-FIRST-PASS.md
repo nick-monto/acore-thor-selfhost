@@ -4,7 +4,7 @@ Companion to [`SKATEBOARDING-DESIGN.md`](SKATEBOARDING-DESIGN.md), which establi
 feasible and why. This document is the build plan for the first shippable slice: the module, the two
 shield decks, the packaging, and the acceptance check for each step.
 
-Status: **steps 1-3 implemented and gated; step 4 (the deck rows) and step 5 (docs) are open.** The
+Status: **steps 1-3 and 5 implemented and gated; step 4 (the deck rows) is open.** The
 module, the add-on, the wiring and the offline checker are in the tree; the two shields still ride on
 the client patch from step 4, so the shipped deck is the stock log. The deck rows are chosen (`Engraved Wall`, `Iron Coffin
 Lid`); the momentum model, the limits and the evidence are in the design document.
@@ -59,13 +59,11 @@ fork.)
 | Field | Type | Meaning |
 |---|---|---|
 | `v` | `float` | deck speed in yd/s, `0..MaxSpeed` |
-| `headingX/Y` | `float` | last movement direction, from the last two samples |
-| `airborne` | `bool` | `MOVEMENTFLAG_FALLING` was set on the last packet |
+| `airborne` | `bool` | `MOVEMENTFLAG_FALLING` was set on the last packet; heading is not stored, the tick reads `player->GetOrientation()` |
 | `takeoffMs` | `uint32` | when the fall started |
 | `trickEndMs` | `uint32` | when the queued clip finishes |
 | `publishedRate` | `float` | the rate the server currently holds |
 | `pendingAcks` | `uint8` | `SMSG_FORCE_RUN_SPEED_CHANGE` sent, ACK not yet seen |
-| `lastRaise` | `bool` | the last published change was an increase |
 | `gateDeadlineMs` | `uint32` | ACK timeout (§2.4) |
 | `displayId` | `uint32` | what was written to `UNIT_FIELD_MOUNTDISPLAYID` |
 
@@ -94,12 +92,14 @@ the model, not a bug (design §3).
 `MovementHandler.cpp:763-776` compares the client's reported speed with the server's with a 0.01
 tolerance and kicks on `"Incorrect speed"` when the **client is higher**. So:
 
-1. observe `SMSG_FORCE_RUN_SPEED_CHANGE` behind `ServerScript::CanPacketSend` → `pendingAcks++`;
-2. observe `CMSG_FORCE_RUN_SPEED_CHANGE_ACK` behind `CanPacketReceive` → `pendingAcks--`;
-3. never send a second change while `pendingAcks > 0`;
-4. never lower while `lastRaise` and the ACK has not arrived;
-5. **timeout**: if 500 ms pass with `pendingAcks > 0`, clear the gate and log once — the counter the
-   core keeps is a `uint8` and a lost ACK must not wedge the deck forever;
+1. `PublishRate()` sets `pendingAcks = 1` in the same call that forces the change, so there is
+   never a window in which the packet is out and the gate is open;
+2. `ServerScript::CanPacketReceive` watches `CMSG_FORCE_RUN_SPEED_CHANGE_ACK` and `OnAck()` clears
+   `pendingAcks` back to `0` and arms `PublishThrottleMs` before the next send;
+3. never send a second change while `pendingAcks > 0`, and never lower the cap while one is in
+   flight: lowering needs the client's ACK for the higher rate first, so the tick simply waits;
+4. **timeout**: if `AckTimeoutMs` passes with `pendingAcks > 0`, clear the gate and log once — the
+   counter the core keeps is a `uint8` and a lost ACK must not wedge the deck forever;
 6. re-assert on drift: if `fabs(GetSpeedRate(MOVE_RUN) - target) > 0.01`, publish again (aura
    refreshes call `UpdateSpeed` and wipe the rate — `SpellAuraEffects.cpp:3817`,
    `Unit.cpp:10379`), through the same gate.
@@ -129,18 +129,21 @@ No input in the first pass — the existing jump button is the trick button.
 
 | Event | Detection | Action |
 |---|---|---|
-| take-off | `MOVEMENTFLAG_FALLING` set on a packet | record `takeoffMs`, queue a clip by airtime band |
+| take-off | `MOVEMENTFLAG_FALLING` set on a packet | record `takeoffMs`, queue a clip by the speed band `v` is in |
 | clip | `Unit::HandleEmoteCommand` (`SMSG_EMOTE`, `ChatPackets.h:31`) | `EMOTE_ONESHOT_JUMPSTART` 399 short, `JUMPLANDRUN` 394 medium, `STOMP` 388 long; `MOUNT_SPECIAL` 377 reserved for a deck that carries the animation |
 | flair | `Unit::SendPlaySpellVisual(id)` (`Unit.cpp:14810`) | one stock kit per clip, ids from config |
 | landing | `MOVEMENTFLAG_FALLING` cleared | clean: `v += LandingBonus`; mistimed (landed before `trickEndMs`): crash |
 
 ### 2.7 Crash and cleanup
 
-Crash = `Unmount`, damage (`CrashDamage` percent of max health, clamped to `health - 1` when
-`HardcoreSafe`), and `UNIT_FLAG_DISABLE_MOVE` for `CrashStaggerMs`.
+Crash = the deck is cleared and the run rate restored, damage (`Crash.DamagePct` percent of max
+health, clamped to leave at least one point of health when `HardcoreSafe`, and to zero at exactly one
+point), then `SetControlled(true, UNIT_STATE_ROOT)` for `Crash.StaggerMs`. The stagger shares the
+core's root state, so a spell root that expires inside the window ends it early.
 
-The deck must never outlive its session: clear on `OnPlayerJustDied`, `OnBeforeLogout`,
-`OnMapChanged`, seated on a vehicle, `.board off`, and (config) entering combat. The bot gate is
+The deck must never outlive its session: clear on `OnPlayerJustDied`, `OnBeforeLogout`, a map change
+(detected on the next tick, not through a hook), seated on a vehicle, `.board off`, and (config)
+entering combat - which also refuses `.board on` while already fighting. The bot gate is
 `WorldSession::IsHeadless()` — the same test `mod-hardcore` uses (`Hardcore.cpp:140-149`) — so no bot
 is ever boarded.
 
@@ -167,7 +170,7 @@ is ever boarded.
 Commands, `CommandScript` (`Acore::ChatCommands`, so both the chat line and the add-on channel can
 reach them): `.board on`, `.board off`, `.board toggle`, `.board status`, `.board speed`,
 `.board push`, `.board trick <1|2|3>`. `.board status` answers one parseable line,
-`boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId>`, which is what the add-on builds its slots
+`boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId> speed=<yd/s>`, which is what the add-on builds its slots
 from, and `.board speed` answers `v=<yd/s> rate=<rate> pending=<n>`. Config is read in
 `WorldScript::OnAfterConfigLoad`, so `.reload config` applies it without a restart.
 
@@ -180,8 +183,9 @@ inside ConsolePort's own binding set.
 ### The activation is a click binding in the add-on
 
 `SetBindingClick(key, "SkateboardButton")` plus a `BINDING_NAME_CLICK SkateboardButton:LeftButton`
-global gives a named action that the **stock** Key Bindings frame lists — the player rebinds it there
-or with `.sb key`, and ConsolePort neither owns nor forbids it. The add-on appends one row to
+global gives a named action that the **stock** Key Bindings frame lists — the player rebinds it there,
+and ConsolePort neither owns nor forbids it. `/sb` is the add-on's own client-side command
+(`on|off|toggle|status|keys|takeover|hud|bar`); it is not a server command and takes no `key` verb. The add-on appends one row to
 `ConsolePort:GetCustomBindings()` so the same action can be assigned to a pad button, and claims no
 button itself. `EInteract.lua:203-233` is the working precedent.
 
@@ -202,7 +206,7 @@ Two paths, both native to this stack:
 
 | Path | When | Evidence |
 |---|---|---|
-| add-on command channel — `SendAddonMessage("AzerothCore\t" .. "i" .. counter .. command, "WHISPER", UnitName("player"))` | the add-on is installed; the reply is a whisper from yourself carrying `a` (ack), `o` (ok), `f` (failed) or `m` (message) | `Chat.cpp:991-1080`; parsed before any channel or target check, and never relayed |
+| add-on command channel — `SendAddonMessage("AzerothCore", "i" .. counter .. command, "WHISPER", UnitName("player"))`, which the client puts on the wire as `AzerothCore\t` + body: the tab belongs to `SendAddonMessage`, and sending it in the prefix makes the core read a second tab as the opcode and drop the line (`Chat.cpp:993-996`). The reply arrives as `CHAT_MSG_ADDON` - `arg1` is the prefix, `arg2` the body - and carries `a` (ack), `o` (ok), `f` (failed) or `m` (message) | `Chat.cpp:993-1080`, `Chat.cpp:1033`; parsed before any channel or target check, and never relayed |
 | a stock `/say .board` macro | the add-on is missing, or a player simply wants a macro | any chat line starting with `.` or `!` is executed and returns before broadcast (`Chat.cpp:250-270`, `ChatHandler.cpp:255-310`) |
 
 The macro path is the safety net, and it is what step 1 tests first: the whole feature is reachable
@@ -298,7 +302,7 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | `scripts/thor-install.sh` | module-list comments and the `fetch_self_module` extract globs/asserts, conf creation, `--status` | `:69`, `:1397`, `:1479-1534`, `:1711`, `:2058-2061` |
 | `scripts/windows-install.ps1` | `$SkateboardConfDefaults`, `Write-Configs`, `Invoke-Checks`, and the client-patch invocation | `:248-262`, `:2959-3049` |
 | `.github/workflows/module-checks.yml` | picks the new module up by glob — verify, then add `scripts/skateboard/check_skateboard.py` | the `on.push.paths` gate |
-| `scripts/skateboard/check_skateboard.py` | conf keys against the code and both installers, hook names against the core headers, emote/visual ids against `SharedDefines.h`, deck ids against the patch tool | pattern of `scripts/creature-gear/check_creature_gear.py` |
+| `scripts/skateboard/check_skateboard.py` | conf keys against the module's fallbacks and both installers' lists, the `.board` verbs against docs §2.8 and the add-on, the module's presence in pins and all three workflows, the deck aliases against this plan's §3 ids, the loader symbol against `modules/CMakeLists.txt`, and the absence of `DirectCommitTransaction`. It does not check hook names or emote ids against the core headers: those are compile-time facts, and the syntax-check is what proves them | pattern of `scripts/creature-gear/check_creature_gear.py` |
 | `docs/` | this plan, the status line in `SKATEBOARDING-DESIGN.md`, the `README.md` index row, the `RUNBOOK.md` device steps | — |
 
 ## 5. Acceptance
@@ -306,15 +310,15 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | Step | Check | Pass |
 |---|---|---|
 | offline | `scripts/syntax-check.sh` on the module; `check_skateboard.py` | compiles against the pinned core, every conf key read by the code, every emote id exists |
-| boot | worldserver with the module | `mod-skateboard: loaded … deck display 90001`, conf read, zero ERROR lines |
+| boot | worldserver with the module | `Skateboard: <enabled|disabled> (deck '<name>', resolved on the first board).`, conf read, zero ERROR lines |
 | deck | `.board on` | the deck renders under the player; `MountedPose` decided and recorded |
-| activation | bind a key to `Skateboard` in the stock Key Bindings frame, press it | boards, and a second press leaves; the same action appears in `/cp` for a pad button; `/say .board` works with the add-on removed from the folder |
+| activation | bind a key to `Skateboard` in the stock Key Bindings frame, press it | boards, and a second press leaves; the same action appears in `/cp` for a pad button; `/say .board toggle` works with the add-on removed from the folder (a bare `/say .board` prints the subcommand list) |
 | momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts to a stop in ~8 s; `Debug` line shows `v`, slope and rate agreeing |
 | cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, rate within 0.01 of target between changes |
 | tricks | jump while boarded | one clip per take-off, clean landing adds `v`, mistimed landing crashes once |
 | cleanup | logout, die, change map, `.board off` | no `UNIT_FIELD_MOUNTDISPLAYID` left, no state left in the map |
-| bar | click the add-on's board button, then its push button | same result as the bindings; a slot the module has not advertised is hidden rather than failing |
-| HUD | ride boarded with `Debug` on | the readout matches the `Debug` line's `v`; it is the published rate, so it reads non-zero while coasting without input |
+| bar | click the add-on's board button, then its push button | boards and pushes the same as the bindings, and the first button becomes `Bail` while boarded; a trick slot the module has not advertised is hidden rather than failing |
+| HUD | ride boarded with `Debug` on | the readout's `cap` matches the `Debug` line's `v` (it comes from the status poll, so it lags a poll); its speed half is `GetUnitSpeed`, which reads 0 at a standstill, so the two numbers together say whether the deck is moving |
 | takeover (toggle) | board out of combat with the takeover on | the player's own action bar keys do board actions, and every original binding is restored on leave, on reload and on the next login after a crash |
 | deck rows | step 4 on the device | both shields render, `--verify` finds all three members in one archive, the server boots with the patched DBCs |
 

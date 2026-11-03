@@ -30,7 +30,7 @@ Nothing here needs SQL and nothing in phases 0-1 needs a client patch.
 | Fact | Evidence |
 |---|---|
 | Every `MSG_MOVE_*` lands in one handler, and it accepts the client's position wholesale: the mover must be the session's mover, then `mover->UpdatePosition(movementInfo.pos)` and `mover->m_movementInfo = movementInfo` | `Handlers/MovementHandler.cpp:362` (handler), `:366` (`mover`), `:434-435` (apply) [V] |
-| **There is no distance-per-interval speed check in this build.** The only hook that could reject a movement packet is `AnticheatCheckMovementInfo`, and no installed module implements it (the self-host modules are creature-gear, e-interact, hardcore, mercenaries, survivor) | `ScriptDefines/PlayerScript.h:800`, call site `MovementHandler.cpp:575-579` [V] |
+| **There is no distance-per-interval speed check in this build.** The only hook that could reject a movement packet is `AnticheatCheckMovementInfo`, and no installed module implements it (the self-host modules are creature-gear, e-interact, hardcore, mercenaries, skateboard, survivor) | `ScriptDefines/PlayerScript.h:800`, call site `MovementHandler.cpp:575-579` [V] |
 | Speed is **server state**: `GetSpeed` derives from `m_speed_rate × base speed` (walk 2.5, run 7.0, run_back 4.5) | `Unit.cpp:11062-11064`, `Unit.cpp:93-100` [V] |
 | The client must honour the server's speed: it ACKs every change, and the ACK is compared with a **0.01 rate tolerance**; reporting higher than the server kicks the player with `"Incorrect speed"`, lower re-forces the server value | `MovementHandler.cpp:763` (tolerance), `:769` (re-force), `:775` (kick) [V] |
 | A speed change is a single packet with an ACK counter, and only the last outstanding change is compared | `Unit::SendSpeedToController` `Unit.cpp:11117-11129`, coalescing `MovementHandler.cpp:757-762` [V] |
@@ -243,7 +243,7 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | Key | Default | Meaning |
 |---|---|---|
 | `Skateboard.Enable` | 0 | whole feature |
-| `Skateboard.DeckDisplay` | 26609 | stock display id for phase 0-1 (`Log Ride (Log A)`) |
+| `Skateboard.Deck` | `log` | `log` is 26609, the stock `Log Ride (Log A)`; `engravedwall` and `coffinlid` are the two shield ids |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s ceiling |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
@@ -268,7 +268,7 @@ moves the physics onto a vehicle creature. The cost table is in
 |---|---|
 | Speed-ACK race | never lower the cap while an increase is un-ACKed; the comparison at `MovementHandler.cpp:763-776` kicks on a higher client report, not on a lower one |
 | Already mounted, flying, in an instance/BG, in water | refuse `.board on`; force off on boarding a vehicle (`Vehicle::AddPassenger` takes the mover, `Vehicle.cpp:346`) - unless the board itself ever becomes one, see the plan's §2.9 |
-| Entering combat | wipeout (dismount, brief `UNIT_FLAG_DISABLE_MOVE`): a 21 yd/s cap in combat is a free disengage |
+| Entering combat | the deck is cleared and the run rate restored, and `.board on` refuses while already in combat (both gated on `Skateboard.OffInCombat`): a 21 yd/s cap in combat is a free disengage. The wipeout - the stagger and the health cost - belongs to a mistimed landing, not to a fight |
 | Death, logout, map change | clear the deck state on `OnPlayerJustDied`, `OnBeforeLogout`, `OnMapChanged` |
 | **Hardcore character crashes** | `mod-hardcore` turns any death into permadeath; with `Skateboard.HardcoreSafe = 1` a crash damage tick cannot bring health below 1 |
 | Bots | playerbots are real `Player` objects; gate on a real session so no bot is ever "boarded" |

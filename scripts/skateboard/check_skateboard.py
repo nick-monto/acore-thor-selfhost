@@ -15,10 +15,12 @@ agreement between the files, which is where a module of this shape actually brea
     `$SkateboardConfDefaults` copy in scripts/windows-install.ps1 and the `SKATEBOARD_CONF_DEFAULTS`
     list in scripts/write-confs.sh agree key for key and value for value - a key the module cannot
     use is silently replaced by its fallback, so the four must not drift;
-  * the `.board` subcommands in the module's ChatCommandTable, the ones docs/SKATEBOARD-FIRST-PASS.md
-    §2.8 documents and the ones the add-on sends through the AC command channel and its bar are the
-    same set. The add-on lives in the sibling launcher checkout; when that checkout is absent the
-    comparison is printed as a `skip` line rather than failing, because CI does not clone it;
+  * the `.board` subcommands in the module's ChatCommandTable are the ones docs/SKATEBOARD-FIRST-PASS.md
+    §2.8 documents, and every verb the add-on sends through the AC command channel and its bar is
+    one of them. The add-on lives in the sibling launcher checkout; when that checkout is absent the
+    comparison is printed as a `skip` line rather than failing, because CI does not clone it. The
+    reverse direction is deliberately not asserted: `.board speed` is a player command the add-on
+    has no use for;
   * pins.toml carries `[module.skateboard]` and all three server workflows copy the module into the
     core, so a release is not built without it;
   * the deck aliases resolve to the display ids docs §3 allocates: `log` to the stock 26609,
@@ -509,10 +511,13 @@ def check_decks() -> tuple[str, None]:
             fail(f"no module source names the deck alias {alias!r}")
         # The alias has to resolve to its id: a `{ "log", 26609 }` entry, an `if (deck == "log")
         # displayId = DeckLog;` arm, or anything else in which the id - or a constant holding it -
-        # follows the alias before the next string literal starts another arm.
+        # follows the alias before the next string literal starts another arm. The window also
+        # stops at the statement boundary, so the header's own defaults - `DeckName = "log";`
+        # followed by `DeckDisplayId = 26609;` - cannot satisfy the alias on their own.
         reached: set[int] = set()
         for occurrence in re.finditer(rf'"{alias}"', text, re.I):
             window = text[occurrence.end(): occurrence.end() + 240].split('"', 1)[0]
+            window = window.split(';', 1)[0].split('}', 1)[0]
             reached.update(int(hit) for hit in re.findall(r"(?<!\d)(\d{4,6})(?!\d)", window))
             reached.update(
                 constants[name] for name in re.findall(r"\b([A-Za-z_]\w*)\b", window)

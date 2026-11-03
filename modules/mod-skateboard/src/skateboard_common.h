@@ -47,8 +47,11 @@ struct MovementInfo;
 namespace Skateboard
 {
     // Base run speed in yd/s (Unit.cpp: playerBaseMoveSpeed[MOVE_RUN]). A deck
-    // speed is published as v / BASE_RUN_RATE, a rate SetSpeed understands.
+    // speed is published as v / BASE_RUN_RATE, a rate SetSpeed understands, with
+    // a floor of 1.0: below 7 yd/s the cap is normal run speed rather than a
+    // crawl, and the rate never goes under the value a character on foot has.
     constexpr float BASE_RUN_RATE = 7.0f;
+    constexpr float MIN_RUN_RATE = 1.0f;
 
     // Trick clip lengths, by speed band: slow, medium, fast. A landing has to
     // last at least as long as the clip the take-off queued.
@@ -91,6 +94,10 @@ namespace Skateboard
     // sCreatureDisplayInfoStore (falling back to the stock 'log' 26609 with one
     // warning). World thread. Returns false when the deck had to fall back.
     bool LoadConfig();
+
+    // Resolves Skateboard.Deck to a display id the client can draw, once per load. Deferred out of
+    // LoadConfig() because the DBC stores do not exist when OnAfterConfigLoad runs.
+    std::uint32_t ResolveDeck();
 
     // One boarded character. A record also outlives the boarding while a crash
     // stagger is being served: then displayId is 0 (the deck is gone) and

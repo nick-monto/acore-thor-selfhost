@@ -158,13 +158,16 @@ namespace
         deck.gateDeadlineMs = 0;
     }
 
-    // Put the run rate back where the core expects a character on foot to be.
-    // SetSpeed() returns without a packet when the rate is already 1.0, which is
-    // the common case for a deck that never got to move.
+    // Put the run rate back where the core expects a character on foot to be, and do it from the
+    // auras the unit actually has: UpdateSpeed(MOVE_RUN, true) is the core's own recompute and
+    // force-send (Unit.cpp:10887). Writing 1.0 directly would flatten a speed aura - Sprint,
+    // Aspect of the Cheetah, a mount aura, a snare - until that aura is next applied or removed.
+    // SetSpeed() returns without a packet when the value is unchanged, so this is free for a deck
+    // that never got to move.
     void RestoreRunRate(Player* player)
     {
         if (std::fabs(player->GetSpeedRate(MOVE_RUN) - 1.0f) > 0.001f)
-            player->SetSpeed(MOVE_RUN, 1.0f, true);
+            player->UpdateSpeed(MOVE_RUN, true);
     }
 
     // Sends one gated forced speed change: one in flight, ACK deadline armed.
@@ -202,12 +205,14 @@ namespace
         uint32 damage = std::max<uint32>(1, uint32(float(player->GetMaxHealth()) * float(cfg.CrashDamagePct) / 100.0f));
         if (cfg.HardcoreSafe)
         {
+            // Leave at least one point of health - and at exactly one point, take nothing, or the
+            // floor of one damage would still kill a Hardcore character.
             uint32 const health = player->GetHealth();
-            uint32 const cap = health > 1 ? health - 1 : 1;
-            damage = std::min(damage, cap);
+            damage = std::min(damage, health > 1 ? health - 1 : 0);
         }
 
-        player->EnvironmentalDamage(DAMAGE_FALL, damage);
+        if (damage)
+            player->EnvironmentalDamage(DAMAGE_FALL, damage);
 
         if (staggerMs && player->IsAlive())
         {
@@ -222,6 +227,12 @@ namespace
 
 namespace Skateboard
 {
+    namespace
+    {
+        // Cleared by LoadConfig(), set by the first ResolveDeck() after it.
+        bool deckResolved = false;
+    }
+
     Config const& GetConfig()
     {
         return ConfigMut();
@@ -250,14 +261,31 @@ namespace Skateboard
         cfg.AckTimeoutMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.AckTimeoutMs", 500), 50, 5000);
         cfg.Debug = sConfigMgr->GetOption<bool>("Skateboard.Debug", false);
 
-        // Deck: a name or a raw display id. Anything that does not resolve to an
-        // entry in the client's display table falls back to the stock log, so a
-        // missing step-4 DBC patch is a warning, never an invisible mount.
+        // The deck is only named here. Resolving it needs CreatureDisplayInfo.dbc, and
+        // OnAfterConfigLoad runs before LoadDBCStores (World.cpp:323 against :385), so a lookup
+        // at this point fails for every id on a cold boot. ResolveDeck() does it on the first
+        // board instead, which is after the stores exist.
+        deckResolved = false;
+        cfg.DeckDisplayId = DeckLog;
+        return true;
+    }
+
+    // Name or raw display id to a display id the client can draw. Anything that does not resolve
+    // to an entry in the client's display table falls back to the stock log, so a missing step-4
+    // DBC patch is a warning, never an invisible mount.
+    uint32 ResolveDeck()
+    {
+        Config& cfg = ConfigMut();
+
+        if (deckResolved)
+            return cfg.DeckDisplayId;
+
+        deckResolved = true;
+
         std::string deck = cfg.DeckName;
         std::transform(deck.begin(), deck.end(), deck.begin(), [](unsigned char c) { return char(std::tolower(c)); });
 
         uint32 displayId = 0;
-        bool known = true;
 
         if (deck == "log")
             displayId = DeckLog;
@@ -273,28 +301,24 @@ namespace Skateboard
                 displayId = uint32(parsed);
             else
             {
-                known = false;
                 LOG_WARN("module", "Skateboard: unknown deck '{}', expected log, engravedwall, coffinlid or a display id. Using {}.",
                     cfg.DeckName, DeckLog);
                 displayId = DeckLog;
             }
         }
 
-        bool ok = known;
-
-        if (known && !sCreatureDisplayInfoStore.LookupEntry(displayId))
+        if (displayId != DeckLog && !sCreatureDisplayInfoStore.LookupEntry(displayId))
         {
             LOG_WARN("module", "Skateboard: display id {} for deck '{}' is not in CreatureDisplayInfo.dbc, falling back to {}.",
                 displayId, cfg.DeckName, DeckLog);
             displayId = DeckLog;
-            ok = false;
         }
 
-        if (!sCreatureDisplayInfoStore.LookupEntry(DeckLog))
-            LOG_WARN("module", "Skateboard: the fallback display id {} is not in CreatureDisplayInfo.dbc either; the deck will not render.", DeckLog);
+        if (!sCreatureDisplayInfoStore.LookupEntry(displayId))
+            LOG_WARN("module", "Skateboard: display id {} is not in CreatureDisplayInfo.dbc; the deck will not render.", displayId);
 
         cfg.DeckDisplayId = displayId;
-        return ok;
+        return displayId;
     }
 }
 
@@ -317,6 +341,14 @@ namespace
         if (!player->IsAlive())
         {
             handler->SendSysMessage("You cannot board while dead.");
+            return false;
+        }
+
+        // OffInCombat drops the deck when combat starts, so boarding during combat would hand out
+        // the same 21 yd/s disengage through the other door and nothing would take it back.
+        if (cfg.OffInCombat && player->IsInCombat())
+        {
+            handler->SendSysMessage("You cannot board in combat.");
             return false;
         }
 
@@ -401,6 +433,10 @@ namespace Skateboard
         if (!player || !handler)
             return false;
 
+        // After IsBoardable's refusals, and before any display id is read: this is the first
+        // point at which the DBC stores are guaranteed to exist.
+        ResolveDeck();
+
         Config const& cfg = GetConfig();
 
         if (!IsBoardable(player, handler))
@@ -425,16 +461,8 @@ namespace Skateboard
         deck = Deck();
         deck.displayId = cfg.DeckDisplayId;
         deck.mapId = player->GetMapId();
-        deck.v = 0.0f;
-        deck.publishedRate = 1.0f;
-        deck.pendingAcks = 0;
         deck.gateDeadlineMs = now + PublishThrottleMs;
-        deck.staggerDeadlineMs = 0;
         deck.debugNextMs = now;
-        deck.airborne = false;
-        deck.takeoffMs = 0;
-        deck.trickEndMs = 0;
-        deck.activeClip = 0;
 
         if (cfg.MountedPose == 0)
             player->SetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID, cfg.DeckDisplayId);
@@ -587,9 +615,19 @@ namespace Skateboard
 
         Config const& cfg = GetConfig();
 
+        // `.reload config` with Enable back to 0 must take the deck away, not leave a capped
+        // player running the old rate for the rest of the session.
+        if (!cfg.Enable)
+        {
+            Cleanup(player);
+            return;
+        }
+
+        // Combat is in this list as well as in OnPlayerEnterCombat: OffInCombat can be turned on
+        // by a reload while a player is already fighting.
         if (!player->IsAlive() || !player->IsInWorld() || player->GetMapId() != deck.mapId ||
             player->IsInWater() || player->IsFlying() || player->InBattleground() || player->InArena() ||
-            player->GetVehicle())
+            player->GetVehicle() || (cfg.OffInCombat && player->IsInCombat()))
         {
             Cleanup(player);
             return;
@@ -685,7 +723,6 @@ namespace Skateboard
 
         uint32 const airtime = now - deck->takeoffMs;
         bool const mistimed = deck->trickEndMs != 0 && !Reached(now, deck->trickEndMs);
-        bool const performed = cfg.Tricks && deck->activeClip != 0 && airtime >= deck->activeClip;
 
         deck->trickEndMs = 0;
         deck->activeClip = 0;
@@ -702,7 +739,10 @@ namespace Skateboard
             return;
         }
 
-        if (performed)
+        // A clean landing pays whether or not tricks are scored: with Skateboard.Tricks = 0 there
+        // is no clip to mistime, so every landing is clean and the bonus is the whole of that
+        // system. Both keys are presented as independent, and this is what independence means.
+        if (cfg.LandingBonus > 0.0f)
         {
             deck->v = std::min(deck->v + cfg.LandingBonus, cfg.MaxSpeed);
             player->HandleEmoteCommand(EMOTE_ONESHOT_LAND);
@@ -741,12 +781,13 @@ public:
 
     void OnAfterConfigLoad(bool reload) override
     {
-        bool const ok = Skateboard::LoadConfig();
+        Skateboard::LoadConfig();
 
-        LOG_INFO("module", "Skateboard: {} (deck display id {}, {}).",
+        // The display id is not resolved here: OnAfterConfigLoad runs before LoadDBCStores, so
+        // the lookup would fail for every id. The deck is resolved on the first board.
+        LOG_INFO("module", "Skateboard: {} (deck '{}', resolved on the first board).",
             Skateboard::GetConfig().Enable ? "enabled" : "disabled",
-            Skateboard::GetConfig().DeckDisplayId,
-            ok ? "resolved" : "fallback applied");
+            Skateboard::GetConfig().DeckName);
 
         if (reload)
             LOG_INFO("module", "Skateboard: configuration reloaded.");
@@ -892,10 +933,12 @@ public:
     }
 
     // One parseable line, exactly as the add-on expects it:
-    //   boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId>
+    //   boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId> speed=<yd/s>
     // tricks is the number of clips the add-on should offer (three when the
     // module scores them, none when it does not); push is 1 when
-    // Skateboard.PushImpulse gives the push command something to do.
+    // Skateboard.PushImpulse gives the push command something to do; speed is the
+    // cap the module is holding, which GetUnitSpeed cannot report while the
+    // player is standing still on a deck.
     static bool HandleBoardStatusCommand(ChatHandler* handler)
     {
         Player* player = handler->GetPlayer();
@@ -909,8 +952,8 @@ public:
         uint32 const tricks = cfg.Tricks ? 3 : 0;
         uint32 const push = cfg.PushImpulse > 0.0f ? 1 : 0;
 
-        handler->PSendSysMessage("boarded={} tricks={} push={} deck={}",
-            boarded, tricks, push, cfg.DeckDisplayId);
+        handler->PSendSysMessage("boarded={} tricks={} push={} deck={} speed={:.1f}",
+            boarded, tricks, push, cfg.DeckDisplayId, manager.Speed(player));
         return true;
     }
 
