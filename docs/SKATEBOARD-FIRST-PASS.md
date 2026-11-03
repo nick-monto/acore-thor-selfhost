@@ -18,7 +18,7 @@ Confidence: **[V]** verified here from source, artifact or API, **[R]** reported
 | `modules/mod-skateboard` | C++ module | **yes** | every authoritative decision: the speed cap, the integrator, airtime, tricks, crash |
 | `conf/mod-skateboard.conf.dist` | config | **yes** | all tuning; no SQL, nothing stored |
 | `scripts/client-patch/patch_client_dbc.py` | DBC + MPQ | **yes** | the two deck rows, in the same patch archive the realm already ships for `Item.dbc` |
-| launcher add-on (Lua) | client-side | **yes — it carries the activation** | `SetBindingClick` puts a named action in the *stock* Key Bindings frame; nothing else can (§2.9) |
+| launcher add-on (Lua) | client-side | **yes — activation, bar and HUD** | `SetBindingClick` puts a named action in the *stock* Key Bindings frame, and the bar and HUD are pure Lua; nothing else can do either (§2.9) |
 
 **An add-on is not a physics path.** It runs inside the client, sandboxed, and cannot change
 movement. What it can do is own the *input*: a click binding gives a named action that the stock Key
@@ -28,7 +28,8 @@ already does exactly this in this stack (`SetBindingClick` at `:203-213`, the `B
 the `ConsolePort:GetCustomBindings()` row at `:221-233`), so it is proven rather than plausible.
 
 That is the one thing the module cannot do for itself, which is why the add-on moves into the first
-pass. The HUD and a bar takeover stay optional (§2.9, step 5).
+pass. It carries three things, all pure Lua: the activation bindings (step 1), the speed readout over
+`GetUnitSpeed` (step 2), and the bar whose trick slots appear once the module advertises them (step 3).
 
 **Not Eluna.** Server-side Lua appears nowhere in this repository: modules here are C++,
 compile-checked in `module-checks.yml` against the pinned core in about two minutes, and the loop
@@ -160,8 +161,9 @@ is ever boarded.
 | `Skateboard.Debug` | 0 | one log line per 5 s: `v`, slope, rate, `pendingAcks` |
 
 Commands, `CommandScript` (`Acore::ChatCommands`, so both the chat line and the add-on channel can
-reach them): `.board on|off|toggle`, `.board speed`, `.board trick <n>`, `.sb key <binding> <key>`.
-Config is read in `WorldScript::OnAfterConfigLoad`, so `.reload config` applies it without a restart.
+reach them): `.board on|off|toggle`, `.board status`, `.board speed`, `.board trick <n>`,
+`.sb key <binding> <key>`. Config is read in `WorldScript::OnAfterConfigLoad`, so `.reload config`
+applies it without a restart.
 
 ## 2.9 Activation, and how the binds take over
 
@@ -200,17 +202,22 @@ with **no client files at all**, so a missing add-on can only cost the bar, neve
 
 ### "The other binds take over"
 
-Two client-side options, both in the add-on:
+Three client-side options, all in the add-on, all reachable without server work beyond the commands:
 
-1. **bar page** — write macros into a spare action bar page, switch to it while boarded, restore on
-   leave. The player's existing `1`/`2`/`3` then do board things, which is the closest thing to a
-   form or vehicle bar without client data. Protected in combat, and ConsolePort may own the page:
-   a device test, not a certainty.
-2. **its own bar** — three `SecureActionButtonTemplate` buttons with `macrotext`, bound with
-   `SetBindingClick`. No page games and it works in combat, but the keys are new instead of taken
-   over.
+1. **its own bar** — `SecureActionButtonTemplate` buttons with `macrotext`, each bound with
+   `SetBindingClick`. Slots are built from `.board status`, so the board and push buttons exist from
+   step 1 and the trick slots appear when the module starts advertising them in step 3. This is the
+   bar; it ships with the activation.
+2. **bar page** — write macros into a spare action bar page, switch to it while boarded, restore on
+   leave. The player's existing `1`/`2`/`3` then do board things, which is the closest thing to a form
+   or vehicle bar without client data. Protected in combat, and ConsolePort may own the page: a device
+   test, so it lives behind a toggle in step 3 rather than inside the bar.
+3. **vehicle bar** — rejected below.
 
-Neither is needed to ship; both are step 5.
+The HUD is the fourth piece and needs nothing from the server: `GetUnitSpeed("player")` returns the
+rate the module publishes as the cap, so the readout is the same number the `Debug` log line carries.
+It reads non-zero while coasting without input, because the cap is momentum and the client's
+displacement is its own. It ships with step 2, when `v` first exists.
 
 ### Why not the vehicle system
 
@@ -296,6 +303,9 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, rate within 0.01 of target between changes |
 | tricks | jump while boarded | one clip per take-off, clean landing adds `v`, mistimed landing crashes once |
 | cleanup | logout, die, change map, `.board off` | no `UNIT_FIELD_MOUNTDISPLAYID` left, no state left in the map |
+| bar | click the add-on's board button, then its push button | same result as the bindings; a slot the module has not advertised is hidden rather than failing |
+| HUD | ride boarded with `Debug` on | the readout matches the `Debug` line's `v`; it is the published rate, so it reads non-zero while coasting without input |
+| page swap (toggle) | board with the swap on | the player's own bar keys do board actions, the old page returns on leave; if ConsolePort refuses the page, the bar keys still work |
 | deck rows | step 4 on the device | both shields render, `--verify` finds all three members in one archive, the server boots with the patched DBCs |
 
 ## 6. Risks and unknowns
@@ -312,21 +322,29 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | A bot is boarded | `WorldSession::IsHeadless()` gate (`Hardcore.cpp:140-149`) |
 | ConsolePort hides or rewrites the click binding | it lists custom bindings by design (`EInteract.lua:221-233`), and the `/say` macro path needs no add-on at all |
 | The add-on command channel is refused with no party and no guild | send the add-on message as a self-whisper; the parse happens before any target or channel check (`ChatHandler.cpp:255-310`), and the macro path stays as the fallback |
-| The bar page swap is protected in combat, or ConsolePort owns the page | step 5 only; the fallback is the add-on's own three secure buttons |
+| The bar page swap is protected in combat, or ConsolePort owns the page | a step 3 toggle, never a dependency: the bar's own buttons work either way |
 | A bar takeover is a spell bar (the vehicle route) | deferred with the cost table in §2.9; four `Spell.dbc` rows plus a physics retarget |
 
 ## 7. Order of work
 
 Each step lands alone and is verifiable on its own.
 
+The bar and the HUD are not their own step any more: both are pure Lua with no dependency on the
+module beyond the commands it already has, and the HUD reads `GetUnitSpeed("player")`, which is the
+same number the module publishes as the cap. The only client behaviour that is genuinely unknown is
+the bar **page swap** (ConsolePort may own the page), so it stays a toggle inside step 3's bar rather
+than a step of its own.
+
 | # | Step | Content | Acceptance |
 |---|---|---|---|
-| 1 | skeleton and activation | module dirs, loader, config, `.board on/off/toggle`, deck display (stock `26609`), all wiring, the offline checker, the add-on with its click bindings on top of the `/say .board` macro fallback | §5 steps 1-4: boots, deck renders, pose answered, a key bound in the stock Key Bindings frame boards and leaves |
-| 2 | momentum | integrator, cap gate, drift re-assert, `Debug` logging | §5 steps 5-6: the curve, no kicks |
-| 3 | tricks and crash | airtime bands, emote + visual, landing bonus, crash, cleanup hooks | §5 steps 7-8 |
-| 4 | deck rows | rename and extend the patch tool, both shield rows, installers, server-side DBCs | §5 step 9: both decks on the device, `--verify` clean |
-| 5 | bar takeover and HUD | add-on: page swap or its own secure bar, the trick list, a speed readout; the vehicle route only if the page swap fails (§2.9) | keys do board things while boarded, the page is restored on leave, no protected-frame errors |
-| 6 | docs | this plan's status line, design-doc status, README, RUNBOOK | — |
+| 1 | skeleton, activation and bar | module dirs, loader, config, `.board on/off/toggle`, deck display (stock `26609`), all wiring, the offline checker; add-on: the click bindings, the bar (board/leave, push), the `/say .board` macro fallback | §5 rows 1-4 and the bar row: boots, deck renders, pose answered, a bound key and the bar both board and leave |
+| 2 | momentum and HUD | integrator, cap gate, drift re-assert, `Debug` logging; the readout over `GetUnitSpeed` | §5 momentum, cap and HUD rows: the curve, no kicks, the readout matches the log |
+| 3 | tricks, crash and takeover | airtime bands, emote + visual, landing bonus, crash, cleanup hooks; the bar's trick slots appear once `.board status` advertises them; the page swap behind a toggle | §5 tricks, cleanup and page-swap rows |
+| 4 | deck rows | rename and extend the patch tool, both shield rows, installers, server-side DBCs | §5 deck-row row: both decks on the device, `--verify` clean |
+| 5 | docs | this plan's status line, design-doc status, README, RUNBOOK | — |
+
+The vehicle route is out of the plan, not deferred to a step: revisiting it means new `Spell.dbc`
+rows and a retarget of the physics (§2.9).
 
 Step 1 without step 4 is the whole experiment: if a stock log and a speed cap do not feel like
 skating, the decks do not matter, and step 4 is two DBC rows and a tool change away from being

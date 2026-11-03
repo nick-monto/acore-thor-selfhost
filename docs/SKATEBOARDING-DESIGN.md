@@ -228,7 +228,7 @@ derived from the fall time — `MOVEMENTFLAG_FALLING` set at take-off, cleared o
 
 | Phase | Content | Client data | Acceptance |
 |---|---|---|---|
-| **0 — proof** | module: `.board on/off/toggle`, stock deck display, `v` integrator with friction + slope + push, cap published on ACK cadence; add-on: the click bindings that activate it | none | on the Thor: roll downhill, feel the coast, stop when `v` hits zero; no `"Incorrect speed"` kick over a 10-minute ride; a bound key boards and leaves |
+| **0 — proof** | module: `.board on/off/toggle`, stock deck display, `v` integrator with friction + slope + push, cap published on ACK cadence; add-on: the click bindings that activate it, the bar, and a `GetUnitSpeed` readout | none | on the Thor: roll downhill, feel the coast, stop when `v` hits zero; no `"Incorrect speed"` kick over a 10-minute ride; a bound key boards and leaves |
 | **1 — tricks** | ramp gameobjects that call `KnockbackFrom`, emote + visual kit per trick, landing window, crash (dismount + fall damage), a `.tricks` list | none | a jump lands clean or wipes out per timing; observers see the animation and the FX |
 | **2 — the deck** | custom `.m2`/`.skin`/`.blp`, `CreatureDisplayInfo` + `CreatureModelData` rows, both packed through the existing MPQ writer (`patch_archive` generalised, the `block_count != 2` ownership test relaxed, `patch_item_dbc.py:354,450`) and installed server-side too | yes | the board renders under the rider on the device; the client boots with the patched DBC pair |
 | **3 — physics** | not planned | — | needs client source |
