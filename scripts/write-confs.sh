@@ -288,7 +288,7 @@ conf_defaults() {
 # real failure: a missing module conf is a warning, because an artifact built without that module is
 # still a usable realm.
 wc_write_all() {
-    local ws as pb cg hc ei sv pw
+    local ws as pb cg hc ei sv pw horde
     [ -n "${WC_DATA_DIR:-}" ] || WC_DATA_DIR="$WC_ROOT/data"
     # The database is local to the install on the Thor and on Windows, but a container reaches it
     # through the compose network, so the host and port are inputs like the credentials are.
@@ -336,10 +336,23 @@ wc_write_all() {
         wc_set_conf "$pb" Playerbots.MaxRandomBots         "$WC_BOTS"
         # Faction split. Alliance is the remainder, so the pair always sums to 100 - the same rule
         # the Thor's set-ratio.sh applies, kept here so a container render and a device render
-        # cannot disagree. Unset leaves whatever the file already holds.
-        if [ -n "$WC_HORDE_RATIO" ]; then
-            wc_set_conf "$pb" Playerbots.RandomBotHordeRatio    "$WC_HORDE_RATIO"
-            wc_set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - WC_HORDE_RATIO))"
+        # cannot disagree. WC_HORDE_RATIO is unset on the Thor, where set-ratio.sh owns the pair, so
+        # the reference must stay nounset-safe: thor-install.sh runs under `set -u` and never defines
+        # it. Unset (or empty) leaves whatever the file already holds.
+        if [ -n "${WC_HORDE_RATIO:-}" ]; then
+            # 10# so a leading zero stays decimal - 010 is ten, and 08 is eight rather than a bash
+            # "value too great for base" abort in the middle of the render - and the digit test plus
+            # the three-character bound keep a long or non-numeric value out of the arithmetic.
+            case "${WC_HORDE_RATIO}" in
+            *[!0-9]* | ????*) horde=-1 ;;
+            *) horde=$((10#${WC_HORDE_RATIO})) ;;
+            esac
+            if [ "$horde" -lt 0 ] || [ "$horde" -gt 100 ]; then
+                wc_warn "WC_HORDE_RATIO must be a percentage 0-100, got '${WC_HORDE_RATIO}'"
+                return 1
+            fi
+            wc_set_conf "$pb" Playerbots.RandomBotHordeRatio    "$horde"
+            wc_set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - horde))"
         fi
         # Solo-friendly default: keep the bot population level-appropriate for, and inside the zone
         # of, real players instead of spreading it over the whole world. The keys are ignored by an

@@ -64,6 +64,11 @@ for required in DB_PASS DB_ROOT_PASS ACCOUNT_PASS; do
 done
 case "$BOTS" in ''|*[!0-9]*) die "BOTS must be a number, got '$BOTS'" ;; esac
 case "$HORDE_RATIO" in ''|*[!0-9]*) die "HORDE_RATIO must be a number, got '$HORDE_RATIO'" ;; esac
+# 10# so a leading zero stays decimal: write-confs.sh subtracts from this to get the Alliance side,
+# where 010 would be ten in the conf and eight to the arithmetic, and 08 would abort the render
+# outright. The length bound comes first so a long digit string cannot wrap into range.
+[ "${#HORDE_RATIO}" -le 3 ] || die "HORDE_RATIO must be 0-100, got '$HORDE_RATIO'"
+HORDE_RATIO=$((10#$HORDE_RATIO))
 [ "$HORDE_RATIO" -le 100 ] || die "HORDE_RATIO must be 0-100, got '$HORDE_RATIO'"
 case "$BOOT_TIMEOUT" in ''|*[!0-9]*) die "BOOT_TIMEOUT must be a number, got '$BOOT_TIMEOUT'" ;; esac
 

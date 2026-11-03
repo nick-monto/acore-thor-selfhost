@@ -5,6 +5,8 @@
 # beside it (compose reads one from the project directory) or export the variables to change
 # something. Defaults match scripts/thor-install.sh: DB_USER=acore, BOTS=50, ACCOUNT=admin,
 # ACCOUNT_PASS=password, and the realm's passwords default to acore/password for a throwaway host.
+# HORDE_RATIO=50 has no Thor counterpart on purpose: there the device's set-ratio.sh owns the split
+# and the installer never writes one.
 # A password that contains `;` or `"` breaks the core's DatabaseInfo strings, and one that contains
 # `'` is escaped by the entrypoint but is best avoided - pick something else.
 

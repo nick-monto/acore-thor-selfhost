@@ -231,7 +231,7 @@ The helpers are the Windows equivalents of the Thor's `wow-server.sh`:
 |---|---|
 | `start.ps1` | Starts database, authserver and worldserver in order, waits for readiness, keeps the worldserver's console window open |
 | `stop.ps1` | Stops in reverse order |
-| `set-bots.ps1 N` | Sets `Playerbots.MinRandomBots` and `Playerbots.MaxRandomBots` together (the Thor's `wow-server.sh bots N`) |
+| `set-bots.ps1 N [-HordeRatio P]` | Sets `Playerbots.MinRandomBots` and `Playerbots.MaxRandomBots` together (the Thor's `wow-server.sh bots N`); `-HordeRatio` also sets the faction split, Alliance the remainder (the Thor's `wow-server.sh --horde-ratio P`) |
 | `start-db.cmd` / `stop-db.cmd` | Start/stop only MySQL |
 | `%USERPROFILE%\start-wow-server.cmd` | One-click start; accepts `-Bots N` |
 | `%USERPROFILE%\stop-wow-server.cmd` | One-click stop; accepts `-Bots N` |
@@ -357,9 +357,11 @@ populated realm untouched: only the binaries under `/opt/acore` are replaced.
 The entrypoint sources `scripts/write-confs.sh` and calls `wc_write_all`, which is the same library
 `scripts/thor-install.sh` delegates to - its `write_configs()` maps the installer's variables to the
 `WC_*` ones and calls the same function. All three paths therefore write the same keys with the same
-values: bots and the near-player window, the faction split (the container renders it from
-`HORDE_RATIO`, the device writes it with `set-ratio.sh`, and both keep Alliance as the remainder so
-the pair sums to 100), the loot keys that make mercenaries pass,
+values, with one deliberate exception: the faction split. The container renders it from
+`HORDE_RATIO` on every start (default 50, `-HordeRatio` sets it) and the device leaves it to
+`set-ratio.sh` (`--horde-ratio`), so a device render never overwrites a split set there; both keep
+Alliance as the remainder so the pair sums to 100. The rest is identical: bots and the near-player
+window, the loot keys that make mercenaries pass,
 `Playerbots.AddClassCommand = 0`, instant flight paths, the hardcore death policy, and the survivor
 and interact dials. That is the point of the refactor: a key is added or changed in one file, and no
 host shape can silently disagree with another. The library produces byte-identical confs to the

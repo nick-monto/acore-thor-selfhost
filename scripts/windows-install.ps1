@@ -3609,7 +3609,8 @@ function Invoke-Status {
 
 function Invoke-Repair {
     Invoke-Preflight
-    if (-not (Import-State)) {
+    $hadState = Import-State
+    if (-not $hadState) {
         Warn 'no install state found; repairing what can be found under the given -Root'
     }
     if ((Resolve-Mode) -eq 'docker') {
@@ -3630,6 +3631,13 @@ function Invoke-Repair {
     # comes back without a full reinstall.
     Write-HostWrappers
     Invoke-Checks -Fix
+    # The fix pass rewrites the conf from state, and a value given on this command line wins over the
+    # recorded one (`-Repair -Bots 120`, `-Repair -HordeRatio 70`), so without this the repair applied
+    # the value to the conf and left state behind it: the re-check below would report the conf as
+    # drifted from state, -Status would report the same, and the next -Repair would revert it. The
+    # container repair already saves (Invoke-DockerRepair); save only when a state file was actually
+    # loaded, so a stateless repair cannot invent one with default passwords in it.
+    if ($hadState) { Save-State }
     # The client half is not a conf key or a file this script owns: it is a Python run against the
     # player's client folder and the server's Item.dbc, so -Repair re-applies it rather than checking
     # it, and the re-check below reports what it produced. The tool it runs comes from the commit the
@@ -4159,7 +4167,7 @@ function Invoke-DockerInstall {
     # so -Uninstall removes it from the manifest and not just because it happens to sit under -Root.
     Add-Manifest $script:DockerDir
     if ($script:DryRun) {
-        Note 'set DB_PASS, DB_ROOT_PASS, ACCOUNT, ACCOUNT_PASS, BOTS, BIND_IP=0.0.0.0 and BOOT_TIMEOUT for the compose project'
+        Note 'set DB_PASS, DB_ROOT_PASS, ACCOUNT, ACCOUNT_PASS, BOTS, HORDE_RATIO, BIND_IP=0.0.0.0 and BOOT_TIMEOUT for the compose project'
     }
     # Written before the containers start, not after: an install that dies in the middle has to be
     # removable by -Uninstall, and the mode file is what makes -Uninstall run compose down instead
