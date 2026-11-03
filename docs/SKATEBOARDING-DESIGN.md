@@ -228,7 +228,7 @@ derived from the fall time — `MOVEMENTFLAG_FALLING` set at take-off, cleared o
 
 | Phase | Content | Client data | Acceptance |
 |---|---|---|---|
-| **0 — proof** | module: `.board on/off`, stock deck display, `v` integrator with friction + slope + push, cap published on ACK cadence | none | on the Thor: roll downhill, feel the coast, stop when `v` hits zero; no `"Incorrect speed"` kick over a 10-minute ride |
+| **0 — proof** | module: `.board on/off/toggle`, stock deck display, `v` integrator with friction + slope + push, cap published on ACK cadence; add-on: the click bindings that activate it | none | on the Thor: roll downhill, feel the coast, stop when `v` hits zero; no `"Incorrect speed"` kick over a 10-minute ride; a bound key boards and leaves |
 | **1 — tricks** | ramp gameobjects that call `KnockbackFrom`, emote + visual kit per trick, landing window, crash (dismount + fall damage), a `.tricks` list | none | a jump lands clean or wipes out per timing; observers see the animation and the FX |
 | **2 — the deck** | custom `.m2`/`.skin`/`.blp`, `CreatureDisplayInfo` + `CreatureModelData` rows, both packed through the existing MPQ writer (`patch_archive` generalised, the `block_count != 2` ownership test relaxed, `patch_item_dbc.py:354,450`) and installed server-side too | yes | the board renders under the rider on the device; the client boots with the patched DBC pair |
 | **3 — physics** | not planned | — | needs client source |
@@ -251,14 +251,22 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | `Skateboard.Crash.Enable` | 1 | mistimed landing costs health |
 | `Skateboard.HardcoreSafe` | 1 | a crash can never kill a Hardcore character (§9) |
 
-Commands: `.board on|off`, `.tricks` (list), `.board speed` (print `v`).
+Commands: `.board on|off|toggle`, `.tricks` (list), `.board speed` (print `v`).
+
+Activation is a click binding in the launcher's add-on, not a console command: `SetBindingClick`
+lists it in the stock Key Bindings frame, so a keyboard player binds a key there and a pad player
+assigns a button through ConsolePort's `/cp` list without the add-on claiming a physical button.
+`EInteract.lua:203-233` is the working precedent. The vehicle bar was costed as a way to get a
+taking-over bar and rejected for now - its buttons are spells, so it needs `Spell.dbc` rows and it
+moves the physics onto a vehicle creature. The cost table is in
+[`SKATEBOARD-FIRST-PASS.md`](SKATEBOARD-FIRST-PASS.md) §2.9.
 
 ## 9. Edge cases and failure modes
 
 | Case | Handling |
 |---|---|
 | Speed-ACK race | never lower the cap while an increase is un-ACKed; the comparison at `MovementHandler.cpp:763-776` kicks on a higher client report, not on a lower one |
-| Already mounted, flying, in an instance/BG, in water | refuse `.board on`; force off on boarding a vehicle (`Vehicle::AddPassenger` takes the mover, `Vehicle.cpp:346`) |
+| Already mounted, flying, in an instance/BG, in water | refuse `.board on`; force off on boarding a vehicle (`Vehicle::AddPassenger` takes the mover, `Vehicle.cpp:346`) - unless the board itself ever becomes one, see the plan's §2.9 |
 | Entering combat | wipeout (dismount, brief `UNIT_FLAG_DISABLE_MOVE`): a 21 yd/s cap in combat is a free disengage |
 | Death, logout, map change | clear the deck state on `OnPlayerJustDied`, `OnBeforeLogout`, `OnMapChanged` |
 | **Hardcore character crashes** | `mod-hardcore` turns any death into permadeath; with `Skateboard.HardcoreSafe = 1` a crash damage tick cannot bring health below 1 |
