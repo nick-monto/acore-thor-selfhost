@@ -127,6 +127,34 @@ a doodad M2 is static and has no mount-special animation, so a trick cannot hang
 an authored model, §4.3); and the two `bootybayplank.wmo` / `pirateship_plank.wmo` props in the same
 table are WMOs, which cannot be creature models at all.
 
+**Shields and doors are the better flat art**, and the `Iron Coffin Lid` is a real shield in this
+data: item `43843`, `ItemDisplayInfo` `56501` [V].
+
+| Item | entry | `ItemDisplayInfo` | Model | Why it reads as a deck |
+|---|---|---|---|---|
+| **Iron Coffin Lid** | 43843 | 56501 | `Shield_Northrend_C_02.mdx` | a coffin lid is a board with a frame |
+| Splintered Door of the Citadel | 49835 | 64882 | `shield_northrend_d_01.mdx` | a door: flat, panelled, wooden |
+| Engraved Wall | 10363 | 26283 | `Shield_Rectangle_B_01.mdx` | the flattest of the lot — literally a wall |
+| Large Wooden Shield | 1200 | 18663 | `Shield_Oval_A_01.mdx` | wide wooden oval |
+| Wooden Shield | 2215 | 18670 | `Shield_Round_A_01.mdx` | round wooden board |
+
+The route is the same two rows, and the client demonstrably accepts an item model as a creature
+model: `CreatureModelData` already carries `ITEM\OBJECTCOMPONENTS\WEAPON\Sword_2H_Deathknight_B_01_Q.mdx`
+and its axe sibling as models 2820/2821, displayed by the `Runebladed Sword` and `Runebladed Axe`
+creatures (displays 25398/25401) [V]. No `ITEM\OBJECTCOMPONENTS\SHIELD\` model is registered
+today, so a shield deck needs a `CreatureModelData` row naming the full path, plus the
+`CreatureDisplayInfo` row. An item model's origin sits at its grip or attachment point — the middle
+of the board — which is about where a deck wants its centre [I]; if it is off, only scale and
+`MountHeight` are tunable in the DBC, so a shifted deck needs a re-rooted model.
+
+Three caveats specific to shields. The item system itself cannot be used for this — the client
+decides the attachment from the inventory type and the server only sends entry ids
+(`PlayerStorage.cpp:2968`, `Unit.cpp:16848`), which is why the DBC registration is the route. The
+skin variant is chosen by `ItemDisplayInfo`, not the model: `Shield_Northrend_C_02.mdx` sits beside
+`Shield_Northrend_C_02Black`, so a creature registration renders whichever texture the M2 carries by
+default — check on the device, and bake the wanted skin in only if it matters [I]. And like the
+planks, a shield M2 is static: no mount-special animation, so no trick can live on it.
+
 ### 4.3 A real board is data, not code
 
 The client attaches whatever `UNIT_FIELD_MOUNTDISPLAYID` names under the rider; the server ships
