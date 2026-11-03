@@ -2123,6 +2123,21 @@ run_checks() {   # run_checks FIX(0|1)
                 set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - horde))"
                 ok "faction split set to $((100 - horde))/$horde (alliance/horde)"
             fi
+        else
+            # A conf that matches state is still worth reporting - and the pair is only right when
+            # Alliance is the remainder, which set-ratio.sh guarantees and a hand edit need not.
+            local alliance
+            alliance="$(conf_get "$pb" Playerbots.RandomBotAllianceRatio)"
+            if [ "$alliance" != "$((100 - horde))" ]; then
+                bad "playerbots.conf faction split is $alliance/$horde (alliance/horde), which does not sum to 100"
+                if [ "$fix" = 1 ]; then
+                    FIXES=$((FIXES + 1))
+                    set_conf "$pb" Playerbots.RandomBotAllianceRatio "$((100 - horde))"
+                    ok "alliance side reset to $((100 - horde))"
+                fi
+            else
+                ok "playerbots.conf faction split = $alliance/$horde (alliance/horde)"
+            fi
         fi
     elif [ -f "$pb" ]; then
         ok "playerbots.conf faction split = $(conf_get "$pb" Playerbots.RandomBotAllianceRatio)/$(conf_get "$pb" Playerbots.RandomBotHordeRatio) (alliance/horde)"

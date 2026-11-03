@@ -331,6 +331,9 @@ $script:AdminHost = '127.0.0.1'
 $script:Problems = 0
 $script:Fixes = 0
 $script:FirstBootOk = $true
+# True unless a repair discovered there is no state file: Resolve-SelfRef saves when it pins a ref,
+# which would otherwise create <root>\.win-state\state.env on a root that was never installed.
+$script:HadState = $true
 $script:BinDir = ''
 $script:ConfDir = ''
 $script:DataDir = ''
@@ -531,7 +534,7 @@ function Resolve-SelfRef {
     }
     if ($sha) {
         $script:SelfRefSha = $sha
-        Save-State
+        if ($script:Action -ne 'repair' -or $script:HadState) { Save-State }
         Note ("-SelfRef '{0}' pinned to commit {1}" -f $script:SelfRef, $sha.Substring(0, 12))
         return
     }
@@ -2884,16 +2887,21 @@ function Get-ServerDbcDir {
 }
 
 function Test-ServerDbc {
-    <# Test-ServerDbc - true when the server's data\dbc\Item.dbc exists, in either mode. #>
+    <# Test-ServerDbc - $true when the server's data\dbc\Item.dbc exists, $false when it is missing,
+       $null when the container could not be asked at all. #>
     # Copies nothing, unlike Get-ServerDbcDir: a status line should not pull a file out of the volume
     # to find out whether it is there.
     if ((Resolve-Mode) -ne 'docker') {
         return (Test-Path -LiteralPath (Join-Path (Join-Path $script:DataDir 'dbc') 'Item.dbc'))
     }
     if ($script:DryRun) { return $true }
-    # The volume is not a host path, so ask the container the worldserver reads the file from.
-    $null = Invoke-Compose -Arguments @('exec', '-T', 'acore', 'test', '-f', '/opt/acore/data/dbc/Item.dbc') -AllowFailure
-    return ($LASTEXITCODE -eq 0)
+    # The volume is not a host path, so ask the container the worldserver reads the file from. A
+    # stopped container fails this the same way a missing file does - both exit 1 - so the answer is
+    # read from what compose said: the file is only reported missing when the probe actually ran.
+    $probe = Invoke-Compose -Arguments @('exec', '-T', 'acore', 'test', '-f', '/opt/acore/data/dbc/Item.dbc') -Capture -AllowFailure
+    if ($LASTEXITCODE -eq 0) { return $true }
+    if ($probe -match 'is not running|no such service|no configuration file|Cannot connect|error during connect|is not a docker command') { return $null }
+    return $false
 }
 
 function Show-ClientPatchStatus {
@@ -2919,13 +2927,12 @@ function Show-ClientPatchStatus {
         # The docker path is a volume, so the host path is not where the file lives and not what to
         # report: a container realm used to FAIL here for a file it had all along.
         $serverDbc = Join-Path $script:DataDir 'dbc\Item.dbc'
-        $hint = 'the client data is not installed'
-        if ((Resolve-Mode) -eq 'docker') {
-            $serverDbc = '/opt/acore/data/dbc/Item.dbc in the data volume'
-            $hint = 'the client data is not installed, or the container is not running'
-        }
-        if (-not (Test-ServerDbc)) {
-            Bad ("server Item.dbc: {0} is missing ({1})" -f $serverDbc, $hint)
+        if ((Resolve-Mode) -eq 'docker') { $serverDbc = '/opt/acore/data/dbc/Item.dbc in the data volume' }
+        $serverState = Test-ServerDbc
+        if ($null -eq $serverState) {
+            Warn ("server Item.dbc: could not ask the container about {0} (is it running?); neither confirmed nor reported missing" -f $serverDbc)
+        } elseif (-not $serverState) {
+            Bad ("server Item.dbc: {0} is missing (the client data is not installed)" -f $serverDbc)
         }
     }
 }
@@ -3639,6 +3646,7 @@ function Invoke-Status {
 function Invoke-Repair {
     Invoke-Preflight
     $hadState = Import-State
+    $script:HadState = $hadState
     if (-not $hadState) {
         Warn 'no install state found; repairing what can be found under the given -Root'
     }

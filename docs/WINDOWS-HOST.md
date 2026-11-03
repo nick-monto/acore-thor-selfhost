@@ -231,7 +231,7 @@ The helpers are the Windows equivalents of the Thor's `wow-server.sh`:
 |---|---|
 | `start.ps1` | Starts database, authserver and worldserver in order, waits for readiness, keeps the worldserver's console window open |
 | `stop.ps1` | Stops in reverse order |
-| `set-bots.ps1 N [-HordeRatio P]` | Sets `Playerbots.MinRandomBots` and `Playerbots.MaxRandomBots` together (the Thor's `wow-server.sh bots N`); `-HordeRatio` also sets the faction split, Alliance the remainder (the Thor's `wow-server.sh --horde-ratio P`) |
+| `set-bots.ps1 N [-HordeRatio P]` | Sets `Playerbots.MinRandomBots` and `Playerbots.MaxRandomBots` together (the Thor's `start-wow-server.sh --bots N`); `-HordeRatio` also sets the faction split, Alliance the remainder (the Thor's `start-wow-server.sh --horde-ratio P`) |
 | `start-db.cmd` / `stop-db.cmd` | Start/stop only MySQL |
 | `%USERPROFILE%\start-wow-server.cmd` | One-click start; accepts `-Bots N` |
 | `%USERPROFILE%\stop-wow-server.cmd` | One-click stop; accepts `-Bots N` |
