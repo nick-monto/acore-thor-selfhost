@@ -13,7 +13,7 @@ Confidence: **[V]** verified here from source, artifact or API, **[R]** reported
 
 | Layer | Feasible today? | What it needs | Where the limit is |
 |---|---|---|---|
-| **Board under the feet** | **yes**, stock display | module call to `Unit::Mount(displayId)`; no client data, no SQL | rider keeps the client's mounted pose (§4) |
+| **Board under the feet** | **yes**, stock display | module call to `Unit::Mount(26609)` — the quest's `Log Ride` log; no client data, no SQL (§4.1) | rider keeps the client's mounted pose (§4) |
 | **Momentum (accel, friction, downhill, top speed)** | **yes, as an arcade approximation** | module: a velocity integrator on `PlayerScript::OnPlayerUpdate` + `MovementHandlerScript::OnPlayerMove`, pushing `Unit::SetSpeed(MOVE_RUN, …)` | the client is the mover; the server shapes a **cap**, it cannot push the player (§3) |
 | **Ramps / ollies / airtime** | **yes** | `Unit::KnockbackFrom` arc (client plays it), or a `MoveJump` spline (authoritative, input locked) | knockback is client-interruptible; spline velocity is clamped to `max(28, 4×run)` `MoveSplineInit.cpp:106` |
 | **Tricks** | **yes**, as animation + FX + timing | `Unit::HandleEmoteCommand` with stock trick emotes, `Unit::SendPlaySpellVisual`, fall-flag landing window | animation is a canned client clip; no skeletal manipulation (§5) |
@@ -34,7 +34,7 @@ Nothing here needs SQL and nothing in phases 0-1 needs a client patch.
 | The player tick is **10 ms** (`MapUpdateInterval`, default 10) | `worldserver.conf.dist:1323-1327`, `World.cpp:205`, hook site `PlayerUpdates.cpp:314` [V] |
 | Every movement packet is visible to a module, with `MovementInfo` (flags, position, jump fields) | `MovementHandlerScript::OnPlayerMove` `ScriptDefines/MovementHandlerScript.h:38`, fired `MovementHandler.cpp:658-661` [V] |
 | Ground height is queryable at any point; **slope is not** — it has to be derived from samples | `Map::GetHeight` `Maps/Map.cpp:1188`, `GetGridHeight` `:1222`; terrain surface exposes only area/height/liquid `Grids/GridTerrainData.h:248-252` [V] |
-| A board-shaped visual exists in stock data: the flying carpets are flat planks, and the Hallows End broom is a stick — creature → display: `25460 → 28082`, `32567 → 28117`, `32634 → 28063`, `17213 → 16910` | `data/sql/base/db_world/creature_template.sql`, `creature_template_model.sql` [V] |
+| A board-shaped visual exists in stock data: the `Log Ride` quest prop is a wooden log built to be ridden (display `26609`/`26610`), and the flying carpets (`25460 → 28082`, `32567 → 28117`, `32634 → 28063`) are flat cloth decks — creature → display from `creature_template_model.sql`, model path from `CreatureModelData.dbc` (§4.1) | `data/sql/base/db_world/creature_template.sql`; the pinned client `dbc/` [V] |
 | Display-only mount needs one field write plus one flag: `UNIT_FIELD_MOUNTDISPLAYID` + `UNIT_FLAG_MOUNT` | `Unit::Mount` `Unit.cpp:10262-10267`, field `UpdateFields.h:126` [V] |
 
 Two consequences shape everything below.
@@ -86,14 +86,51 @@ still yields tens of updates per second; over a WAN it would degrade to RTT cade
 
 ## 4. The board itself
 
-**Phase 0-1 use a stock display.** `Unit::Mount(28082)` (magnificent flying carpet) or `28117`,
-`28063` give a flat deck under the player with zero client data. The broom `16910` is the wrong
-shape and is listed only because it is the cheapest sanity check that the mount channel works on a
-private realm.
+### 4.1 What the client already has
 
-**A real board is data, not code** (§7). The client attaches whatever
-`UNIT_FIELD_MOUNTDISPLAYID` names under the rider; the server ships only the id
-(`UpdateFields.h:126`) [V].
+The client DBCs are not in this repository: they are the `dbc/` half of the pinned
+`wowgaming/client-data` release the installer downloads (`thor-install.sh:87`, `pins.toml:59`).
+Three of its tables answer the asset question — `CreatureModelData.dbc` (model paths, scale,
+collision), `CreatureDisplayInfo.dbc` (display → model) and `GameObjectDisplayInfo.dbc` (prop →
+model) — and one row is a wooden log built to be ridden [V].
+
+| Display | Model | Display scale | `MountHeight` | Creature that owns it | Reads as |
+|---|---|---|---|---|---|
+| **26609** | `Creature\StoneTreeLog\StoneTreeLog02_Mount.mdx` | 2.00 | 0 | `Log Ride (Log A)` (29878) | **a long wooden log you ride** — the quest prop, already mount-safe |
+| **26610** | `Creature\StoneTreeLog\StoneTreeLog03_Mount.mdx` | 2.00 | 0 | `Log Ride (Log B)` (29879) | the same log, second variant |
+| 21602 | `Creature\Tauren_MountedCanoe\Tauren_MountedCanoe.mdx` | 1.00 | 0.37 | `Tauren Canoe (Northrend)` (23518) | a hollow wooden canoe; the rider sits inside |
+| 30846 / 30874 / 30852 | `RowBoat01_vehicle` / `DarkshoreBoat_vehicle` / `BE_Rowboat_vehicle` | 1.00 | — | the `Love Boat` rowing boats | a deck with a seat and oars |
+| 16910 / 21939 | `Creature\Broom\BE_Broom01` / `Creature\BroomMount\BroomMount` | 1.00 | 0 / 0.03 | `Broom`, `Flying Broom` | a stick, not a deck — sanity check only |
+| 27784 | `SC_Wagon` | 1.00 | 0 | `Scourge War Machine` | a cart bed |
+
+`Log Ride` is the find: the model exists to be ridden while it moves, it is already registered as a
+creature display, and its display scale is 2.0, so `Unit::Mount(26609)` puts a wooden plank-like
+deck under the player with **no client data, no SQL and no new DBC rows**. Every row in the table is
+usable the same way — the module only names an id.
+
+### 4.2 Flatter than a log: two DBC rows, no new art
+
+The literal plank props exist too, but only as *gameobject* models, and none of them is registered
+as a creature model (checked: 0 of the 7 below appear in `CreatureModelData.dbc`), so a creature
+display has to be created for one:
+
+| Prop | Model path |
+|---|---|
+| Coffin lid | `World\Azeroth\Duskwood\PassiveDoodads\CoffinLid\CoffinLid.mdx` |
+| Boardwalk deck | `World\Azeroth\RedRidge\PassiveDoodads\DockPieces\RedRidgeDocksBoardwalk01.mdx` |
+| Wood planks 01 / 03 / 06 / 07 | `World\Generic\DarkIronDwarf\Passive Doodads\WoodPlanks\DarkIronWoodPlanks0N.mdx` |
+| Excavation barrier plank | `World\Generic\Dwarf\Passive Doodads\ExcavationBarrierPlank\ExcavationBarrierPlank.mdx` |
+
+That is one `CreatureModelData` row (path, collision, `MountHeight`) plus one
+`CreatureDisplayInfo` row — an MPQ patch carrying **existing client art**, not new art. Two caveats:
+a doodad M2 is static and has no mount-special animation, so a trick cannot hang off it (that needs
+an authored model, §4.3); and the two `bootybayplank.wmo` / `pirateship_plank.wmo` props in the same
+table are WMOs, which cannot be creature models at all.
+
+### 4.3 A real board is data, not code
+
+The client attaches whatever `UNIT_FIELD_MOUNTDISPLAYID` names under the rider; the server ships
+only the id (`UpdateFields.h:126`) [V]. For a purpose-built deck the rows are:
 
 | Custom board needs | Evidence |
 |---|---|
@@ -106,7 +143,7 @@ private realm.
 **The rider pose is fixed by the client.** While `UNIT_FLAG_MOUNT` is set the player plays its own
 riding animations, so the board cannot make the rider stand. Author the deck so that pose reads as
 a skate stance — a longboard with the rider crouched, knees bent, is the same silhouette as the
-broom/carpet pose, which is why those two displays are the right prototypes.
+log/carpet pose, which is why those displays are the right prototypes.
 
 One interaction to decide early: `IsMounted()` is just `HasUnitFlag(UNIT_FLAG_MOUNT)`
 (`Unit.h:1895`), and `UpdateSpeed` then takes the **mounted** branch, where any aura refresh
@@ -166,7 +203,7 @@ derived from the fall time — `MOVEMENTFLAG_FALLING` set at take-off, cleared o
 | **3 — physics** | not planned | — | needs client source |
 
 Phase 0 is the whole experiment: if the speed-cap momentum does not *feel* like skating with a
-carpet under the player, no amount of art fixes it.
+log under the player, no amount of art fixes it.
 
 ## 8. Configuration and commands
 
@@ -175,7 +212,7 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | Key | Default | Meaning |
 |---|---|---|
 | `Skateboard.Enable` | 0 | whole feature |
-| `Skateboard.DeckDisplay` | 28082 | stock display id for phase 0-1 |
+| `Skateboard.DeckDisplay` | 26609 | stock display id for phase 0-1 (`Log Ride (Log A)`) |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s ceiling |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
@@ -203,7 +240,7 @@ Commands: `.board on|off`, `.tricks` (list), `.board speed` (print `v`).
 - **Server, no client**: log `v`, the slope term and the ACK cadence for a scripted ride (walk a
   downhill in Elwynn, push, coast); assert zero `"Incorrect speed"` kicks and that
   `GetSpeedRate(MOVE_RUN)` tracks the target within 0.01 between ACKs.
-- **Device**: the carpet deck renders under the rider, the board turns with the camera, a ramp
+- **Device**: the log deck renders under the rider, the board turns with the camera, a ramp
   knockback arcs and a mistimed trick wipes out.
 - **Phase 2**: client boots with the patched pair, the board loads, `--verify` finds the archive,
   and the server's `MountHeight` collision matches the DBC row.
