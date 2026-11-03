@@ -55,8 +55,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Disk space before the build
-        run: df -h /
+      # The image carries toolchains this build never touches - the Android SDK, .NET, CodeQL,
+      # Haskell, Swift - and 1871 translation units of RelWithDebInfo objects are what fills the
+      # disk. Freeing the first is deterministic; running out of space during the final links is
+      # not something the build can recover from, and it fails after every object has compiled.
+      - name: Free space on the runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/lib/node_modules
+          sudo apt-get clean
+          sudo docker image prune -af || true
+          df -h /
 
       - name: Dependencies
         run: |
@@ -136,9 +146,16 @@ jobs:
           # build cannot mix anything: one GCC 13 toolchain, C++20, core and modules in a
           # single project, Boost from the same image. Silencing it hides no real risk here
           # and keeps the notes that do matter visible.
+          # -g1, not the default -g: 53-59% of every game object in this tree is DWARF and the
+          # line tables are ~2% of it, which is half the build directory for information the
+          # install step strips off the artifact anyway. -g1 keeps file and line for a
+          # backtrace; the full flag set is spelled out because setting the variable replaces
+          # CMake's default rather than adding to it.
           cmake -S . -B build -G Ninja \
-            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
             -DAPPS_BUILD=all -DTOOLS_BUILD=all \
             -DSCRIPTS=static -DMODULES=static \
             -DBoost_USE_STATIC_LIBS=ON \

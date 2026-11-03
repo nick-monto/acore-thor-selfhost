@@ -67,8 +67,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Disk space before the build
-        run: df -h /
+      # The image carries toolchains this build never touches - the Android SDK, .NET, CodeQL,
+      # Haskell, Swift - and 1871 translation units of RelWithDebInfo objects are what fills the
+      # disk. Freeing the first is deterministic; running out of space during the final links is
+      # not something the build can recover from, and it fails after every object has compiled.
+      - name: Free space on the runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/lib/node_modules
+          sudo apt-get clean
+          sudo docker image prune -af || true
+          df -h /
 
       - name: Dependencies
         run: |
@@ -153,9 +163,17 @@ jobs:
           # CXX flags at all. Passing a flag that suppresses nothing here would leave a comment
           # claiming a problem this build does not have, so neither the flag nor the
           # "prove it reached the compiler" check that guarded it is carried over.
+          # -g1, not the default -g: measured on this tree, 53-59% of every game object is
+          # DWARF and the line tables alone are ~2% of it (Player.cpp.o 32.4 MB total, 19.2 MB
+          # .debug_*, 0.7 MB .debug_line), which is half the build directory for information the
+          # install step strips off the artifact anyway. -g1 keeps the one thing a backtrace
+          # needs - file and line - and the full flag set is spelled out because setting the
+          # variable replaces CMake's default rather than adding to it.
           cmake -S . -B build -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
+            -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
             -DAPPS_BUILD=all -DTOOLS_BUILD=all \
             -DSCRIPTS=static -DMODULES=static \
             -DBoost_USE_STATIC_LIBS=ON \
