@@ -4,6 +4,9 @@ Companion to [`SERVER-STACK.md`](SERVER-STACK.md). The question: can this stack 
 momentum-based board mode — rolling, accelerating downhill, popping off ramps, landing tricks —
 using assets the client already has? Feasibility answer first, design second.
 
+The build plan for the first slice — the module, the two shield decks, the packaging and the
+acceptance check — is [`SKATEBOARD-FIRST-PASS.md`](SKATEBOARD-FIRST-PASS.md).
+
 Confidence: **[V]** verified here from source, artifact or API, **[R]** reported,
 **[I]** inference.
 
