@@ -110,7 +110,10 @@
     Default: the pinned wowgaming client-data 20.0 zip, whose sha256 is checked.
 
 .PARAMETER ClientData
-    The 3.3.5a client folder (the one holding Data\common.MPQ), or "none". The loot bags are
+    The 3.3.5a client folder - the World of Warcraft folder itself, the one holding
+    Data\common.MPQ - or "none". Its Data folder is accepted instead of the parent, a quoted path
+    is accepted as-is (Explorer's Copy as path adds the quotes), and the value is stored absolute.
+    The loot bags are
     custom items, and a client draws an inventory item from its own Item.dbc, so this folder
     gets a patch archive with the 64 bag records and the server's data\dbc\Item.dbc gets the
     same records. The client lives outside the install root and outside the container, so this
@@ -722,12 +725,11 @@ function Confirm-Arguments {
     # -ClientData is the player's own folder, so it is not created or removed here - but it is
     # resolved once, up front, so a typo is an error at the start rather than a warning at the end.
     if ($script:ClientData -and $script:ClientData -ne 'none') {
-        if (-not [System.IO.Path]::IsPathRooted($script:ClientData)) {
+        $script:ClientData = ConvertTo-ClientPath $script:ClientData
+        $rooted = $false
+        try { $rooted = [System.IO.Path]::IsPathRooted($script:ClientData) } catch { $rooted = $false }
+        if (-not $rooted) {
             Die ("-ClientData must be an absolute path or 'none' (got '{0}')" -f $script:ClientData)
-        }
-        $script:ClientData = [System.IO.Path]::GetFullPath($script:ClientData)
-        while ($script:ClientData.Length -gt 3 -and $script:ClientData.EndsWith('\')) {
-            $script:ClientData = $script:ClientData.Substring(0, $script:ClientData.Length - 1)
         }
     }
     # -SelfRef becomes part of a URL and of nothing else, but a space or a quote in it would break
@@ -2719,9 +2721,34 @@ function Test-ClientDataDir {
     return (Test-Path -LiteralPath (Join-Path $data 'common.MPQ'))
 }
 
+function ConvertTo-ClientPath {
+    <# ConvertTo-ClientPath TEXT - quotes stripped, absolute, no trailing separator; '' when empty. #>
+    # Explorer's "Copy as path" and a folder dragged onto the prompt both hand over the folder wrapped
+    # in double quotes, and [System.IO.Path]::IsPathRooted throws "Illegal characters in path" on one
+    # rather than answering false. Strip first, then ask.
+    param([string]$Text)
+    if (-not $Text) { return '' }
+    $value = $Text.Trim().Trim('"').Trim()
+    if (-not $value) { return '' }
+    try {
+        if ([System.IO.Path]::IsPathRooted($value)) {
+            $value = [System.IO.Path]::GetFullPath($value)
+        }
+    } catch {
+        # Not a usable path at all; return it and let the caller's rooted check report it.
+        return $value
+    }
+    if ($value.Length -gt 3) { $value = $value.TrimEnd('\', '/') }
+    return $value
+}
+
 function Resolve-ClientRoot {
     <# Resolve-ClientRoot PATH - the client folder, accepting the Data directory itself too. #>
     param([string]$Path)
+    if (-not $Path) { return '' }
+    # Quotes stripped and made absolute, so the value recorded in %USERPROFILE%\.win-wow\client-data
+    # does not depend on the directory the next -Repair is run from.
+    $Path = ConvertTo-ClientPath $Path
     if (-not $Path) { return '' }
     if (Test-ClientDataDir $Path) { return $Path }
     if ((Split-Path -Leaf $Path) -ieq 'Data') {
