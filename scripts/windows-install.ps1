@@ -2883,6 +2883,19 @@ function Get-ServerDbcDir {
     return $dir
 }
 
+function Test-ServerDbc {
+    <# Test-ServerDbc - true when the server's data\dbc\Item.dbc exists, in either mode. #>
+    # Copies nothing, unlike Get-ServerDbcDir: a status line should not pull a file out of the volume
+    # to find out whether it is there.
+    if ((Resolve-Mode) -ne 'docker') {
+        return (Test-Path -LiteralPath (Join-Path (Join-Path $script:DataDir 'dbc') 'Item.dbc'))
+    }
+    if ($script:DryRun) { return $true }
+    # The volume is not a host path, so ask the container the worldserver reads the file from.
+    $null = Invoke-Compose -Arguments @('exec', '-T', 'acore', 'test', '-f', '/opt/acore/data/dbc/Item.dbc') -AllowFailure
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Show-ClientPatchStatus {
     <# Show-ClientPatchStatus - report the loot-bag client half; shared by -Status and -Docker -Status. #>
     # Reported, not fixed: the client folder is the player's, so the only automatic fix is -Repair,
@@ -2898,14 +2911,21 @@ function Show-ClientPatchStatus {
         $clientData = Join-Path $clientRoot 'Data'
         $patches = @(Get-ChildItem -LiteralPath $clientData -Filter 'patch-*.MPQ' -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match '^patch-[A-Za-z0-9]+\.MPQ$' })
-        $serverDbc = Join-Path $script:DataDir 'dbc\Item.dbc'
         if ($patches.Count -gt 0) {
             Ok ("client folder: {0} ({1} patch archive(s))" -f $clientRoot, $patches.Count)
         } else {
             Bad ("client folder: {0} holds no patch-*.MPQ, so the bags keep the red question mark" -f $clientRoot)
         }
-        if (-not (Test-Path -LiteralPath $serverDbc)) {
-            Bad ("server Item.dbc: {0} is missing (the client data is not installed)" -f $serverDbc)
+        # The docker path is a volume, so the host path is not where the file lives and not what to
+        # report: a container realm used to FAIL here for a file it had all along.
+        $serverDbc = Join-Path $script:DataDir 'dbc\Item.dbc'
+        $hint = 'the client data is not installed'
+        if ((Resolve-Mode) -eq 'docker') {
+            $serverDbc = '/opt/acore/data/dbc/Item.dbc in the data volume'
+            $hint = 'the client data is not installed, or the container is not running'
+        }
+        if (-not (Test-ServerDbc)) {
+            Bad ("server Item.dbc: {0} is missing ({1})" -f $serverDbc, $hint)
         }
     }
 }
@@ -2932,13 +2952,12 @@ function Install-ClientPatch {
 
     $dbcDir = Get-ServerDbcDir
     if (-not $dbcDir) {
-        if ($script:DryRun) {
-            Note "add the 64 bag records to $script:DataDir\dbc\Item.dbc once the client data is installed"
-        } else {
-            Warn "no $script:DataDir\dbc\Item.dbc yet, so the bag records were not added (install the client data first)"
-            if ($clientData) {
-                Warn ("  the client folder {0} is recorded, so -Repair picks it up once the server data exists" -f $clientRoot)
-            }
+        # The dry run returned above, so this branch only ever runs for real.
+        $where = Join-Path $script:DataDir 'dbc\Item.dbc'
+        if ((Resolve-Mode) -eq 'docker') { $where = '/opt/acore/data/dbc/Item.dbc in the data volume' }
+        Warn "no $where yet, so the bag records were not added (install the client data first)"
+        if ($clientData) {
+            Warn ("  the client folder {0} is recorded, so -Repair picks it up once the server data exists" -f $clientRoot)
         }
         return
     }
