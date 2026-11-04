@@ -155,13 +155,14 @@ The default install is `C:\acore`. Add `-Root D:\acore` to move it.
 | `-DbPass` | generated | That user's password; generated and recorded in `credentials.txt` when not given |
 | `-Account` | `admin` | First GM account name |
 | `-AccountPass` | `password` | That account's password |
-| `-LanIp IP` | | Bind and pin the realm to the LAN address, and add inbound firewall rules for 3724 and 8085 |
+| `-LanIp IP` | | Bind and pin the realm to the LAN address, publish the ports on `0.0.0.0` instead of `127.0.0.1`, and add inbound firewall rules for 3724 and 8085 |
 | `-Root DIR` | `C:\acore` | Install root |
 | `-ReleaseUrl URL` | the `server-build-win64` asset | Where to download the artifact zip |
 | `-DataZip URL\|PATH\|none` | the pinned client-data URL | Source of the client data (`none` skips the fetch) |
 | `-ClientData DIR\|none` | remembered, else one question | The 3.3.5a client folder: the World of Warcraft folder itself, the one holding `Data\common.MPQ` (its `Data` folder is accepted too, a quoted path is accepted, and the value is stored absolute). Writes the loot-bag `Item.dbc` records into the server's `data\dbc` and a patch archive into `<client>\Data`. `none` skips it; the answer is kept in `%USERPROFILE%\.win-wow\client-data`. Needs Python 3 on the host |
 | `-BootTimeout SECS` | `1800` | How long the first boot may take to report the world is up: `World initialized` in the log on the native path, the entrypoint's readiness line under `-Docker` |
-| `-MysqlUrl URL` | the pinned portable MySQL zip | Where to download MySQL 8.4.9 winx64 |
+| `-MysqlUrl URL` | the pinned portable MySQL zip | Where to download MySQL 8.4.9 winx64. The archive is checked against `-MysqlSha256` before it is unpacked, and a URL other than the default needs its own hash: the installer will not run a mysqld it cannot name |
+| `-MysqlSha256 HEX` | the hash of the default 8.4.9 winx64 zip | SHA-256 of the archive `-MysqlUrl` names; required with a custom URL |
 
 Install is the default action: passing no action flag installs, and `-Bots`, `-LanIp` and the rest
 modify that install.
