@@ -63,14 +63,17 @@ Skateboard.BoardCastMs = 2000
 #
 #    Skateboard.Deck
 #        The board to draw. A name, or a raw CreatureDisplayInfo id:
-#          log          = 26609 (stock, no client patch)
-#          engravedwall = 90001 (step-4 DBC patch)
-#          coffinlid    = 90002 (step-4 DBC patch)
-#        An id missing from the client's DBC warns once at startup and falls
-#        back to 26609.
-#        Default: log
+#          engravedwall = 90001, the flat 'Engraved Wall' shield (default)
+#          coffinlid    = 90002, the 'Iron Coffin Lid' shield
+#          log          = 26609, the stock 'Log Ride' (no client patch needed)
+#        The two shields are item models registered as creature displays:
+#        scripts/skateboard/patch_deck_dbc.py appends those rows to
+#        CreatureDisplayInfo.dbc and CreatureModelData.dbc and ships them to the
+#        server and the client. Without that patch the id is missing from the
+#        DBC, so the module warns once at startup and uses 26609 instead.
+#        Default: engravedwall
 #
-Skateboard.Deck = log
+Skateboard.Deck = engravedwall
 
 #
 #    Skateboard.MountedPose

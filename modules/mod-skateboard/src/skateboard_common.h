@@ -80,8 +80,8 @@ namespace Skateboard
     struct Config
     {
         bool Enable                = false;    // Skateboard.Enable
-        std::string DeckName       = "log";    // Skateboard.Deck, as configured
-        uint32 DeckDisplayId       = 26609;    // Skateboard.Deck, resolved
+        std::string DeckName       = "engravedwall";    // Skateboard.Deck, as configured
+        uint32 DeckDisplayId       = 90001;    // Skateboard.Deck, resolved
         uint32 MountedPose         = 0;        // Skateboard.MountedPose
         float MaxSpeed             = 21.0f;    // Skateboard.MaxSpeed
         float PushImpulse          = 4.0f;     // Skateboard.PushImpulse

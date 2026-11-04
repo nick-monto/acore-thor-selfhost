@@ -371,7 +371,7 @@ namespace Skateboard
         Config& cfg = ConfigMut();
 
         cfg.Enable = sConfigMgr->GetOption<bool>("Skateboard.Enable", false);
-        cfg.DeckName = sConfigMgr->GetOption<std::string>("Skateboard.Deck", "log");
+        cfg.DeckName = sConfigMgr->GetOption<std::string>("Skateboard.Deck", "engravedwall");
         cfg.MountedPose = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.MountedPose", 0), 1);
         cfg.MaxSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.MaxSpeed", 21.0f), 1.0f, 40.0f);
         cfg.PushImpulse = std::clamp(sConfigMgr->GetOption<float>("Skateboard.PushImpulse", 4.0f), 0.0f, 20.0f);
@@ -448,7 +448,8 @@ namespace Skateboard
 
         if (displayId != DeckLog && !sCreatureDisplayInfoStore.LookupEntry(displayId))
         {
-            LOG_WARN("module", "Skateboard: display id {} for deck '{}' is not in CreatureDisplayInfo.dbc, falling back to {}.",
+            LOG_WARN("module", "Skateboard: display id {} for deck '{}' is not in CreatureDisplayInfo.dbc, falling back to {}. "
+                "Run scripts/skateboard/patch_deck_dbc.py on the realm host to install the row.",
                 displayId, cfg.DeckName, DeckLog);
             displayId = DeckLog;
         }

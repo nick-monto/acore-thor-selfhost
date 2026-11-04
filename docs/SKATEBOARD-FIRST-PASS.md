@@ -138,7 +138,10 @@ mode 1 is the fallback and §2.4's drift re-assert becomes mandatory rather than
 
 The display id comes from config, validated once at load against `sCreatureDisplayInfoStore`
 (`DBCStores.cpp:294`); a missing id warns once and falls back to the stock `Log Ride` display
-`26609` (`§4` of the design document), which needs no patch at all.
+`26609` (`§4` of the design document), which needs no patch at all. The shipped default is the
+`engravedwall` shield, which does need one: `scripts/skateboard/patch_deck_dbc.py` writes its
+`CreatureModelData`/`CreatureDisplayInfo` rows into the server's `data/dbc` and the client's patch
+MPQ. Until that runs, the fallback is the log.
 
 ### 2.6 Tricks
 
@@ -171,7 +174,7 @@ is ever boarded.
 | Key | Default | Meaning |
 |---|---|---|
 | `Skateboard.Enable` | 0 | whole feature |
-| `Skateboard.Deck` | `log` | `log` (26609, no client patch), `engravedwall` (90001) or `coffinlid` (90002) once step 4 lands the rows, or a raw display id |
+| `Skateboard.Deck` | `engravedwall` | `engravedwall` (90001, the flat shield) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id |
 | `Skateboard.MountedPose` | 0 | §2.5 |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |

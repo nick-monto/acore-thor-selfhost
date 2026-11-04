@@ -77,7 +77,7 @@ MERCENARY_CONF_DEFAULTS=(
 # module's own fallback, so wc_write_all() and the installer's run_checks() restore it from here.
 SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Enable=0"
-    "Skateboard.Deck=log"
+    "Skateboard.Deck=engravedwall"
     "Skateboard.MountedPose=0"
     "Skateboard.MaxSpeed=21.0"
     "Skateboard.PushImpulse=4.0"

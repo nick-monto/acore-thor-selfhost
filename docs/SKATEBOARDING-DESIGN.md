@@ -146,7 +146,17 @@ model: `CreatureModelData` already carries `ITEM\OBJECTCOMPONENTS\WEAPON\Sword_2
 and its axe sibling as models 2820/2821, displayed by the `Runebladed Sword` and `Runebladed Axe`
 creatures (displays 25398/25401) [V]. No `ITEM\OBJECTCOMPONENTS\SHIELD\` model is registered
 today, so a shield deck needs a `CreatureModelData` row naming the full path, plus the
-`CreatureDisplayInfo` row. An item model's origin sits at its grip or attachment point — the middle
+`CreatureDisplayInfo` row.
+
+**Implemented:** `scripts/skateboard/patch_deck_dbc.py` writes both rows for `engravedwall` (90001,
+`Shield_Rectangle_B_01.mdx`) and `coffinlid` (90002, `Shield_Northrend_C_02.mdx`) by cloning the
+stock log's own rows - display 26609 → model 2920 - so only the id, the model path and the display
+scale differ from a deck the client already draws a rider on. It ships the two patched DBCs to the
+server's `data/dbc` and a patch MPQ to the client's `Data`, the same two halves as the loot-bag
+`Item.dbc` patch. `Skateboard.Deck` ships as `engravedwall`; on a realm whose DBCs were not patched
+the module warns once and uses the log instead. What the rows cannot fix is the model's *pose*: an
+M2's rest orientation is in the model, not in the DBC, so whether a shield lies flat under the rider
+or stands on edge is a device answer, and `--scale` / `--mount-height` are the only knobs. An item model's origin sits at its grip or attachment point — the middle
 of the board — which is about where a deck wants its centre [I]; if it is off, only scale and
 `MountHeight` are tunable in the DBC, so a shifted deck needs a re-rooted model.
 

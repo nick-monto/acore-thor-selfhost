@@ -504,13 +504,13 @@ grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
 | Key | Default | What it does |
 |---|---|---|
 | `Skateboard.Enable` | `0` | the whole feature; 0 refuses `.board on` and boards nobody |
-| `Skateboard.Deck` | `log` | `log` is the stock `Log Ride` display id 26609 and needs no client patch; `engravedwall` (90001) and `coffinlid` (90002) are the two shield decks, which only exist once the client patch installs their DBC rows |
+| `Skateboard.Deck` | `engravedwall` | the flat `Engraved Wall` shield (display 90001); `coffinlid` (90002) is the second shield; `log` is the stock `Log Ride` display id 26609 and needs no client patch. The shields only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
 | `Skateboard.MountedPose` | `0` | 0 writes `UNIT_FIELD_MOUNTDISPLAYID` alone (deck under a standing player), 1 mounts properly (deck under a sitting rider) |
 | `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |
 | `Skateboard.MaxSpeed` | `21.0` | the cap in yd/s, three times the base run rate [V] |
 | `Skateboard.OffOnHit` | `1` | leaves the board when another unit hits the player (a 21 yd/s cap is a free disengage). Starting a fight does not take the deck and neither does fall damage; boarding while already in combat is refused either way |
 
-A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `engravedwall`/`coffinlid` on an unpatched client looks like `log`, not like a bug.
+A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `engravedwall`/`coffinlid` on an unpatched realm looks like `log`, not like a bug. That warning is the signal to run Part 5e.
 
 `.board` is a player command, one handler per verb:
 
@@ -519,12 +519,66 @@ A deck display id the client's DBC does not carry warns once at load and falls b
 | `.board on` / `.board off` / `.board toggle` | board, leave, or the other one |
 | `.board status` | one line: `boarded=<0\|1> tricks=<n> push=<0\|1> deck=<displayId> speed=<yd/s>`, where `speed` is the cap the module holds |
 | `.board speed` | `v=<yd/s> rate=<rate> pending=<n>` — the deck speed, the rate the server holds, the speed-change ACKs still outstanding |
-| `.board push` | one push impulse; a message and no change when not boarded |
-| `.board trick <1\|2\|3>` | play trick clip 1, 2 or 3 by hand |
+| `.board push [down\|up]` | one push impulse; with `Skateboard.Push.Mode = 1`, `push down` starts a pump and `push up` stops it; a message and no change when not boarded |
+| `.board trick <name\|index>` | play a trick from `Skateboard.Trick.List` by name or by position, by hand |
+| `.board tricks` | list the realm's tricks: `tricks=<n>`, then one `1 kickflip 399` line per entry |
 
 The client half is the launcher's Skateboard add-on. It registers **five click bindings** — board/leave, push, the selected trick, the tricks menu and bail — and sends each as `board <verb>` through the AzerothCore add-on channel, so it claims no physical button itself. All five appear in the stock **Key Bindings** frame under the `Skateboard` entries, where a keyboard player rebinds them like any other action; ConsolePort lists the same five in its `/cp` binding list, which is where a pad button is assigned to one. Its movable bar carries board/leave, push and one button per entry of the realm's `Skateboard.Trick.List` - board/leave is the first button, so the way back on is never hidden - and the speed readout shows the cap the module publishes. Push is a press or a hold: the bar button pumps while the mouse is down, and a keyboard or pad click pumps for `/sb hold <ms>` (1000 ms by default), which the realm's `Skateboard.Push.MaxHoldMs` caps. `/sb menu` (or the tricks-menu binding) opens the list the realm sends, and picking a row plays it and makes it the selected trick. While the player is on the board and out of combat, the add-on also re-points the keys already on action buttons 1-3 at the board's buttons, so the bar's own keys become board actions without touching ConsolePort; every original binding is restored on leaving, on logout and on the next login after a crash. Bail is `.board off` whatever the state, and is the bind to reach for when a deck behaves oddly.
 
 No add-on is required to play: any chat line that starts with `.` is executed and never broadcast, so a `/say .board toggle` macro (or typing `.board on` in chat) still works when the add-on is missing [V]. A missing add-on costs the bar, the speed readout and the bindings, not the board.
+
+## Part 5e — The shield deck
+
+`Skateboard.Deck` ships as `engravedwall`, display **90001**: the `Engraved Wall` shield item
+(`Shield_Rectangle_B_01.mdx`) registered as a **creature** display, which is how a mount is drawn.
+No shield is registered in stock data - 0 of the `Item\ObjectComponents\Shield` models appear in
+`CreatureModelData.dbc` - so the two rows per deck are a client-data patch, and they are needed on
+**both** sides: the server validates the id against `sCreatureDisplayInfoStore` at load, the client
+is what draws it.
+
+`scripts/skateboard/patch_deck_dbc.py` writes both halves. The installer runs it (Termux, where the
+client's `Data` directory is visible) as its own step after the loot-bag `Item.dbc` patch; by hand it
+is the same command:
+
+```bash
+pkg install python          # once, in Termux
+RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
+python3 scripts/skateboard/patch_deck_dbc.py \
+    --dbcs "$RF/opt/acore/data/dbc" \
+    --server-dbc "$RF/opt/acore/data/dbc" \
+    --client-data "/sdcard/WOTLK 3.3.5a/Data"
+```
+
+(The path is whatever the installer remembered; `--status` prints it.) The rows are **cloned from
+the stock log** - display 26609 → model 2920, a model the client already draws a rider on - so only
+the id, the model path and the display scale differ from a deck known to render. Re-running is a
+no-op rewrite, and the archive replaces its own copy instead of piling up a new `patch-N` per run.
+The server loads its DBCs once, at start, so a running realm needs a restart before it accepts
+90001 (on a healthy realm the warning above says whether it did).
+
+Check, after a client restart:
+
+```bash
+python3 scripts/skateboard/patch_deck_dbc.py --verify \
+    --client-data "/sdcard/WOTLK 3.3.5a/Data"
+```
+
+It names the archive the client actually reads `CreatureDisplayInfo.dbc` from and says whether the
+rows are in it; exit 0 is the only good answer.
+
+`Skateboard.Deck = engravedwall` on a realm whose DBCs were patched only on the server draws
+nothing on an unpatched client - the client has no row for 90001. The module cannot see that side.
+
+Two things the DBC cannot decide:
+
+- **The deck's size.** `--scale` (default `2.0`, the log's own display scale) is the knob; re-run
+  with `--scale 3.0`, restart the client, and look. `--mount-height` lifts the rider off the deck's
+  origin if the feet sink.
+- **The deck's pose.** A model's rest orientation lives in the M2, not in the DBC: mount models are
+  authored lying flat, item models are authored standing. Whether a shield reads as a deck under a
+  rider or as a plank sticking up through them is the one answer only the device gives, and if it is
+  wrong no conf value fixes it - that needs a re-rooted model (`docs/SKATEBOARDING-DESIGN.md` §4.3).
+  Until then `log` is a keystroke away.
 
 ## Part 6 — Prove it with a client before touching the launcher
 

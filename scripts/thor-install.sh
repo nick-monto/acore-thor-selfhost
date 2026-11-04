@@ -982,22 +982,26 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
     ok "client: $CLIENT_DATA"
 }
 
-fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the two python files
+fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files the DBC patches need
     local base="$1" rel dest
     resolve_self_ref
+    # The list is the tools plus what they load by path: the bag generator, and scripts/lib's DBC
+    # container both tools import. A missing lib breaks patch_item_dbc too, so it is fetched here
+    # rather than only by the deck tool's stage.
+    local files="scripts/item-dbc/patch_item_dbc.py scripts/loot-bags/gen_loot_bags.py scripts/lib/dbc_mpq.py scripts/skateboard/patch_deck_dbc.py"
     if [ "$CHECK" = 1 ]; then
-        note "fetch scripts/item-dbc/patch_item_dbc.py and scripts/loot-bags/gen_loot_bags.py from $SELF_REPO@$SELF_REF into $base"
+        note "fetch $files from $SELF_REPO@$SELF_REF into $base"
         return 0
     fi
     if ! have curl; then
-        warn "curl is missing, so the Item.dbc tools cannot be fetched"
+        warn "curl is missing, so the DBC tools cannot be fetched"
         [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ]
         return
     fi
     # Two raw files rather than the repository tarball: small enough to fetch on every run, which is
     # the point. Keeping a copy just because one exists is how a fixed tool never reaches a device
     # that was installed before the fix - a --repair then rewrote the same broken archive.
-    for rel in scripts/item-dbc/patch_item_dbc.py scripts/loot-bags/gen_loot_bags.py; do
+    for rel in $files; do
         dest="$base/${rel#scripts/}"
         mkdir -p "$(dirname "$dest")"
         if ! curl_gh -fsSL --retry 3 -o "$dest.tmp" "https://raw.githubusercontent.com/$SELF_REPO/$FETCH_REF/$rel"; then
@@ -1009,7 +1013,8 @@ fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the two python f
         fi
         mv "$dest.tmp" "$dest"
     done
-    [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ]
+    [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ] &&
+        [ -f "$base/lib/dbc_mpq.py" ]
 }
 
 apply_item_dbc_patch() {   # the server's Item.dbc, then the client's, if a client can be found
@@ -1117,6 +1122,82 @@ item_dbc_status() {   # the status line: is the server's copy patched, and will 
     return 0
 }
 
+# ---------------------------------------------------------------- the shield deck rows in the DBCs
+#
+# Skateboard.Deck ships as `engravedwall` (90001): a shield item model registered as a creature
+# display, which the stock DBCs do not have - 0 of the Item\ObjectComponents\Shield models appear in
+# CreatureModelData.dbc. scripts/skateboard/patch_deck_dbc.py appends the two rows per deck
+# (CreatureModelData + CreatureDisplayInfo), writes both DBCs back for the server, and ships them in
+# a patch archive for the client. Without it the module warns once at startup and draws the stock
+# log (26609) instead, which is why this is a warning and not a failure.
+#
+# It runs in the same place as the Item.dbc stage and for the same reason: the client's Data
+# directory is only visible from Termux, and it is one more archive in the same directory.
+
+apply_deck_dbc_patch() {   # the server's two DBCs, then the client's, if a client can be found
+    local base="$ROOTFS$ROOT/$ITEM_DBC_TOOLS_REL"
+    local tools="$base/skateboard/patch_deck_dbc.py"
+    local dbcs="$ROOTFS$ROOT/data/dbc"
+    local out="$ROOTFS$ROOT/.thor-state/deck-dbc" py data rc=0
+    step "Shield deck rows in CreatureDisplayInfo.dbc"
+    if [ ! -f "$dbcs/CreatureDisplayInfo.dbc" ] || [ ! -f "$dbcs/CreatureModelData.dbc" ]; then
+        if [ "$CHECK" = 1 ]; then
+            note "add the two shield deck rows to $ROOT/data/dbc once the client data is installed"
+        else
+            warn "no $ROOT/data/dbc/CreatureDisplayInfo.dbc or CreatureModelData.dbc yet, so the shield decks were not added"
+        fi
+        return 0
+    fi
+    py="$(item_dbc_python)"
+    if [ -z "$py" ]; then
+        if [ "$CHECK" = 1 ]; then
+            note "pkg install python, then add the two shield deck rows to $ROOT/data/dbc"
+        else
+            warn "python is missing, so the shield deck rows are skipped: pkg install python, then re-run --repair"
+        fi
+        return 0
+    fi
+    if [ "$CHECK" = 1 ]; then
+        fetch_item_dbc_tools "$base"
+        note "$py $tools --dbcs $dbcs --server-dbc $dbcs"
+        if data="$(client_data_dir)"; then note "$py $tools --client-data $data"; fi
+        return 0
+    fi
+    if ! fetch_item_dbc_tools "$base"; then
+        warn "the DBC tools are missing, so the shield decks keep the stock log"
+        return 0
+    fi
+
+    local args=(--dbcs "$dbcs" --server-dbc "$dbcs" --out "$out")
+    if data="$(client_data_dir)"; then
+        args+=(--client-data "$data")
+    else
+        data=""
+    fi
+    "$py" "$tools" "${args[@]}" || rc=$?
+    if [ "$rc" != 0 ]; then
+        warn "the deck patch failed (exit $rc); the board keeps the stock log until it runs"
+        return 0
+    fi
+    ok "server DBCs: the shield decks (90001, 90002) are in $ROOT/data/dbc"
+
+    if [ -z "$data" ]; then
+        warn "no client folder was chosen, so the client half was not written: pass --client-data DIR, or re-run --repair to be asked"
+        warn "  (or copy $ROOT/.thor-state/deck-dbc/deck-dbc.MPQ into the client's Data as patch-9.MPQ)"
+        return 0
+    fi
+    if ! item_dbc_verify_supported "$tools" "$py"; then
+        warn "the deck tools at $SELF_REF are older than this script and cannot verify the archive; restart the client and look at the board"
+        return 0
+    fi
+    if "$py" "$tools" --verify --client-data "$data" >/dev/null 2>&1; then
+        ok "client CreatureDisplayInfo.dbc: $data reads the patched file"
+    else
+        bad "client CreatureDisplayInfo.dbc: $data does not read the patched file (run the patch by hand to see why)"
+    fi
+    return 0
+}
+
 host_install() {
     step "Termux preflight"
     host_preflight
@@ -1193,6 +1274,7 @@ host_install() {
 
     state_save
     apply_item_dbc_patch
+    apply_deck_dbc_patch
     step "Host side finished"
     log "start with: ~/start-wow-server.sh   |   inspect with: bash thor-install.sh --status"
 }
@@ -1267,6 +1349,7 @@ host_repair() {
         warn "the inside repair exited $rc: the report above says why (it could not start, or problems remain)"
     fi
     apply_item_dbc_patch
+    apply_deck_dbc_patch
     log "re-run --status to see the result"
 }
 

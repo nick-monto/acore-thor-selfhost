@@ -49,6 +49,7 @@ CONF = MODULE / "conf" / "mod-skateboard.conf.dist"
 PINS = ROOT / "pins.toml"
 DOC = ROOT / "docs" / "SKATEBOARD-FIRST-PASS.md"
 WRITE_CONFS = ROOT / "scripts" / "write-confs.sh"
+DECK_TOOL = ROOT / "scripts" / "skateboard" / "patch_deck_dbc.py"
 # The Windows installer carries its own copy of the conf half - a different shell, so the same
 # library cannot be sourced - which is why its array is compared to the .dist here.
 WINDOWS_INSTALLER = ROOT / "scripts" / "windows-install.ps1"
@@ -589,8 +590,49 @@ def check_decks() -> tuple[str, None]:
                 if display != DECK_IDS[alias]:
                     fail(f"{rel(DOC)} §3 gives the '{alias}' deck display id {display}, "
                          f"but the module uses {DECK_IDS[alias]}")
+    # The DBC tool is the other half of the same contract: it is what puts the display ids in the
+    # files the module and the client read, so its table of aliases, ids and model paths has to be
+    # the one the module and §3 name.
+    tool = read(DECK_TOOL)
+    if not tool.strip():
+        fail(f"{rel(DECK_TOOL)} is missing or empty, so the deck rows cannot be checked")
+    else:
+        ids_block = re.search(r"^DECK_IDS\s*=\s*\{(.*?)^\}", tool, re.S | re.M)
+        models_block = re.search(r"^DECK_MODELS\s*=\s*\{(.*?)^\}", tool, re.S | re.M)
+        if not ids_block or not models_block:
+            fail(f"{rel(DECK_TOOL)} no longer holds top-level DECK_IDS and DECK_MODELS tables")
+        else:
+            tool_ids = {alias: int(number) for alias, number in
+                        re.findall(r'"([a-z]+)"\s*:\s*(\d+)', ids_block.group(1))}
+            tool_models = {alias: name for alias, name in
+                           re.findall(r'"([a-z]+)"\s*:\s*"([^"]+\.mdx)"', models_block.group(1))}
+            for alias, display in DECK_IDS.items():
+                if alias not in DBC_DECKS:
+                    continue                      # `log` is stock: the tool registers nothing for it
+                if tool_ids.get(alias) != display:
+                    fail(f"{rel(DECK_TOOL)} registers {alias!r} as {tool_ids.get(alias)}, "
+                         f"but the module uses {display}")
+            for alias in sorted(set(tool_ids) - set(DECK_IDS)):
+                fail(f"{rel(DECK_TOOL)} registers a deck {alias!r} the module does not resolve")
+            for alias, model in tool_models.items():
+                if alias not in DECK_IDS:
+                    fail(f"{rel(DECK_TOOL)} names a model for an unknown deck {alias!r}")
+                    continue
+                listed = [cells for name, cells in rows
+                          if alias in re.sub(r"[^a-z]", "", name.lower())]
+                if listed and not any(any(model.lower() in cell.lower() for cell in cells[1:])
+                                      for cells in listed):
+                    fail(f"{rel(DECK_TOOL)} registers {model} for {alias!r}, which "
+                         f"{rel(DOC)} §3 does not list for that deck")
+        for other in (WRITE_CONFS,):
+            if "Skateboard.Deck=engravedwall" not in read(other):
+                fail(f"{rel(other)} does not ship the engravedwall deck as its default")
+        defaults = conf_defaults()
+        if defaults.get("Skateboard.Deck") != "engravedwall":
+            fail(f"{rel(CONF)} ships Skateboard.Deck={defaults.get('Skateboard.Deck')}, "
+                 f"but the shield the tool registers is the shipped default")
     return (f"decks: {', '.join(f'{display} ({alias})' for alias, display in DECK_IDS.items())} "
-            f"match {rel(DOC)} §3"), None
+            f"match {rel(DOC)} §3 and {rel(DECK_TOOL)}"), None
 
 
 def check_no_direct_commit() -> tuple[str, None]:

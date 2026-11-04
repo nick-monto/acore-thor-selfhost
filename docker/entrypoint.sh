@@ -212,6 +212,30 @@ patch_item_dbc() { # patch_item_dbc - put the 64 bag records into the server's I
     fi
 }
 
+# --- 3c. the shield deck rows in CreatureDisplayInfo/CreatureModelData --------------------------
+# Skateboard.Deck ships as `engravedwall` (90001), an item shield model registered as a creature
+# display - a row the stock DBCs do not have. Without it the module warns once at startup and draws
+# the stock log (26609) instead, so this is not fatal, but the shipped default is not the log.
+# Same shape as the bag patch: the tool drops its own rows before appending them, so running it on
+# every start is a no-op rewrite rather than a file that grows.
+patch_deck_dbc() { # patch_deck_dbc - put the two shield deck rows into the server's DBCs
+    local tool="$DBC_PATCH_DIR/skateboard/patch_deck_dbc.py"
+    if [ ! -f "$tool" ]; then
+        warn "no $tool in this image, so the shield decks are not in the DBCs (the log is used instead)"
+        return 0
+    fi
+    if [ ! -f "$DATA/dbc/CreatureDisplayInfo.dbc" ] || [ ! -f "$DATA/dbc/CreatureModelData.dbc" ]; then
+        warn "no $DATA/dbc/CreatureDisplayInfo.dbc or CreatureModelData.dbc, so the shield decks were not added"
+        return 0
+    fi
+    if python3 "$tool" --dbcs "$DATA/dbc" --server-dbc "$DATA/dbc" --out /tmp/deck-dbc >/dev/null 2>&1; then
+        log "CreatureDisplayInfo.dbc: the two shield deck rows are in $DATA/dbc"
+    else
+        # Not fatal: the module falls back to the stock log display.
+        warn "CreatureDisplayInfo.dbc: the shield deck rows could not be added (python3 or the tool failed)"
+    fi
+}
+
 # --- 4. confs ----------------------------------------------------------------------------------
 write_confs() {
     mkdir -p "$LOGS" "$STATE" "$DATA"
@@ -549,6 +573,7 @@ main() {
     init_schemas
     ensure_data
     patch_item_dbc
+    patch_deck_dbc
     write_confs
     first_boot_if_needed
     run_realm

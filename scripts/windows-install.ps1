@@ -244,6 +244,8 @@ $DockerFiles = @(
     'scripts/write-confs.sh'
     'scripts/item-dbc/patch_item_dbc.py'
     'scripts/loot-bags/gen_loot_bags.py'
+    'scripts/lib/dbc_mpq.py'
+    'scripts/skateboard/patch_deck_dbc.py'
 )
 $SelfRefDefault = 'main'
 $DockerRepoBase = 'https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/'
@@ -304,7 +306,7 @@ $MercenaryConfDefaults = @(
 # module's whole conf - nineteen scalars, no lists - and Skateboard.Enable ships as 0.
 $SkateboardConfDefaults = @(
     'Skateboard.Enable=0'
-    'Skateboard.Deck=log'
+    'Skateboard.Deck=engravedwall'
     'Skateboard.MountedPose=0'
     'Skateboard.MaxSpeed=21.0'
     'Skateboard.PushImpulse=4.0'
@@ -2987,6 +2989,8 @@ function Get-ItemDbcTool {
     $files = @(
         [pscustomobject]@{ Rel = 'scripts/item-dbc/patch_item_dbc.py'; Path = $tool }
         [pscustomobject]@{ Rel = 'scripts/loot-bags/gen_loot_bags.py'; Path = (Join-Path (Join-Path $dir 'loot-bags') 'gen_loot_bags.py') }
+        [pscustomobject]@{ Rel = 'scripts/lib/dbc_mpq.py'; Path = (Join-Path (Join-Path $dir 'lib') 'dbc_mpq.py') }
+        [pscustomobject]@{ Rel = 'scripts/skateboard/patch_deck_dbc.py'; Path = (Join-Path (Join-Path $dir 'skateboard') 'patch_deck_dbc.py') }
     )
     $missing = @($files | Where-Object { -not (Test-Path -LiteralPath $_.Path) })
     if ($script:DryRun) {
@@ -3014,7 +3018,11 @@ function Get-ServerDbcDir {
     }
     $dir = Join-Path $env:TEMP ('acore-itemdbc-' + [guid]::NewGuid().ToString('N'))
     [void][System.IO.Directory]::CreateDirectory($dir)
-    $null = Invoke-Compose -Arguments @('cp', 'acore:/opt/acore/data/dbc/Item.dbc', $dir) -AllowFailure
+    # Item.dbc for the bag records, and the two the deck rows need: the deck tool clones the stock
+    # log's rows out of CreatureModelData/CreatureDisplayInfo, so it cannot run from Item.dbc alone.
+    foreach ($name in @('Item.dbc', 'CreatureModelData.dbc', 'CreatureDisplayInfo.dbc')) {
+        $null = Invoke-Compose -Arguments @('cp', ('acore:/opt/acore/data/dbc/' + $name), $dir) -AllowFailure
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $dir 'Item.dbc'))) { return '' }
     return $dir
 }
@@ -3071,6 +3079,14 @@ function Show-ClientPatchStatus {
 }
 
 function Install-ClientPatch {
+    <# Install-ClientPatch - the two client-data patches: Item.dbc (bags) then the deck DBCs. #>
+    # Two steps, one entry point: every caller (-Install, -Repair, -Docker and -Status's fix arm)
+    # wants both or neither, and the deck rows are the second thing a fresh client is missing.
+    Install-ItemDbcPatch
+    Install-DeckPatch
+}
+
+function Install-ItemDbcPatch {
     Step 'Loot-bag items in Item.dbc'
     if ($script:DryRun) {
         $where = $script:DataDir + '\dbc\Item.dbc'
@@ -3156,6 +3172,85 @@ function Install-ClientPatch {
         Ok ("client Item.dbc: {0} reads the patched file" -f $clientData)
     } else {
         Bad ("client Item.dbc: {0} does not read the patched file (run the patch by hand to see why)" -f $clientData)
+    }
+}
+
+function Install-DeckPatch {
+    <# Install-DeckPatch - put the two shield deck rows in CreatureDisplayInfo/CreatureModelData. #>
+    # Skateboard.Deck ships as `engravedwall` (display 90001), a shield item model registered as a
+    # creature display - rows the stock DBCs do not have. The module warns once and draws the stock
+    # log (26609) until the server's copy carries them, so this is a warning, not a failure. In
+    # docker mode the container patches its own copy on every start (entrypoint.sh,
+    # patch_deck_dbc), exactly like the bag records: the copy taken here is what builds the client
+    # archive.
+    Step 'Shield deck rows in CreatureDisplayInfo.dbc'
+    if ($script:DryRun) {
+        $where = $script:DataDir + '\dbc'
+        if ((Resolve-Mode) -eq 'docker') { $where = '/opt/acore/data/dbc in the data volume' }
+        Note ("add the two shield deck rows (90001, 90002) to {0}" -f $where)
+        $root = Get-ClientRoot
+        if ($root) { Note ("write a patch archive into {0}" -f (Join-Path $root 'Data')) }
+        $py = Get-PythonCommand
+        if (-not $py) { Note ("python 3 is missing ({0}), so the patch would be skipped" -f $script:PythonProblem) }
+        [void](Get-ItemDbcTool)
+        return
+    }
+    $clientRoot = Read-ClientDataChoice
+    $clientData = ''
+    if ($clientRoot -and $clientRoot -ne 'none' -and (Test-ClientDataDir $clientRoot)) {
+        $clientData = Join-Path $clientRoot 'Data'
+    }
+    $dbcDir = Get-ServerDbcDir
+    if (-not $dbcDir) {
+        Warn 'no server dbc directory yet, so the shield deck rows were not added (install the client data first)'
+        return
+    }
+    $surface = Join-Path $dbcDir 'CreatureDisplayInfo.dbc'
+    $model = Join-Path $dbcDir 'CreatureModelData.dbc'
+    if (-not (Test-Path -LiteralPath $surface) -or -not (Test-Path -LiteralPath $model)) {
+        Warn ("no CreatureDisplayInfo.dbc/CreatureModelData.dbc beside {0}, so the shield deck rows were not added" -f (Join-Path $dbcDir 'Item.dbc'))
+        return
+    }
+    $py = Get-PythonCommand
+    $tool = Get-ItemDbcTool
+    if (-not $py -or -not $tool) {
+        if (-not $py) {
+            Warn ("python 3 is missing ({0}), so the shield deck rows are skipped" -f $script:PythonProblem)
+        } else {
+            Warn 'the DBC tool could not be fetched, so the board keeps the stock log'
+        }
+        return
+    }
+    $deckTool = Join-Path (Join-Path (Join-Path $script:HostState 'tools') 'skateboard') 'patch_deck_dbc.py'
+    $py = @($py)
+    $pyPrefix = @()
+    if ($py.Count -gt 1) { $pyPrefix = @($py[1..($py.Count - 1)]) }
+    $out = Join-Path $script:StateDir 'deck-dbc'
+    $argv = $pyPrefix + @($deckTool, '--dbcs', $dbcDir, '--out', $out)
+    if ((Resolve-Mode) -ne 'docker') { $argv += @('--server-dbc', $dbcDir) }
+    if ($clientData) { $argv += @('--client-data', $clientData) }
+    Log 'running the deck DBC patch (patch_deck_dbc.py)'
+    $null = Invoke-Native -FilePath $py[0] -Arguments $argv
+    if ($LASTEXITCODE -ne 0) {
+        Warn ("the deck DBC patch failed (exit {0}); the board keeps the stock log until it runs" -f $LASTEXITCODE)
+        return
+    }
+    if ((Resolve-Mode) -eq 'docker') {
+        Ok 'server DBCs: the container adds the two shield deck rows on every start, before the world reads them'
+    } else {
+        Ok ("server DBCs: the shield decks (90001, 90002) are in {0}" -f $dbcDir)
+    }
+    if (-not $clientData) {
+        Warn 'no client folder was chosen, so the client half was not written: pass -ClientData DIR, or re-run -Repair to be asked'
+        Warn ("  (or copy {0}\deck-dbc.MPQ into the client's Data as patch-9.MPQ)" -f $out)
+        return
+    }
+    $verifyArgv = $pyPrefix + @($deckTool, '--verify', '--client-data', $clientData)
+    $null = Invoke-Native -FilePath $py[0] -Arguments $verifyArgv
+    if ($LASTEXITCODE -eq 0) {
+        Ok ("client CreatureDisplayInfo.dbc: {0} reads the patched file" -f $clientData)
+    } else {
+        Bad ("client CreatureDisplayInfo.dbc: {0} does not read the patched file (run the patch by hand to see why)" -f $clientData)
     }
 }
 
