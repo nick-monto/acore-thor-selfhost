@@ -495,8 +495,9 @@ grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
 | `Skateboard.Enable` | `0` | the whole feature; 0 refuses `.board on` and boards nobody |
 | `Skateboard.Deck` | `log` | `log` is the stock `Log Ride` display id 26609 and needs no client patch; `engravedwall` (90001) and `coffinlid` (90002) are the two shield decks, which only exist once the client patch installs their DBC rows |
 | `Skateboard.MountedPose` | `0` | 0 writes `UNIT_FIELD_MOUNTDISPLAYID` alone (deck under a standing player), 1 mounts properly (deck under a sitting rider) |
+| `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |
 | `Skateboard.MaxSpeed` | `21.0` | the cap in yd/s, three times the base run rate [V] |
-| `Skateboard.OffInCombat` | `1` | leaves the board when the player enters combat (a 21 yd/s cap is a free disengage) |
+| `Skateboard.OffOnHit` | `1` | leaves the board when another unit hits the player (a 21 yd/s cap is a free disengage). Starting a fight does not take the deck and neither does fall damage; boarding while already in combat is refused either way |
 
 A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `engravedwall`/`coffinlid` on an unpatched client looks like `log`, not like a bug.
 

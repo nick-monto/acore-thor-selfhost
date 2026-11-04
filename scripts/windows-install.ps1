@@ -298,7 +298,7 @@ $MercenaryConfDefaults = @(
 # mod-skateboard's conf keys with the values its shipped .dist carries. Same contract as the
 # survivor list: a key absent from the file or outside its range is silently replaced by the
 # module's own fallback, so Write-Configs() and Invoke-Checks() restore it from here. These are the
-# module's whole conf - eighteen scalars, no lists - and Skateboard.Enable ships as 0.
+# module's whole conf - nineteen scalars, no lists - and Skateboard.Enable ships as 0.
 $SkateboardConfDefaults = @(
     'Skateboard.Enable=0'
     'Skateboard.Deck=log'
@@ -315,7 +315,8 @@ $SkateboardConfDefaults = @(
     'Skateboard.Crash.DamagePct=8'
     'Skateboard.Crash.StaggerMs=1500'
     'Skateboard.HardcoreSafe=1'
-    'Skateboard.OffInCombat=1'
+    'Skateboard.OffOnHit=1'
+    'Skateboard.BoardCastMs=2000'
     'Skateboard.AckTimeoutMs=500'
     'Skateboard.Debug=0'
 )
@@ -1273,12 +1274,13 @@ function Test-SkateboardValueOk {
     # The switches are checked as text first: an integer-only guard would accept 1.0, which the
     # core's sConfigMgr does not read as a switch.
     if (@('Skateboard.Enable', 'Skateboard.MountedPose', 'Skateboard.Tricks', 'Skateboard.Crash.Enable',
-          'Skateboard.HardcoreSafe', 'Skateboard.OffInCombat', 'Skateboard.Debug') -ccontains $Key) {
+          'Skateboard.HardcoreSafe', 'Skateboard.OffOnHit', 'Skateboard.Debug') -ccontains $Key) {
         return ($Value -ceq '0' -or $Value -ceq '1')
     }
     if ($Value -notmatch '^[0-9]+(\.[0-9]+)?$') { return $false }
     $n = [double]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture)
     switch -CaseSensitive ($Key) {
+        'Skateboard.BoardCastMs' { return ($n -ge 0 -and $n -le 10000) }
         'Skateboard.MaxSpeed' { return ($n -ge 1 -and $n -le 40) }
         'Skateboard.PushImpulse' { return ($n -ge 0 -and $n -le 20) }
         'Skateboard.Friction.Static' { return ($n -ge 0 -and $n -le 20) }

@@ -80,7 +80,8 @@ namespace Skateboard
         uint32 CrashDamagePct      = 8;        // Skateboard.Crash.DamagePct
         uint32 CrashStaggerMs      = 1500;     // Skateboard.Crash.StaggerMs
         bool HardcoreSafe          = true;     // Skateboard.HardcoreSafe
-        bool OffInCombat           = true;     // Skateboard.OffInCombat
+        bool OffOnHit              = true;     // Skateboard.OffOnHit
+        uint32 BoardCastMs         = 2000;     // Skateboard.BoardCastMs
         uint32 AckTimeoutMs        = 500;      // Skateboard.AckTimeoutMs
         bool Debug                 = false;    // Skateboard.Debug
     };
@@ -116,6 +117,9 @@ namespace Skateboard
         uint32 displayId = 0;           // what was written to the mount field
         uint32 mapId = 0;               // map the deck was boarded on
         uint32 debugNextMs = 0;         // next '.board' debug log line
+        uint32 castDeadlineMs = 0;      // boarding cast in flight (0 = none, nothing written yet)
+        float castX = 0.0f;             // where the cast started, to catch a step
+        float castY = 0.0f;
     };
 
     // One table, one hash lookup per hook for everyone who is not boarded.
@@ -127,9 +131,26 @@ namespace Skateboard
         void Update(Player* player, uint32 diff);
 
         // '.board on': refuses with a reason through the handler, otherwise
-        // writes the deck and puts the run rate back at 1.0. Returns true when
-        // the character ended up boarded.
+        // starts the boarding cast (Skateboard.BoardCastMs) or, with 0, writes
+        // the deck and puts the run rate back at 1.0 straight away. Returns true
+        // when the request was accepted, which includes a cast that is now
+        // running - IsBoarded() is false until it completes.
         bool Board(Player* player, ChatHandler* handler);
+
+        // A boarding cast in flight: the record exists, the deck does not.
+        bool IsCasting(Player const* player) const;
+
+        // Stops a boarding cast and pushes the reason to the client, so its bar
+        // stops on the same second the server does. Nothing is taken back.
+        void CancelCast(Player* player, std::string const& reason);
+
+        // UnitScript::OnDamage: another unit hit the player. A cast stops; a
+        // deck goes when Skateboard.OffOnHit says so. Map thread.
+        void OnHit(Player* player);
+
+        // PlayerScript::OnPlayerEnterCombat: a cast that started before the
+        // fight is dropped. A deck already under the player is not.
+        void OnEnterCombat(Player* player);
 
         // '.board off' and every forced drop: clears the visual, releases a
         // stagger, puts the run rate back at 1.0 and forgets the record.

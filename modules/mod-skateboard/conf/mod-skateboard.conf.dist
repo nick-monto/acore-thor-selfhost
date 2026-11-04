@@ -46,6 +46,17 @@
 Skateboard.Enable = 0
 
 #
+#    Skateboard.BoardCastMs
+#        How long '.board on' takes before the deck appears, in milliseconds. The
+#        client draws the bar from the module's own add-on message, and the cast
+#        stops when the player steps off the spot, is hit, enters combat, dies or
+#        is teleported - nothing is written until it completes, so a stopped cast
+#        has nothing to take back. 0 = step on instantly.
+#        Default: 2000, range: 0 - 10000
+#
+Skateboard.BoardCastMs = 2000
+
+#
 #    Skateboard.Deck
 #        The board to draw. A name, or a raw CreatureDisplayInfo id:
 #          log          = 26609 (stock, no client patch)
@@ -169,12 +180,15 @@ Skateboard.Crash.StaggerMs = 1500
 Skateboard.HardcoreSafe = 1
 
 #
-#    Skateboard.OffInCombat
-#        1 = entering combat drops the deck, because a 21 yd/s cap is a free
-#        disengage. 0 = the deck survives combat.
+#    Skateboard.OffOnHit
+#        1 = being hit by another unit knocks the player off the deck, because a
+#        21 yd/s cap is a free disengage. Starting a fight does not: attacking
+#        something while riding is allowed, and the deck only goes when something
+#        hits back. Fall damage and a crash are not hits. 0 = the deck survives
+#        being hit. Boarding while already in combat is refused in either case.
 #        Default: 1, range: 0/1
 #
-Skateboard.OffInCombat = 1
+Skateboard.OffOnHit = 1
 
 #
 #    Skateboard.AckTimeoutMs

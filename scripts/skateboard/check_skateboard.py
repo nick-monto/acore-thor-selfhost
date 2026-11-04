@@ -21,6 +21,9 @@ agreement between the files, which is where a module of this shape actually brea
     comparison is printed as a `skip` line rather than failing, because CI does not clone it. The
     reverse direction is deliberately not asserted: `.board speed` is a player command the add-on
     has no use for;
+  * the boarding cast's push agrees: the module sends `AzerothCore\tc` with `begin=`, `done` and
+    `cancel=`, and the add-on handles exactly those three payloads under that opcode - the wire
+    format is the part of this module that broke once already;
   * pins.toml carries `[module.skateboard]` and all three server workflows copy the module into the
     core, so a release is not built without it;
   * the deck aliases resolve to the display ids docs §3 allocates: `log` to the stock 26609,
@@ -459,6 +462,32 @@ def check_commands() -> tuple[str, None]:
     return f"commands: {len(verbs)} .board verbs agree between the module, docs §2.8 and {where}", None
 
 
+def check_cast_push() -> tuple[str, None]:
+    """The boarding cast's push: one opcode, three payloads, both sides."""
+    module = sources_text()
+    verbs = set(re.findall(r'PushCastState\(player, "([a-z]+)', module))
+    expected = {"begin", "done", "cancel"}
+    if verbs != expected:
+        fail(f"the module pushes cast payloads {sorted(verbs)} instead of {sorted(expected)}")
+    if '"AzerothCore\\tc"' not in module:
+        fail('the module does not build the cast push on the "AzerothCore\\tc" prefix the add-on '
+             'parses (opcode c)')
+
+    where = "the add-on (skipped)"
+    if ADDON.is_file():
+        addon = read(ADDON)
+        addon_verbs = set(re.findall(r'verb == "([a-z]+)"', addon))
+        if addon_verbs != expected:
+            fail(f"{rel(ADDON)} handles cast payloads {sorted(addon_verbs)} instead of {sorted(expected)}")
+        if 'op == "c"' not in addon:
+            fail(f'{rel(ADDON)} does not branch on the "c" opcode the module pushes')
+        where = "the add-on"
+    else:
+        skips.append(f"cast push: {rel(ADDON)} is not checked out, payloads not compared")
+
+    return f"cast: opcode c with {', '.join(sorted(verbs))} agree between the module and {where}", None
+
+
 def check_wiring() -> tuple[str, None]:
     pins = read(PINS)
     if not pins:
@@ -598,6 +627,7 @@ def main() -> int:
     run(check_defaults, defaults)
     run(check_loader)
     run(check_commands)
+    run(check_cast_push)
     run(check_wiring)
     run(check_decks)
     run(check_no_direct_commit)

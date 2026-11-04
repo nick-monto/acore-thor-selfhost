@@ -244,6 +244,8 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 |---|---|---|
 | `Skateboard.Enable` | 0 | whole feature |
 | `Skateboard.Deck` | `log` | `log` is 26609, the stock `Log Ride (Log A)`; `engravedwall` and `coffinlid` are the two shield ids |
+| `Skateboard.BoardCastMs` | 2000 | boarding delay; nothing is written until it completes, and the add-on's bar is driven by the module's own `c` push rather than by the status poll |
+| `Skateboard.OffOnHit` | 1 | a hit from another unit takes the deck; the start of a fight does not, and neither does fall damage |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s ceiling |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
@@ -268,7 +270,7 @@ moves the physics onto a vehicle creature. The cost table is in
 |---|---|
 | Speed-ACK race | never lower the cap while an increase is un-ACKed; the comparison at `MovementHandler.cpp:763-776` kicks on a higher client report, not on a lower one |
 | Already mounted, flying, in an instance/BG, in water | refuse `.board on`; force off on boarding a vehicle (`Vehicle::AddPassenger` takes the mover, `Vehicle.cpp:346`) - unless the board itself ever becomes one, see the plan's §2.9 |
-| Entering combat | the deck is cleared and the run rate restored, and `.board on` refuses while already in combat (both gated on `Skateboard.OffInCombat`): a 21 yd/s cap in combat is a free disengage. The wipeout - the stagger and the health cost - belongs to a mistimed landing, not to a fight |
+| Being hit | `UnitScript::OnDamage` with a different unit as the attacker clears the deck and restores the run rate (`Skateboard.OffOnHit`): a 21 yd/s cap in combat is a free disengage. Starting a fight is not the same event - the deck survives it, and so do fall damage and a crash, whose attacker is the victim. `.board on` is refused while already in combat whatever the key says |
 | Death, logout, map change | clear the deck state on `OnPlayerJustDied`, `OnBeforeLogout`, `OnMapChanged` |
 | **Hardcore character crashes** | `mod-hardcore` turns any death into permadeath; with `Skateboard.HardcoreSafe = 1` a crash damage tick cannot bring health below 1 |
 | Bots | playerbots are real `Player` objects; gate on a real session so no bot is ever "boarded" |

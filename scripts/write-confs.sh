@@ -72,7 +72,7 @@ MERCENARY_CONF_DEFAULTS=(
     "Mercenary.Debug=0"
 )
 # mod-skateboard's conf keys with the values its shipped .dist carries, as KEY=DEFAULT - the whole
-# set the module reads, the same eighteen the contract and the checkers hold. Same contract as the
+# set the module reads, the same nineteen the contract and the checkers hold. Same contract as the
 # survivor list: a key absent from the file or outside its range is silently replaced by the
 # module's own fallback, so wc_write_all() and the installer's run_checks() restore it from here.
 SKATEBOARD_CONF_DEFAULTS=(
@@ -91,7 +91,8 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Crash.DamagePct=8"
     "Skateboard.Crash.StaggerMs=1500"
     "Skateboard.HardcoreSafe=1"
-    "Skateboard.OffInCombat=1"
+    "Skateboard.OffOnHit=1"
+    "Skateboard.BoardCastMs=2000"
     "Skateboard.AckTimeoutMs=500"
     "Skateboard.Debug=0"
 )
@@ -241,8 +242,9 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
     fi
     case "$key" in
         Skateboard.Enable|Skateboard.MountedPose|Skateboard.Tricks|Skateboard.Crash.Enable|\
-        Skateboard.HardcoreSafe|Skateboard.OffInCombat|Skateboard.Debug)
+        Skateboard.HardcoreSafe|Skateboard.OffOnHit|Skateboard.Debug)
             case "$val" in 0|1) return 0 ;; *) return 1 ;; esac ;;
+        Skateboard.BoardCastMs)      lo=0;  hi=10000 ;;
         Skateboard.MaxSpeed)         lo=1;  hi=40 ;;
         Skateboard.PushImpulse)      lo=0;  hi=20 ;;
         Skateboard.Friction.Static)  lo=0;  hi=20 ;;
@@ -557,7 +559,7 @@ wc_write_all() {
         # the DBC does not carry falls back to the stock display. Only a value outside its range is
         # rewritten - a deliberate Enable=0 is left alone.
         conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
-        wc_log "mod-skateboard.conf: Enable=$(wc_get_conf "$sb" Skateboard.Enable) Deck=$(wc_get_conf "$sb" Skateboard.Deck) MaxSpeed=$(wc_get_conf "$sb" Skateboard.MaxSpeed) Crash.Enable=$(wc_get_conf "$sb" Skateboard.Crash.Enable)"
+        wc_log "mod-skateboard.conf: Enable=$(wc_get_conf "$sb" Skateboard.Enable) Deck=$(wc_get_conf "$sb" Skateboard.Deck) MaxSpeed=$(wc_get_conf "$sb" Skateboard.MaxSpeed) BoardCastMs=$(wc_get_conf "$sb" Skateboard.BoardCastMs) OffOnHit=$(wc_get_conf "$sb" Skateboard.OffOnHit) Crash.Enable=$(wc_get_conf "$sb" Skateboard.Crash.Enable)"
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-skateboard.conf.dist - the artifact was built without the module, the skateboard is unavailable"
     fi

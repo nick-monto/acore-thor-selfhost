@@ -142,8 +142,10 @@ point), then `SetControlled(true, UNIT_STATE_ROOT)` for `Crash.StaggerMs`. The s
 core's root state, so a spell root that expires inside the window ends it early.
 
 The deck must never outlive its session: clear on `OnPlayerJustDied`, `OnBeforeLogout`, a map change
-(detected on the next tick, not through a hook), seated on a vehicle, `.board off`, and (config)
-entering combat - which also refuses `.board on` while already fighting. The bot gate is
+(detected on the next tick, not through a hook), seated on a vehicle, `.board off`, and (config) being
+hit by another unit - a fight that merely starts is not a hit. `.board on` is refused while already in
+combat whatever the config says. A boarding cast is not the deck: nothing is written until it
+completes, so a step, a hit, a fight, a death or a teleport simply drops the record. The bot gate is
 `WorldSession::IsHeadless()` — the same test `mod-hardcore` uses (`Hardcore.cpp:140-149`) — so no bot
 is ever boarded.
 
@@ -163,13 +165,15 @@ is ever boarded.
 | `Skateboard.Trick.VisualKit` | 5036 | stock `SpellVisualKit` id sent with each clip, 0 = no flair |
 | `Skateboard.Crash.Enable` / `.DamagePct` / `.StaggerMs` | 1 / 8 / 1500 | the wipeout |
 | `Skateboard.HardcoreSafe` | 1 | a crash can never kill |
-| `Skateboard.OffInCombat` | 1 | a 21 yd/s cap is a free disengage |
+| `Skateboard.OffOnHit` | 1 | a 21 yd/s cap is a free disengage; a hit takes the deck, the start of a fight does not |
+| `Skateboard.BoardCastMs` | 2000 | boarding takes this long, and a step, a hit or a fight stops it |
+| `Skateboard.BoardCastMs` | 2000 | boarding delay; the client's bar is driven by the module's `c` push |
 | `Skateboard.AckTimeoutMs` | 500 | §2.4 |
 | `Skateboard.Debug` | 0 | one log line per 5 s: `v`, slope, rate, `pendingAcks` |
 
 Commands, `CommandScript` (`Acore::ChatCommands`, so both the chat line and the add-on channel can
 reach them): `.board on`, `.board off`, `.board toggle`, `.board status`, `.board speed`,
-`.board push`, `.board trick <1|2|3>`. `.board status` answers one parseable line,
+`.board push`, `.board trick <1|2|3>`. `.board on` starts `Skateboard.BoardCastMs` of boarding (0 boards instantly) and pushes `AzerothCore\tcbegin=<ms>` / `cdone` / `ccancel=<reason>` on the add-on channel, which is what draws and stops the add-on's bar. `.board status` answers one parseable line,
 `boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId> speed=<yd/s>`, which is what the add-on builds its slots
 from, and `.board speed` answers `v=<yd/s> rate=<rate> pending=<n>`. Config is read in
 `WorldScript::OnAfterConfigLoad`, so `.reload config` applies it without a restart.
@@ -332,7 +336,7 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | The shield's origin is not the deck's centre | scale and `MountHeight` are the only DBC knobs; a real offset needs a re-rooted M2 |
 | New DBC ids collide with a future client-data release | ids above the current maxima, derived by the tool, and `--check` fails if the file already holds them |
 | A crash kills a Hardcore character | `HardcoreSafe` clamps damage to `health - 1` |
-| Combat abuse, water, instances, flying | refused on board, forced off on entering combat/water/vehicle (config) |
+| Combat abuse, water, instances, flying | boarding is refused in combat, in water, in an instance, in a BG/arena, while flying or mounted; water/a vehicle/a map change/being hit force the deck off (config where noted) |
 | A bot is boarded | `WorldSession::IsHeadless()` gate (`Hardcore.cpp:140-149`) |
 | ConsolePort hides or rewrites the click binding | it lists custom bindings by design (`EInteract.lua:221-233`), and the `/say` macro path needs no add-on at all |
 | The add-on command channel is refused with no party and no guild | send the add-on message as a self-whisper; the parse happens before any target or channel check (`ChatHandler.cpp:255-310`), and the macro path stays as the fallback |

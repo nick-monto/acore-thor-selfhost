@@ -7,8 +7,12 @@
  * one dangerous operation (publishing it as a run speed rate).
  *
  *   - '.board on' refuses a long list of situations first (dead, already
- *     boarded, mounted, on a vehicle, flying, in water, a battleground, an
- *     arena, mid-teleport, inside an instance, a bot session), then writes the
+ *     boarded, in combat, mounted, on a vehicle, flying, in water, a
+ *     battleground, an arena, mid-teleport, inside an instance, a bot session),
+ *     then runs Skateboard.BoardCastMs of boarding: nothing is written until
+ *     the clock runs out, so a step off the spot, a hit, a fight, a death or a
+ *     teleport drops the request instead of having something to take back. The
+ *     bar is the add-on's, fed by an unsolicited 'c' push. Boarding writes the
  *     deck into UNIT_FIELD_MOUNTDISPLAYID. MountedPose 0 writes the field only,
  *     so the character keeps its standing pose - a skateboard wants a standing
  *     rider; MountedPose 1 goes through Unit::Mount() and gets the mount flag
@@ -29,9 +33,11 @@
  *     speed band and plays the band's emote plus one stock visual kit; a
  *     landing before the clip ends crashes the deck (damage, optional root),
  *     a landing at or after it is clean (LandingBonus, EMOTE_ONESHOT_LAND).
- *   - The deck never outlives its session: death, logout, combat (config),
- *     a map change, water, flying, a battleground or an arena drops it, and
- *     every drop clears the mount field.
+ *   - The deck never outlives its session: death, logout, a map change, water,
+ *     flying, a battleground or an arena drops it, and so does a hit from
+ *     another unit (config: Skateboard.OffOnHit). A fight that merely starts
+ *     does not - attacking something while riding is allowed, and the deck only
+ *     goes when something hits back. Every drop clears the mount field.
  *
  * Released under GNU GPL v2; redistribute/modify under version 2 of the License,
  * or (at your option) any later version.
@@ -257,7 +263,8 @@ namespace Skateboard
         cfg.CrashDamagePct = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Crash.DamagePct", 8), 99);
         cfg.CrashStaggerMs = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Crash.StaggerMs", 1500), 10000);
         cfg.HardcoreSafe = sConfigMgr->GetOption<bool>("Skateboard.HardcoreSafe", true);
-        cfg.OffInCombat = sConfigMgr->GetOption<bool>("Skateboard.OffInCombat", true);
+        cfg.OffOnHit = sConfigMgr->GetOption<bool>("Skateboard.OffOnHit", true);
+        cfg.BoardCastMs = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.BoardCastMs", 2000), 10000);
         cfg.AckTimeoutMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.AckTimeoutMs", 500), 50, 5000);
         cfg.Debug = sConfigMgr->GetOption<bool>("Skateboard.Debug", false);
 
@@ -344,9 +351,9 @@ namespace
             return false;
         }
 
-        // OffInCombat drops the deck when combat starts, so boarding during combat would hand out
-        // the same 21 yd/s disengage through the other door and nothing would take it back.
-        if (cfg.OffInCombat && player->IsInCombat())
+        // A board in a fight is a free 21 yd/s disengage, so boarding is refused while fighting -
+        // always, whatever Skateboard.OffOnHit does to a deck already under the player.
+        if (player->IsInCombat())
         {
             handler->SendSysMessage("You cannot board in combat.");
             return false;
@@ -418,6 +425,48 @@ namespace
 
         return true;
     }
+
+    // An unsolicited add-on message, on the same channel the core's own replies use
+    // (ChatHandler::BuildChatPacket with LANG_ADDON, which the client delivers as a CHAT_MSG_ADDON
+    // split at the tab). Opcode 'c' is this add-on's own: begin=<ms>, done, cancel=<reason>. It
+    // exists so the client's bar starts and stops when the server's cast does, rather than on the
+    // next five-second status poll.
+    void PushCastState(Player* player, std::string const& payload)
+    {
+        WorldSession* session = player->GetSession();
+        if (!session)
+            return;
+
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player,
+            "AzerothCore\tc" + payload);
+        session->SendPacket(&data);
+    }
+
+    // The boarding itself: the deck written and the gate armed. Called by '.board on' when
+    // Skateboard.BoardCastMs is 0, and by the cast when it completes - hence `now` rather than a
+    // clock read, so both paths arm the gate at the same instant the caller decided.
+    void BoardNow(Player* player, uint32 now)
+    {
+        Skateboard::Config const& cfg = Skateboard::GetConfig();
+
+        Deck& deck = Decks()[player->GetGUID()];
+        deck = Deck();
+        deck.displayId = cfg.DeckDisplayId;
+        deck.mapId = player->GetMapId();
+        deck.gateDeadlineMs = now + PublishThrottleMs;
+        deck.debugNextMs = now;
+
+        if (cfg.MountedPose == 0)
+            player->SetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID, cfg.DeckDisplayId);
+        else
+            player->Mount(cfg.DeckDisplayId);
+
+        // A rate of 1.0 is the character's own run speed: SetSpeed() returns without a packet when
+        // the server already holds it, so the gate only arms when a change is actually sent.
+        if (std::fabs(player->GetSpeedRate(MOVE_RUN) - 1.0f) > 0.001f)
+            PublishRate(player, deck, 1.0f, now);
+    }
 }
 
 namespace Skateboard
@@ -457,24 +506,21 @@ namespace Skateboard
             Decks().erase(existing);
         }
 
-        Deck& deck = Decks()[player->GetGUID()];
-        deck = Deck();
-        deck.displayId = cfg.DeckDisplayId;
-        deck.mapId = player->GetMapId();
-        deck.gateDeadlineMs = now + PublishThrottleMs;
-        deck.debugNextMs = now;
+        if (cfg.BoardCastMs > 0)
+        {
+            // Nothing is written yet: the record carries only the cast, so a step, a hit or a
+            // fight drops it without anything to take back. Update() boards when the clock runs out.
+            Deck& deck = Decks()[player->GetGUID()];
+            deck = Deck();
+            deck.mapId = player->GetMapId();
+            deck.castDeadlineMs = now + cfg.BoardCastMs;
+            deck.castX = player->GetPositionX();
+            deck.castY = player->GetPositionY();
+            PushCastState(player, "begin=" + std::to_string(cfg.BoardCastMs));
+            return true;
+        }
 
-        if (cfg.MountedPose == 0)
-            player->SetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID, cfg.DeckDisplayId);
-        else
-            player->Mount(cfg.DeckDisplayId);
-
-        // A rate of 1.0 is the character's own run speed: SetSpeed() returns
-        // without a packet when the server already holds it, so the gate only
-        // arms when a change is actually sent.
-        if (std::fabs(player->GetSpeedRate(MOVE_RUN) - 1.0f) > 0.001f)
-            PublishRate(player, deck, 1.0f, now);
-
+        BoardNow(player, now);
         handler->PSendSysMessage("You step onto the board. Display {}.", cfg.DeckDisplayId);
         return true;
     }
@@ -498,6 +544,61 @@ namespace Skateboard
 
         if (wasBoarded)
             RestoreRunRate(player);
+    }
+
+    bool Manager::IsCasting(Player const* player) const
+    {
+        Deck* deck = FindDeck(player);
+        return deck && deck->castDeadlineMs != 0;
+    }
+
+    void Manager::CancelCast(Player* player, std::string const& reason)
+    {
+        if (!player)
+            return;
+
+        auto it = Decks().find(player->GetGUID());
+        if (it == Decks().end() || !it->second.castDeadlineMs)
+            return;
+
+        // Nothing was written for a cast, so there is nothing to take back - and the record cannot
+        // be kept to hold the reason, because Update() at displayId 0 is the crash-stagger path.
+        Decks().erase(it);
+        PushCastState(player, "cancel=" + reason);
+    }
+
+    void Manager::OnHit(Player* player)
+    {
+        if (!player)
+            return;
+
+        // A hit stops a cast whatever the config says: the request was made while out of combat,
+        // and the player is no longer in the position it was checked in.
+        if (IsCasting(player))
+        {
+            CancelCast(player, "hit");
+            return;
+        }
+
+        if (!GetConfig().OffOnHit)
+            return;
+
+        auto it = Decks().find(player->GetGUID());
+        if (it == Decks().end() || it->second.displayId == 0)
+            return;
+
+        Cleanup(player);
+
+        if (WorldSession* session = player->GetSession())
+            ChatHandler(session).SendSysMessage("The hit knocks you off the board.");
+    }
+
+    void Manager::OnEnterCombat(Player* player)
+    {
+        // Only the cast: a deck already under the player survives the start of a fight, because
+        // walking into one and being hit by it are not the same thing (Skateboard.OffOnHit).
+        if (IsCasting(player))
+            CancelCast(player, "combat");
     }
 
     void Manager::Push(Player* player, ChatHandler* handler)
@@ -592,6 +693,27 @@ namespace Skateboard
         uint32 const now = NowMs();
         Deck& deck = it->second;
 
+        // A boarding cast comes first: its record carries displayId 0 exactly like a crash
+        // stagger, and the deck is not written until the cast completes.
+        if (deck.castDeadlineMs)
+        {
+            Config const& castCfg = GetConfig();
+
+            if (!castCfg.Enable || !player->IsAlive() || !player->IsInWorld() || player->GetMapId() != deck.mapId)
+            {
+                CancelCast(player, castCfg.Enable ? "interrupted" : "disabled");
+                return;
+            }
+
+            if (Reached(now, deck.castDeadlineMs))
+            {
+                deck.castDeadlineMs = 0;
+                BoardNow(player, now);
+                PushCastState(player, "done");
+            }
+            return;
+        }
+
         // A record left behind by a crash: the deck is gone, only the stagger
         // release remains.
         if (deck.displayId == 0)
@@ -623,11 +745,11 @@ namespace Skateboard
             return;
         }
 
-        // Combat is in this list as well as in OnPlayerEnterCombat: OffInCombat can be turned on
-        // by a reload while a player is already fighting.
+        // Combat is not in this list: a fight that starts while the player is riding does not take
+        // the deck. Being hit does, in OnHit, which is what Skateboard.OffOnHit means.
         if (!player->IsAlive() || !player->IsInWorld() || player->GetMapId() != deck.mapId ||
             player->IsInWater() || player->IsFlying() || player->InBattleground() || player->InArena() ||
-            player->GetVehicle() || (cfg.OffInCombat && player->IsInCombat()))
+            player->GetVehicle())
         {
             Cleanup(player);
             return;
@@ -691,6 +813,17 @@ namespace Skateboard
         Deck* deck = FindDeck(player);
         if (!deck || deck->displayId == 0)
             return;
+
+        if (deck->castDeadlineMs)
+        {
+            float const dx = movementInfo.pos.m_positionX - deck->castX;
+            float const dy = movementInfo.pos.m_positionY - deck->castY;
+            // Half a yard: the same position in a heartbeat packet is not a step, a jump is, and a
+            // knockback is the hit's business. Nothing is written yet, so nothing is taken back.
+            if (dx * dx + dy * dy > 0.25f)
+                CancelCast(player, "moved");
+            return;
+        }
 
         bool const falling = movementInfo.HasMovementFlag(MOVEMENTFLAG_FALLING);
         if (falling == deck->airborne)
@@ -819,8 +952,27 @@ public:
 
     void OnPlayerEnterCombat(Player* player, Unit* /*enemy*/) override
     {
-        if (Skateboard::GetConfig().OffInCombat)
-            Skateboard::GetManager().Cleanup(player);
+        Skateboard::GetManager().OnEnterCombat(player);
+    }
+};
+
+// =====================================================================
+//  UnitScript: a hit takes the deck, a fall does not
+// =====================================================================
+class SkateboardUnitScript : public UnitScript
+{
+public:
+    SkateboardUnitScript() : UnitScript("Skateboard_UnitScript") { }
+
+    // Unit::DealDamage runs this for every unit in the world, so the player check is the early
+    // out. Fall damage arrives with the victim as its own attacker and a wipeout's damage comes
+    // from the crash itself: neither is somebody hitting the player.
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    {
+        if (!damage || !attacker || attacker == victim || !victim->IsPlayer())
+            return;
+
+        Skateboard::GetManager().OnHit(victim->ToPlayer());
     }
 };
 
@@ -902,7 +1054,16 @@ public:
         if (!player)
             return false;
 
-        if (!Skateboard::GetManager().IsBoarded(player))
+        Skateboard::Manager& manager = Skateboard::GetManager();
+
+        if (manager.IsCasting(player))
+        {
+            manager.CancelCast(player, "cancelled");
+            handler->SendSysMessage("The boarding was cancelled.");
+            return true;
+        }
+
+        if (!manager.IsBoarded(player))
         {
             handler->SendSysMessage("You are not on a skateboard.");
             handler->SetSentErrorMessage(true);
@@ -921,6 +1082,13 @@ public:
             return false;
 
         Skateboard::Manager& manager = Skateboard::GetManager();
+
+        if (manager.IsCasting(player))
+        {
+            manager.CancelCast(player, "cancelled");
+            handler->SendSysMessage("The boarding was cancelled.");
+            return true;
+        }
 
         if (manager.IsBoarded(player))
         {
@@ -1008,5 +1176,6 @@ void AddSkateboardScripts()
     new SkateboardPlayerScript();
     new SkateboardMovementScript();
     new SkateboardServerScript();
+    new SkateboardUnitScript();
     new skateboard_commandscript();
 }
