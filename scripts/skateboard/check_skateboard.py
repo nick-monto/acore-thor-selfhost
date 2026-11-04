@@ -27,7 +27,7 @@ agreement between the files, which is where a module of this shape actually brea
   * pins.toml carries `[module.skateboard]` and all three server workflows copy the module into the
     core, so a release is not built without it;
   * the deck aliases resolve to the display ids docs §3 allocates: `log` to the stock 26609,
-    `engravedwall` to 90001 and `coffinlid` to 90002;
+    `plank` to 90001 and `coffinlid` to 90002;
   * nothing calls `CharacterDatabase.DirectCommitTransaction`, which CI forbids.
 
 Exit code 0 means every check passed. Run it from anywhere:
@@ -71,8 +71,8 @@ REGISTER_SYMBOL = "AddSkateboardScripts"
 
 # The deck aliases and the display id each resolves to: 26609 is the stock object (no client patch),
 # the other two are the rows docs/SKATEBOARD-FIRST-PASS.md §3 appends above the current maximum.
-DECK_IDS = {"log": 26609, "engravedwall": 90001, "coffinlid": 90002}
-DBC_DECKS = ("engravedwall", "coffinlid")
+DECK_IDS = {"log": 26609, "plank": 90001, "coffinlid": 90002}
+DBC_DECKS = ("plank", "coffinlid")
 
 CONF_LINE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_.]*)\s*=\s*(.*?)\s*$")
 GET_OPTION = re.compile(
@@ -562,7 +562,7 @@ def check_decks() -> tuple[str, None]:
         fail(f"{rel(DOC)} has no §3, so the deck rows cannot be checked")
     else:
         # The table names the decks the way the tool will, "Engraved Wall" and "Iron Coffin Lid";
-        # the conf names them `engravedwall` and `coffinlid`, so a row is matched by the alias it
+        # the conf names them `plank` and `coffinlid`, so a row is matched by the alias it
         # contains.
         rows = []
         for line in section.splitlines():
@@ -604,7 +604,9 @@ def check_decks() -> tuple[str, None]:
         else:
             tool_ids = {alias: int(number) for alias, number in
                         re.findall(r'"([a-z]+)"\s*:\s*(\d+)', ids_block.group(1))}
-            tool_models = {alias: name for alias, name in
+            # The literal in the source is a Python string, so a path is written with doubled
+            # separators there and holds single ones at run time - compare against the value.
+            tool_models = {alias: name.replace("\\\\", "\\") for alias, name in
                            re.findall(r'"([a-z]+)"\s*:\s*"([^"]+\.mdx)"', models_block.group(1))}
             for alias, display in DECK_IDS.items():
                 if alias not in DBC_DECKS:
@@ -624,13 +626,15 @@ def check_decks() -> tuple[str, None]:
                                       for cells in listed):
                     fail(f"{rel(DECK_TOOL)} registers {model} for {alias!r}, which "
                          f"{rel(DOC)} §3 does not list for that deck")
-        for other in (WRITE_CONFS,):
-            if "Skateboard.Deck=engravedwall" not in read(other):
-                fail(f"{rel(other)} does not ship the engravedwall deck as its default")
         defaults = conf_defaults()
-        if defaults.get("Skateboard.Deck") != "engravedwall":
-            fail(f"{rel(CONF)} ships Skateboard.Deck={defaults.get('Skateboard.Deck')}, "
-                 f"but the shield the tool registers is the shipped default")
+        shipped = defaults.get("Skateboard.Deck")
+        if shipped not in DBC_DECKS:
+            fail(f"{rel(CONF)} ships Skateboard.Deck={shipped}, which is not a deck "
+                 f"{rel(DECK_TOOL)} registers ({', '.join(DBC_DECKS)})")
+        for other in (WRITE_CONFS,):
+            if f"Skateboard.Deck={shipped}" not in read(other):
+                fail(f"{rel(other)} does not ship the same default deck as {rel(CONF)} "
+                     f"(Skateboard.Deck={shipped})")
     return (f"decks: {', '.join(f'{display} ({alias})' for alias, display in DECK_IDS.items())} "
             f"match {rel(DOC)} §3 and {rel(DECK_TOOL)}"), None
 

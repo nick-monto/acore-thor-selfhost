@@ -306,7 +306,7 @@ $MercenaryConfDefaults = @(
 # module's whole conf - nineteen scalars, no lists - and Skateboard.Enable ships as 1.
 $SkateboardConfDefaults = @(
     'Skateboard.Enable=1'
-    'Skateboard.Deck=engravedwall'
+    'Skateboard.Deck=plank'
     'Skateboard.Deck.Render=unit'
     'Skateboard.Deck.Carrier=29443'
     'Skateboard.Deck.FollowMs=40'
@@ -320,7 +320,10 @@ $SkateboardConfDefaults = @(
     'Skateboard.Friction.Rolling=0.004'
     'Skateboard.SlopeGain=30.0'
     'Skateboard.Drive=1'
+    'Skateboard.Drive.Mode=0'
     'Skateboard.Drive.ImpulseMs=350'
+    'Skateboard.Drive.ArcMs=0'
+    'Skateboard.Drive.SplineMs=150'
     'Skateboard.Drive.GroundMs=100'
     'Skateboard.Drive.MinSpeed=3.0'
     'Skateboard.Brake=6.0'
@@ -1295,7 +1298,7 @@ function Test-SkateboardValueOk {
     # settled before the numeric guard can see them; the momentum keys carry decimals, so the
     # comparison is a double, not an int64.
     if ($Key -ceq 'Skateboard.Deck') {
-        if ($Value -ceq 'log' -or $Value -ceq 'engravedwall' -or $Value -ceq 'coffinlid') { return $true }
+        if ($Value -ceq 'log' -or $Value -ceq 'plank' -or $Value -ceq 'engravedwall' -or $Value -ceq 'coffinlid') { return $true }
         if ($Value -notmatch '^[0-9]{1,12}$') { return $false }
         return ([int64]$Value -gt 0)
     }
@@ -3234,14 +3237,16 @@ function Install-ItemDbcPatch {
 }
 
 function Install-DeckPatch {
-    <# Install-DeckPatch - put the two shield deck rows in CreatureDisplayInfo/CreatureModelData. #>
-    # Skateboard.Deck ships as `engravedwall` (display 90001), a shield item model registered as a
-    # creature display - rows the stock DBCs do not have. The module warns once and draws the stock
+    <# Install-DeckPatch - put the two deck rows in CreatureDisplayInfo/CreatureModelData. #>
+    # Skateboard.Deck ships as `plank` (display 90001), a world doodad registered as a creature
+    # display - rows the stock DBCs do not have. A doodad, not a shield: an item model's skin comes
+    # from ItemDisplayInfo at draw time and its authored frame is "held", so as a creature it draws
+    # white and on edge. The module warns once and draws the stock
     # log (26609) until the server's copy carries them, so this is a warning, not a failure. In
     # docker mode the container patches its own copy on every start (entrypoint.sh,
     # patch_deck_dbc), exactly like the bag records: the copy taken here is what builds the client
     # archive.
-    Step 'Shield deck rows in CreatureDisplayInfo.dbc'
+    Step 'Deck rows in CreatureDisplayInfo.dbc'
     if ($script:DryRun) {
         $where = $script:DataDir + '\dbc'
         if ((Resolve-Mode) -eq 'docker') { $where = '/opt/acore/data/dbc in the data volume' }

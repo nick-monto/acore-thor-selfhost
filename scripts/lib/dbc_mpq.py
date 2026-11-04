@@ -305,6 +305,105 @@ def read_mpq_file(archive: bytes, name: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Reading the *client's* archives
+# ---------------------------------------------------------------------------
+
+# What a block's leading compression byte says, for the ones that can be undone with the standard
+# library. The client's own archives are written by Blizzard, not by this tool, so unlike the
+# writer's stored-only blocks these are compressed - and the (listfile) member is the one worth
+# reading, because it is the only place a doodad model's path is written down.
+MPQ_COMPRESSION_MASK = 0x0000FF00
+COMPRESSION_ZLIB_NAMES = {
+    0x02: "zlib",
+    0x10: "bzip2",
+    0x08: "PKWARE implode",
+    0x01: "huffman",
+    0x12: "lzma",
+}
+
+
+def _decompress(block: bytes, label: str) -> bytes:
+    """Undo one compressed block, or say precisely which codec stopped us."""
+    if not block:
+        return block
+    kind = block[0]
+    body = block[1:]
+    if kind == 0x02:
+        import zlib
+        return zlib.decompress(body)
+    name = COMPRESSION_ZLIB_NAMES.get(kind, f"codec 0x{kind:02x}")
+    raise SystemExit(f"{label}: the block is compressed with {name}, which this reader does not undo")
+
+
+def _archive_entries(index, label: str):
+    """The hash and block tables of an open archive, as lists."""
+    magic, header_size, archive_size, _version, _shift, hash_pos, block_pos, hash_size, block_count = \
+        struct.unpack_from("<4sIIHHIIII", index)
+    if magic != MPQ_MAGIC or header_size != MPQ_HEADER_SIZE:
+        raise SystemExit(f"{label}: archive header is malformed")
+    if archive_size > len(index):
+        raise SystemExit(f"{label}: archive says {archive_size} bytes, file has {len(index)}")
+    hash_table = mpq_decrypt(index[hash_pos:hash_pos + hash_size * 16], HASH_TABLE_KEY)
+    block_table = mpq_decrypt(index[block_pos:block_pos + block_count * 16], BLOCK_TABLE_KEY)
+    return hash_table, block_table, hash_size, block_count
+
+
+def read_mpq_path(path: Path, name: str) -> bytes:
+    """One member of an archive on disk, decompressing what the reader knows how to undo.
+
+    Unlike read_mpq_file this mmaps the archive: a 3.3.5a Data directory holds one archive over a
+    gigabyte, and reading all of it to pull one small file out is not worth the memory.
+    """
+    import mmap
+
+    with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as index:
+        hash_table, block_table, hash_size, block_count = _archive_entries(index, str(path))
+        wanted_a, wanted_b = mpq_hash(name, 1), mpq_hash(name, 2)
+        slot = mpq_hash(name, 0) & (hash_size - 1)
+        step = 1 + (mpq_hash(name, 1) & (hash_size - 1))
+        for _ in range(hash_size):
+            entry_a, entry_b, _locale, _platform, block_index = struct.unpack_from("<IIHHI", hash_table, slot * 16)
+            if entry_a == 0xFFFFFFFF and entry_b == 0xFFFFFFFF:
+                break
+            if entry_a == wanted_a and entry_b == wanted_b:
+                if block_index >= block_count:
+                    raise SystemExit(f"{path.name}: {name}: block index {block_index} out of range")
+                pos, archived, size, flags = struct.unpack_from("<IIII", block_table, block_index * 16)
+                if not flags & MPQ_FILE_EXISTS:
+                    raise SystemExit(f"{path.name}: {name} is not present")
+                raw = index[pos:pos + archived]
+                # Encrypted members continue their key across sectors with FIX_KEY adjustments, and
+                # getting that subtly wrong returns plausible garbage instead of an error - so this
+                # reader refuses them instead of guessing. --listfile covers that case.
+                if flags & 0x00010000:
+                    raise SystemExit(f"{path.name}: {name} is encrypted; pass the same names "
+                                     f"in a listfile.txt instead (--listfile)")
+                if not flags & MPQ_FILE_COMPRESS:
+                    return raw[:size]
+                # Compressed blocks come in sectors, each with its own codec byte, behind a
+                # sector offset table. A single-unit block is one sector with no table.
+                if flags & MPQ_FILE_SINGLE_UNIT:
+                    return _decompress(raw, f"{path.name}: {name}")[:size]
+                count = (size + SECTOR_SIZE - 1) // SECTOR_SIZE
+                offsets = struct.unpack_from(f"<{count + 1}I", raw)
+                if offsets[0] != (count + 1) * 4:
+                    raise SystemExit(f"{path.name}: {name}: malformed sector table")
+                return b"".join(_decompress(raw[offsets[i]:offsets[i + 1]], f"{path.name}: {name}")
+                                for i in range(count))[:size]
+            slot = (slot + step) & (hash_size - 1)
+    raise SystemExit(f"{path.name}: {name} is not in the archive")
+
+
+def list_mpq_files(path: Path) -> list[str]:
+    """Every member name an archive's (listfile) holds, or SystemExit saying why it could not be read."""
+    try:
+        text = read_mpq_path(path, "(listfile)")
+    except SystemExit as error:
+        raise SystemExit(str(error)) from None
+    return [line.strip() for line in text.decode("utf-8", "replace").splitlines() if line.strip()]
+
+
+# ---------------------------------------------------------------------------
 # Installing into a client's Data directory
 # ---------------------------------------------------------------------------
 

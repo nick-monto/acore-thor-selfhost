@@ -77,7 +77,7 @@ MERCENARY_CONF_DEFAULTS=(
 # module's own fallback, so wc_write_all() and the installer's run_checks() restore it from here.
 SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Enable=1"
-    "Skateboard.Deck=engravedwall"
+    "Skateboard.Deck=plank"
     "Skateboard.Deck.Render=unit"
     "Skateboard.Deck.Carrier=29443"
     "Skateboard.Deck.FollowMs=40"
@@ -91,7 +91,10 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Friction.Rolling=0.004"
     "Skateboard.SlopeGain=30.0"
     "Skateboard.Drive=1"
+    "Skateboard.Drive.Mode=0"
     "Skateboard.Drive.ImpulseMs=350"
+    "Skateboard.Drive.ArcMs=0"
+    "Skateboard.Drive.SplineMs=150"
     "Skateboard.Drive.GroundMs=100"
     "Skateboard.Drive.MinSpeed=3.0"
     "Skateboard.Brake=6.0"
@@ -261,7 +264,7 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
     fi
     if [ "$key" = Skateboard.Deck ]; then
         case "$val" in
-            log|engravedwall|coffinlid) return 0 ;;
+            log|plank|engravedwall|coffinlid) return 0 ;;
             ''|*[!0-9]*) return 1 ;;
             *) awk -v v="$val" 'BEGIN { exit !(v ~ /^[0-9]+$/ && v + 0 > 0) }'; return ;;
         esac

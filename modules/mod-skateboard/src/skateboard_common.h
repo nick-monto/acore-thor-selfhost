@@ -93,7 +93,7 @@ namespace Skateboard
     struct Config
     {
         bool Enable                = true;     // Skateboard.Enable
-        std::string DeckName       = "engravedwall";    // Skateboard.Deck, as configured
+        std::string DeckName       = "plank";          // Skateboard.Deck, as configured
         uint32 DeckDisplayId       = 90001;    // Skateboard.Deck, resolved
         bool RenderUnit            = true;     // Skateboard.Deck.Render (unit, not mount)
         uint32 Carrier             = 29443;    // Skateboard.Deck.Carrier
@@ -108,7 +108,10 @@ namespace Skateboard
         uint32 PushIntervalMs      = 500;      // Skateboard.Push.IntervalMs
         uint32 PushMaxHoldMs       = 2000;     // Skateboard.Push.MaxHoldMs
         bool Drive                 = true;     // Skateboard.Drive
+        uint32 DriveMode           = 0;        // Skateboard.Drive.Mode (0 = knockback kicks, 1 = server spline)
         uint32 DriveImpulseMs      = 350;      // Skateboard.Drive.ImpulseMs
+        uint32 DriveArcMs          = 0;        // Skateboard.Drive.ArcMs (0 = derive it from the cycle)
+        uint32 DriveSplineMs       = 150;      // Skateboard.Drive.SplineMs (one spline segment)
         float DriveMinSpeed        = 3.0f;     // Skateboard.Drive.MinSpeed
         float Brake                = 6.0f;     // Skateboard.Brake
         uint32 DriveGroundMs       = 100;      // Skateboard.Drive.GroundMs (the gap between impulses)
@@ -162,6 +165,7 @@ namespace Skateboard
         uint32 pushNextMs = 0;          // next kick while held
         uint32 pushHeldSinceMs = 0;     // when the hold started, for Push.MaxHoldMs
         uint32 driveNextMs = 0;         // next carry impulse (Skateboard.Drive)
+        uint32 impulseArcMs = 0;        // how long the last impulse keeps the rider off their feet
         uint32 followNextMs = 0;        // next re-seat of the summoned deck
         ObjectGuid deckUnit;            // the summoned deck (Skateboard.Deck.Render = unit)
         uint32 lastImpulseMs = 0;       // the last carry impulse, to tell a glide's fall from a jump

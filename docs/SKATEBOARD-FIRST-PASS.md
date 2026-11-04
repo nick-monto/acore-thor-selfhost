@@ -2,12 +2,15 @@
 
 Companion to [`SKATEBOARDING-DESIGN.md`](SKATEBOARDING-DESIGN.md), which establishes what is
 feasible and why. This document is the build plan for the first shippable slice: the module, the two
-shield decks, the packaging, and the acceptance check for each step.
+deck rows, the packaging, and the acceptance check for each step.
 
-Status: **steps 1-3 and 5 implemented and gated; step 4 (the deck rows) is open.** The
-module, the add-on, the wiring and the offline checker are in the tree; the two shields still ride on
-the client patch from step 4, so the shipped deck is the stock log. The deck rows are chosen (`Engraved Wall`, `Iron Coffin
-Lid`); the momentum model, the limits and the evidence are in the design document.
+Status: **steps 1-3 and 5 implemented and gated; step 4 (the deck rows) is implemented and open on a
+device check** - the first playtest answered its two open questions (a doodad, not a shield; a spline
+follow, not a relocate) and found a third: the carry's arc was being read as a jump (§2.3). The
+module, the add-on, the wiring and the offline checker are in the tree; the two doodad decks still ride on
+the client patch from step 4, so the shipped deck is the stock log. The deck rows are chosen (the
+Redridge boardwalk and the Duskwood coffin lid); the momentum model, the limits and the evidence are in
+the design document.
 
 Confidence: **[V]** verified here from source, artifact or API, **[R]** reported, **[I]** inference.
 
@@ -93,8 +96,12 @@ the facing every `Skateboard.Drive.ImpulseMs`, through the client's own knockbac
 The knockback is the only channel that moves a character the client still controls. A relocation is
 undone by the next movement packet, and a server spline is obeyed only by a unit the client has
 stopped steering - the core even drops a player's own movement while one runs (`VerifyMovementInfo`
-rejects packets while `!movespline->Finalized()`), which is why the spline carrier this module shipped
-first was removed rather than kept as a `Drive.Mode`.
+rejects packets while `!movespline->Finalized()`).
+
+| `Drive.Mode` | Carrier | Follows the hill | Steering | Playtest |
+|---|---|---|---|---|
+| `0` (default) | `SMSG_MOVE_KNOCK_BACK`, one arc per `Drive.ImpulseMs` | **no** - the impulse is horizontal by construction, so a deck runs *through* a downhill rather than down it | instant: the client keeps control between impulses | shipped; reported as flat-running on a slope |
+| `1` | a player spline per `Drive.SplineMs`, path sampled along the terrain | **yes** - the server builds the path, `Map::GetHeight` gives each point its height | only *between* segments, because the client's own packets are dropped while one runs | new; unverified on a device |
 
 `KnockbackFrom(x, y, speedXY, speedZ)` takes the *source* of the knockback, not a direction: the core
 normalizes `thisPosition - source` in `Position::GetSinCos`, so a source one yard behind the rider is
@@ -104,9 +111,17 @@ keeps the deck's average at its own `v` and leaves `Drive.GroundMs` of standing 
 window a jump can start in (`Unit::KnockbackFrom` states the rule for feared/confused units: the *client* is
 what moves a controlled unit, so the server either sends it a movement message or takes control
 away). The impulse keeps the character in control, so forward still pumps (the cap), backward still
-brakes, and the camera still steers between impulses. `zspeed = 0` keeps the impulse horizontal:
-no `HandleFall`, no fall damage, and the glide's own `MOVEMENTFLAG_FALLING` reports are not scored
-as jumps.
+brakes, and the camera still steers between impulses.
+
+**The arc is not a jump, and telling the two apart is the part that broke.** The client reports
+`MOVEMENTFLAG_FALLING` for the carry's own knockback, and it reports a *positive* `zspeed` while the
+arc rises - the same thing a real jump reports - so no field in the packet distinguishes them. The
+first build leaned on the sign anyway, which meant every arc queued a trick clip and **paid
+`LandingBonus` on the landing**: +2 yd/s three times a second, faster than friction and slope
+together could spend it, so `v` sat at `MaxSpeed` whichever way the hill went. The playtest read that
+as "downhill runs flat". The record now carries the window the impulse opened
+(`Deck::impulseArcMs`), and inside `impulseArcMs + CarryArcSlackMs` nothing is a trick. Jumps live in
+the `Drive.GroundMs` window, which is what that key was always for.
 
 ### 2.4 The cap gate — the one dangerous operation
 
@@ -142,9 +157,28 @@ nothing, so the deck has to be an object of its own.
 The display id comes from config, validated once at load against `sCreatureDisplayInfoStore`
 (`DBCStores.cpp:294`); a missing id warns once and falls back to the stock `Log Ride` display
 `26609` (`§4` of the design document), which needs no patch at all. The shipped default is the
-`engravedwall` shield, which does need one: `scripts/skateboard/patch_deck_dbc.py` writes its
+`plank`, which does need one: `scripts/skateboard/patch_deck_dbc.py` writes its
 `CreatureModelData`/`CreatureDisplayInfo` rows into the server's `data/dbc` and the client's patch
 MPQ. Until that runs, the fallback is the log.
+
+**The deck is a world doodad, not a shield, and the playtest is why.** The first pair were shields
+(`Shield_Rectangle_B_01`, `Shield_Northrend_C_02`), and on the device they drew white and on edge.
+Both are properties of an *item* model: its M2 has no texture path (the client fills the material
+from `ItemDisplayInfo` when it draws the item) and its authored frame is "held", not "on the ground".
+A creature display supplies neither, and no DBC field can: there is no texture column and no rotation
+column. A doodad model is self-skinned (its M2 names its own `.blp`) and authored flat, so the shipped
+pair is now the Redridge boardwalk plank (90001) and the Duskwood coffin lid (90002). Two knobs came
+with that:
+
+| Knob | What it does |
+|---|---|
+| `--model ALIAS=PATH` | any doodad's model path for one of the two ids, so the look is a data change, not a rebuild |
+| `--survey HINT [--listfile FILE] [--data-dir DIR]` | every model whose path contains `HINT`: the registered ones with their display ids, plus a 3.3.5a `listfile.txt` and the client's archive listfiles when they can be read. Each hit says whether it is self-skinned (drawable as a creature) and prints the `Skateboard.Deck` id or the `--model` line that would use it - which is how a surfboard, a plank or anything else board-shaped is found in the client the realm ships |
+
+The deck's *placement* is `Deck.Render`. The old note "a flat object under your own feet has nothing
+to interpolate" was wrong: `NearTeleportTo` sends an uninterpolated relocate, so at 25 object updates
+a second the client snapped the deck from point to point and the rider saw it chasing them. The
+follow is a `MoveSplineInit` over the same distance now, which the client interpolates.
 
 ### 2.6 Tricks
 
@@ -177,12 +211,13 @@ is ever boarded.
 | Key | Default | Meaning |
 |---|---|---|
 | `Skateboard.Enable` | 1 | whole feature |
-| `Skateboard.Deck` | `engravedwall` | `engravedwall` (90001, the flat shield) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id |
+| `Skateboard.Deck` | `plank` | `plank` (90001, the Redridge boardwalk) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id. `engravedwall` is the old name for 90001 and still resolves |
 | `Skateboard.Deck.Render` | `unit` | §2.5: `unit` summons the deck under a standing rider, `mount` is the sitting fallback |
 | `Skateboard.Deck.Carrier` / `.FollowMs` | `29443` / `40` | the inert stock creature template the deck is summoned from (`unit` mode; a row with an `AIName` or a `ScriptName` is refused), and how often it is re-seated |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
 | `Skateboard.Drive` / `.ImpulseMs` / `.GroundMs` / `.MinSpeed` / `.Brake` | 1 / 350 / 100 / 3.0 / 6.0 | the carry: one knockback impulse per cycle along the facing, the gap the rider stands in, the speed the carry opens at (capped by `Cruise`) and the backward-key brake |
+| `Skateboard.Drive.Mode` / `.ArcMs` / `.SplineMs` | 0 / 0 / 150 | which carrier moves the rider (`0` knockback arcs, `1` a terrain-following server spline), the knockback arc's length (`0` = `ImpulseMs - GroundMs`) and one spline segment |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Push.Mode` | 0 | 0 = one kick per press, 1 = hold to pump (`push down` / `push up` from the add-on), one kick every `Push.IntervalMs`, capped by `Push.MaxHoldMs` |
 | `Skateboard.Push.IntervalMs` / `.MaxHoldMs` | 500 / 2000 | the pump's rhythm and its lost-`up` backstop |
@@ -303,11 +338,15 @@ on the client side).
 
 | Deck | Model path | Flags | `scale` | `MountHeight` |
 |---|---|---|---|---|
-| Engraved Wall | `ITEM\OBJECTCOMPONENTS\SHIELD\Shield_Rectangle_B_01.mdx` | `0x80` | 1.6 | 0.15 |
-| Iron Coffin Lid | `ITEM\OBJECTCOMPONENTS\SHIELD\Shield_Northrend_C_02.mdx` | `0x80` | 1.6 | 0.15 |
+| Plank | `World\Azeroth\RedRidge\PassiveDoodads\DockPieces\RedRidgeDocksBoardwalk01.mdx` | `0x80` | 2.0 | 0.0 |
+| Coffin Lid | `World\Azeroth\Duskwood\PassiveDoodads\CoffinLid\CoffinLid.mdx` | `0x80` | 2.0 | 0.0 |
 
 Scale and seat height are starting guesses and are tunable in the display row alone, without
-recompiling or re-extracting. Both paths come from `ItemDisplayInfo.dbc` rows 26283 and 56501.
+recompiling or re-extracting. Both are **world doodads**, not shields: a doodad M2 carries its own
+texture path and is authored on the ground plane, so it draws textured and flat (§2.5). Either path
+can be replaced at build time with `--model ALIAS=PATH`, and `--survey HINT` searches the client for
+one - a surfboard, a plank, anything board-shaped - over the model table, a `listfile.txt` and the
+client's own archives.
 
 ### 3.1 Tool changes
 
@@ -352,14 +391,15 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | activation | bind a key to `Skateboard` in the stock Key Bindings frame, press it | boards, and a second press leaves; the same action appears in `/cp` for a pad button; `/say .board toggle` works with the add-on removed from the folder (a bare `/say .board` prints the subcommand list) |
 | momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts down to `Cruise` in ~8 s and never below it; `Debug` line shows `v`, slope and rate agreeing |
 | cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, the rate never above the target the module holds (the cap only lowers) |
-| carry | board on flat ground and release every key | the rider travels along their own facing, in arcs of `Drive.ImpulseMs - Drive.GroundMs` with a standing gap between them; `Drive.ImpulseMs` 250-500 matches the impulse's own duration without a stutter |
+| carry | board on flat ground and release every key | the rider travels along their own facing, in arcs of `Drive.ImpulseMs - Drive.GroundMs` with a standing gap between them; `Drive.ImpulseMs` 250-500 matches the impulse's own duration without a stutter; the deck stays under the feet instead of catching up, and no trick animation or `LandingBonus` fires during the glide |
+| carry on a hill | ride the same slope with `Drive.Mode = 0`, then `1` | `0`: `v` climbs downhill and the *path* still runs level - the arc is horizontal. `1`: the path drops with the hill, the rider turns between segments (not during them), and no jump or trick starts while a segment runs |
 | brake | at 15+ yd/s, hold backward | `v` falls to 0 in a couple of seconds and the cap follows; no `Incorrect speed` kick from the backward walk |
 | tricks | jump while boarded (the `Drive.GroundMs` gap is the window) | one clip per take-off, clean landing adds `v`, mistimed landing crashes once |
 | cleanup | logout, die, change map, `.board off` | no `UNIT_FIELD_MOUNTDISPLAYID` left, no state left in the map |
 | bar | click the add-on's board button, then its push button | boards and pushes the same as the bindings, and the first button becomes `Bail` while boarded; a trick slot the module has not advertised is hidden rather than failing |
 | HUD | ride boarded with `Debug` on | the readout's `cap` matches the `Debug` line's `v` (it comes from the status poll, so it lags a poll); its speed half is `GetUnitSpeed`, which reads 0 at a standstill, so the two numbers together say whether the deck is moving |
 | takeover (toggle) | board out of combat with the takeover on | the player's own action bar keys do board actions, and every original binding is restored on leave, on reload and on the next login after a crash |
-| deck rows | step 4 on the device | both shields render, `--verify` finds all three members in one archive, the server boots with the patched DBCs |
+| deck rows | step 4 on the device | both decks render textured and flat, `--verify` finds all three members in one archive, the server boots with the patched DBCs |
 
 ## 6. Risks and unknowns
 
@@ -367,8 +407,8 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 |---|---|
 | A mount display without `UNIT_FLAG_MOUNT` may not render | the first boot answers it; mode 1 is the fallback (§2.5) |
 | A lost speed ACK wedges the gate | 500 ms timeout (§2.4) |
-| The shield renders with its default skin, not the item's variant | `ItemDisplayInfo` picks the skin, not the model; check on the device and bake it only if it matters |
-| The shield's origin is not the deck's centre | scale and `MountHeight` are the only DBC knobs; a real offset needs a re-rooted M2 |
+| The deck draws white or on edge | answered on the device: an item model has no texture path of its own and is authored held. Ship a doodad model instead, and pick it with `--survey` / `--model` (§2.5) |
+| The doodad's origin is not the deck's centre | scale and `MountHeight` are the only DBC knobs; a real offset needs a re-rooted M2 |
 | New DBC ids collide with a future client-data release | ids above the current maxima, derived by the tool, and `--check` fails if the file already holds them |
 | A crash kills a Hardcore character | `HardcoreSafe` clamps damage to `health - 1` |
 | Combat abuse, water, instances, flying | boarding is refused in combat, in water, in an instance, in a BG/arena, while flying or mounted; water/a vehicle/a map change/being hit force the deck off (config where noted) |
@@ -393,7 +433,7 @@ inside step 3's bar rather than a step of its own.
 | 1 | skeleton, activation and bar | module dirs, loader, config, `.board on/off/toggle`, deck display (stock `26609`), all wiring, the offline checker; add-on: the click bindings, the bar (board/leave, push), the `/say .board` macro fallback | §5 rows 1-4 and the bar row: boots, deck renders, pose answered, a bound key and the bar both board and leave |
 | 2 | momentum and HUD | integrator, cap gate, drift re-assert, `Debug` logging; the readout over `GetUnitSpeed` | §5 momentum, cap and HUD rows: the curve, no kicks, the readout matches the log |
 | 3 | tricks, crash and takeover | airtime bands, emote + visual, landing bonus, crash, cleanup hooks; the bar's trick slots appear once `.board status` advertises them; the binding takeover behind a toggle | §5 tricks, cleanup and takeover rows |
-| 4 | deck rows | rename and extend the patch tool, both shield rows, installers, server-side DBCs | §5 deck-row row: both decks on the device, `--verify` clean |
+| 4 | deck rows | rename and extend the patch tool, both doodad rows, installers, server-side DBCs | §5 deck-row row: both decks on the device, `--verify` clean |
 | 5 | docs | this plan's status line, design-doc status, README, RUNBOOK | — |
 
 The vehicle route is out of the plan, not deferred to a step: revisiting it means new `Spell.dbc`

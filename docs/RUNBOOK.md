@@ -509,17 +509,19 @@ grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
 | Key | Default | What it does |
 |---|---|---|
 | `Skateboard.Enable` | `1` | the whole feature; 0 refuses `.board on` and boards nobody |
-| `Skateboard.Deck` | `engravedwall` | the flat `Engraved Wall` shield (display 90001); `coffinlid` (90002) is the second shield; `log` is the stock `Log Ride` display id 26609 and needs no client patch. The shields only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
+| `Skateboard.Deck` | `plank` | the Redridge boardwalk plank (display 90001); `coffinlid` (90002) is the Duskwood coffin lid; `log` is the stock `Log Ride` display id 26609 and needs no client patch. Both decks are self-textured *doodad* models, not shields - an item model draws white as a creature (Part 5e). They only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
 | `Skateboard.Deck.Render` | `unit` | how the deck is drawn (a `.reload config` switches it under a live rider): `unit` summons a creature carrying the display and re-seats it under the rider (`Deck.Carrier` 29443, `Deck.FollowMs` 40) so the rider stands; `mount` is `Unit::Mount()`, which every client draws but which seats the rider |
 | `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |
 | `Skateboard.MaxSpeed` | `21.0` | the deck's speed in yd/s, three times the base run rate [V] |
 | `Skateboard.Cruise` | `4.0` | the floor a boarded deck never rolls below |
 | `Skateboard.Drive` | `1` | the carry: the module moves the rider with one knockback impulse along the facing every `Drive.ImpulseMs`, so no key is needed to travel. `0` goes back to publishing the deck as a run-speed cap (`SetSpeed(MOVE_RUN, v / 7.0f, true)`), which needs the forward key |
 | `Skateboard.Drive.ImpulseMs` / `.GroundMs` | `350` / `100` | the carry's cycle, and how much of it the rider spends standing (the jump window). The impulse is `ImpulseMs / (ImpulseMs - GroundMs)` times the deck speed, and the average is the deck speed |
+| `Skateboard.Drive.Mode` | `0` | which carrier moves the rider: `0` knockback arcs (steering is instant, but the impulse is horizontal, so the deck runs *through* a downhill), `1` a server spline whose path is sampled along the terrain (follows the hill; the rider steers between segments, not during them) |
+| `Skateboard.Drive.ArcMs` / `.SplineMs` | `0` / `150` | the arc's length (`0` = `ImpulseMs - GroundMs`); one spline segment with `Drive.Mode = 1`, which is also how often steering comes back |
 | `Skateboard.Deck.Carrier` | `29443` | the stock `creature_template` the deck is summoned from. It must be inert - no `AIName`, no `ScriptName` - or the summon is refused with one log line: a scripted row gives the deck an AI of its own (`16386`, the relay this module shipped first, marks the creature active) |
 | `Skateboard.OffOnHit` | `1` | leaves the board when another unit hits the player (a 21 yd/s cap is a free disengage). Starting a fight does not take the deck and neither does fall damage; boarding while already in combat is refused either way |
 
-A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `engravedwall`/`coffinlid` on an unpatched realm looks like `log`, not like a bug. That warning is the signal to run Part 5e.
+A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `plank`/`coffinlid` on an unpatched realm looks like `log`, not like a bug. That warning is the signal to run Part 5e.
 
 `.board` is a player command, one handler per verb:
 
@@ -536,14 +538,18 @@ The client half is the launcher's Skateboard add-on. It registers **five click b
 
 No add-on is required to play: any chat line that starts with `.` is executed and never broadcast, so a `/say .board toggle` macro (or typing `.board on` in chat) still works when the add-on is missing [V]. A missing add-on costs the bar, the speed readout and the bindings, not the board.
 
-## Part 5e — The shield deck
+## Part 5e — The deck rows
 
-`Skateboard.Deck` ships as `engravedwall`, display **90001**: the `Engraved Wall` shield item
-(`Shield_Rectangle_B_01.mdx`) registered as a **creature** display, which is how a mount is drawn.
-No shield is registered in stock data - 0 of the `Item\ObjectComponents\Shield` models appear in
-`CreatureModelData.dbc` - so the two rows per deck are a client-data patch, and they are needed on
-**both** sides: the server validates the id against `sCreatureDisplayInfoStore` at load, the client
-is what draws it.
+`Skateboard.Deck` ships as `plank`, display **90001**: the Redridge boardwalk doodad
+(`World\Azeroth\RedRidge\PassiveDoodads\DockPieces\RedRidgeDocksBoardwalk01.mdx`) registered as a
+**creature** display, which is how a mount is drawn. `coffinlid` is 90002, the Duskwood coffin lid.
+
+A **doodad**, not a shield: shields and other item models are painted by `ItemDisplayInfo` at draw
+time and authored "held", so registered as a creature display one draws white and on edge - which is
+exactly what the first pair did on the device. Doodad M2s carry their own texture path and are
+authored on the ground plane. No doodad is registered as a creature model in stock data, so the two
+rows per deck are a client-data patch, and they are needed on **both** sides: the server validates
+the id against `sCreatureDisplayInfoStore` at load, the client is what draws it.
 
 `scripts/skateboard/patch_deck_dbc.py` writes both halves. The installer runs it (Termux, where the
 client's `Data` directory is visible) as its own step after the loot-bag `Item.dbc` patch; by hand it
@@ -565,6 +571,20 @@ no-op rewrite, and the archive replaces its own copy instead of piling up a new 
 The server loads its DBCs once, at start, so a running realm needs a restart before it accepts
 90001 (on a healthy realm the warning above says whether it did).
 
+Want a different board - a surfboard prop, a plank, the coffin lid? `--survey` finds one:
+
+```bash
+python3 scripts/skateboard/patch_deck_dbc.py --survey surfboard \
+    --dbcs "$RF/opt/acore/data/dbc" \
+    --data-dir "/sdcard/WOTLK 3.3.5a/Data"        # or --listfile listfile.txt
+```
+
+It prints every known model path containing the hint, whether it is self-skinned (a doodad: drawable
+as a creature) or skin-supplied (an item model: will draw white), and either the display id to put in
+`Skateboard.Deck` or the `--model plank=<path>` line that adds the row for it. The client's archives
+are read where their listfile is stored or zlib-compressed; an imploded or encrypted one is reported
+by name, and a 3.3.5a `listfile.txt` covers those.
+
 Check, after a client restart:
 
 ```bash
@@ -575,19 +595,18 @@ python3 scripts/skateboard/patch_deck_dbc.py --verify \
 It names the archive the client actually reads `CreatureDisplayInfo.dbc` from and says whether the
 rows are in it; exit 0 is the only good answer.
 
-`Skateboard.Deck = engravedwall` on a realm whose DBCs were patched only on the server draws
-nothing on an unpatched client - the client has no row for 90001. The module cannot see that side.
+`Skateboard.Deck = plank` on a realm whose DBCs were patched only on the server draws nothing on an
+unpatched client - the client has no row for 90001. The module cannot see that side.
 
 Two things the DBC cannot decide:
 
 - **The deck's size.** `--scale` (default `2.0`, the log's own display scale) is the knob; re-run
   with `--scale 3.0`, restart the client, and look. `--mount-height` lifts the rider off the deck's
   origin if the feet sink.
-- **The deck's pose.** A model's rest orientation lives in the M2, not in the DBC: mount models are
-  authored lying flat, item models are authored standing. Whether a shield reads as a deck under a
-  rider or as a plank sticking up through them is the one answer only the device gives, and if it is
-  wrong no conf value fixes it - that needs a re-rooted model (`docs/SKATEBOARDING-DESIGN.md` §4.3).
-  Until then `log` is a keystroke away.
+- **The deck's pose.** A model's rest orientation lives in the M2, not in the DBC: doodads and mount
+  models are authored lying flat, item models are authored standing. That is why a shield could not
+  work however it was patched - and why `--survey` marks each candidate self-skinned or skin-supplied
+  before you spend a client restart on it. `log` is always a keystroke away.
 
 ## Part 6 — Prove it with a client before touching the launcher
 

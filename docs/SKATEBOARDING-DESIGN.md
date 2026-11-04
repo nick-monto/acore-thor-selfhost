@@ -131,43 +131,51 @@ a doodad M2 is static and has no mount-special animation, so a trick cannot hang
 an authored model, §4.3); and the two `bootybayplank.wmo` / `pirateship_plank.wmo` props in the same
 table are WMOs, which cannot be creature models at all.
 
-**Shields and doors are the better flat art**, and the `Iron Coffin Lid` is a real shield in this
-data: item `43843`, `ItemDisplayInfo` `56501` [V].
+**A doodad, not a shield — the playtest answered this.** The first shipping pair was two shields
+(`Shield_Rectangle_B_01.mdx`, `Shield_Northrend_C_02.mdx`), and on the device they drew *white and
+on edge*. Both follow from what an item model is: its M2 carries no texture path, and the client
+supplies the skin from `ItemDisplayInfo` when it draws the item (which is how one shield model can be
+painted several ways). A creature display has no such hook, so the material resolves to nothing — and
+an item model's authored frame is "held", so as a creature it stands upright. Neither is fixable in a
+DBC: there is no texture field to fill and no rotation field at all. The table above is the answer —
+world doodads are self-skinned (their M2 names its own `.blp`) and authored on the ground plane, so
+they render textured and flat. The shipped pair is now the Redridge boardwalk plank (90001) and the
+Duskwood coffin lid (90002), and `patch_deck_dbc.py --model ALIAS=PATH` swaps either for any other
+doodad path, while `--survey HINT` lists the model rows a client already has.
 
-| Item | entry | `ItemDisplayInfo` | Model | Why it reads as a deck |
+The item route is kept here because it looks right on paper and is wrong in practice, and it took a
+playtest to show it: the client *does* accept an item model as a creature model - `CreatureModelData`
+already carries `ITEM\OBJECTCOMPONENTS\WEAPON\Sword_2H_Deathknight_B_01_Q.mdx` and its axe sibling
+as models 2820/2821, displayed by the `Runebladed Sword` and `Runebladed Axe` creatures (displays
+25398/25401) [V] - but it draws the geometry with no skin. That is what the shields above did.
+
+| Item | entry | `ItemDisplayInfo` | Model | Why it looked right |
 |---|---|---|---|---|
-| **Iron Coffin Lid** | 43843 | 56501 | `Shield_Northrend_C_02.mdx` | a coffin lid is a board with a frame |
+| Iron Coffin Lid | 43843 | 56501 | `Shield_Northrend_C_02.mdx` | a coffin lid is a board with a frame |
 | Splintered Door of the Citadel | 49835 | 64882 | `shield_northrend_d_01.mdx` | a door: flat, panelled, wooden |
-| Engraved Wall | 10363 | 26283 | `Shield_Rectangle_B_01.mdx` | the flattest of the lot — literally a wall |
+| Engraved Wall | 10363 | 26283 | `Shield_Rectangle_B_01.mdx` | the flattest of the lot - literally a wall |
 | Large Wooden Shield | 1200 | 18663 | `Shield_Oval_A_01.mdx` | wide wooden oval |
 | Wooden Shield | 2215 | 18670 | `Shield_Round_A_01.mdx` | round wooden board |
 
-The route is the same two rows, and the client demonstrably accepts an item model as a creature
-model: `CreatureModelData` already carries `ITEM\OBJECTCOMPONENTS\WEAPON\Sword_2H_Deathknight_B_01_Q.mdx`
-and its axe sibling as models 2820/2821, displayed by the `Runebladed Sword` and `Runebladed Axe`
-creatures (displays 25398/25401) [V]. No `ITEM\OBJECTCOMPONENTS\SHIELD\` model is registered
-today, so a shield deck needs a `CreatureModelData` row naming the full path, plus the
-`CreatureDisplayInfo` row.
+Three reasons the item system cannot carry this. The skin is not in the model: the client paints an
+item model from `ItemDisplayInfo` (which is how one shield model ships in several colours), and a
+creature display has no such hook - the material resolves to nothing, which is the white deck. The
+pose is not in the DBC either: an item model is authored "held", so as a creature it stands on edge,
+and no field rotates it. And the item system itself is closed - the client decides the attachment
+from the inventory type and the server only sends entry ids (`PlayerStorage.cpp:2968`,
+`Unit.cpp:16848`), so the item cannot be "worn" where the deck belongs.
 
-**Implemented:** `scripts/skateboard/patch_deck_dbc.py` writes both rows for `engravedwall` (90001,
-`Shield_Rectangle_B_01.mdx`) and `coffinlid` (90002, `Shield_Northrend_C_02.mdx`) by cloning the
-stock log's own rows - display 26609 → model 2920 - so only the id, the model path and the display
-scale differ from a deck the client already draws a rider on. It ships the two patched DBCs to the
-server's `data/dbc` and a patch MPQ to the client's `Data`, the same two halves as the loot-bag
-`Item.dbc` patch. `Skateboard.Deck` ships as `engravedwall`; on a realm whose DBCs were not patched
-the module warns once and uses the log instead. What the rows cannot fix is the model's *pose*: an
-M2's rest orientation is in the model, not in the DBC, so whether a shield lies flat under the rider
-or stands on edge is a device answer, and `--scale` / `--mount-height` are the only knobs. An item model's origin sits at its grip or attachment point — the middle
-of the board — which is about where a deck wants its centre [I]; if it is off, only scale and
-`MountHeight` are tunable in the DBC, so a shifted deck needs a re-rooted model.
-
-Three caveats specific to shields. The item system itself cannot be used for this — the client
-decides the attachment from the inventory type and the server only sends entry ids
-(`PlayerStorage.cpp:2968`, `Unit.cpp:16848`), which is why the DBC registration is the route. The
-skin variant is chosen by `ItemDisplayInfo`, not the model: `Shield_Northrend_C_02.mdx` sits beside
-`Shield_Northrend_C_02Black`, so a creature registration renders whichever texture the M2 carries by
-default — check on the device, and bake the wanted skin in only if it matters [I]. And like the
-planks, a shield M2 is static: no mount-special animation, so no trick can live on it.
+**Implemented:** `scripts/skateboard/patch_deck_dbc.py` writes both rows for `plank` (90001, the
+Redridge boardwalk) and `coffinlid` (90002, the Duskwood coffin lid) by cloning the stock log's own
+rows - display 26609 -> model 2920 - so only the id, the model path and the display scale differ from
+a deck the client already draws a rider on. It ships the two patched DBCs to the server's `data/dbc`
+and a patch MPQ to the client's `Data`, the same two halves as the loot-bag `Item.dbc` patch.
+`Skateboard.Deck` ships as `plank` (`engravedwall` is the old name and still resolves to 90001); on a
+realm whose DBCs were not patched the module warns once and uses the log instead. `--model
+ALIAS=PATH` swaps either deck for any other self-skinned model path, and `--survey HINT` lists what a
+client already has. A doodad M2 is static - no mount-special animation - so a trick cannot hang off
+it; that still needs an authored model (4.3). The origin of a doodad sits on its own base, which is
+where a deck wants its centre; if it is off, only scale and `MountHeight` are tunable in the DBC.
 
 ### 4.3 A real board is data, not code
 
@@ -254,13 +262,14 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | Key | Default | Meaning |
 |---|---|---|
 | `Skateboard.Enable` | 1 | whole feature |
-| `Skateboard.Deck` | `engravedwall` | `engravedwall` (90001) and `coffinlid` (90002) are the two shield ids; `log` is 26609, the stock `Log Ride (Log A)` |
+| `Skateboard.Deck` | `plank` | `plank` (90001) and `coffinlid` (90002) are the two doodad rows; `log` is 26609, the stock `Log Ride (Log A)`; `engravedwall` is the old name for 90001 |
 | `Skateboard.BoardCastMs` | 2000 | boarding delay; nothing is written until it completes, and the add-on's bar is driven by the module's own `c` push rather than by the status poll |
 | `Skateboard.OffOnHit` | 1 | a hit from another unit takes the deck; the start of a fight does not, and neither does fall damage |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s ceiling |
 | `Skateboard.Deck.Render` / `.Carrier` / `.FollowMs` | `unit` / 29443 / 40 | the deck as a summoned unit under a standing rider; the carrier must be an inert template (no `AIName`, no `ScriptName`), and the re-seat interval sets how far the deck trails |
 | `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
 | `Skateboard.Drive` / `.ImpulseMs` / `.GroundMs` / `.MinSpeed` / `.Brake` | 1 / 350 / 100 / 3.0 / 6.0 | the carry: one knockback impulse along the facing per cycle, the standing gap in it, the speed the carry opens at (capped by `Cruise`) and the brake |
+| `Skateboard.Drive.Mode` / `.ArcMs` / `.SplineMs` | 0 / 0 / 150 | which carrier moves the rider (`0` knockback arcs, `1` a server spline that follows the terrain), the knockback's arc length (`0` derives it from the cycle) and one spline segment |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
 | `Skateboard.SlopeGain` | 30.0 | multiplier on the terrain gradient, sampled 6 yd ahead |

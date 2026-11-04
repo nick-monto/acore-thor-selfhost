@@ -63,6 +63,7 @@
 #include "Map.h"
 #include "MapMgr.h"
 #include "MotionMaster.h"
+#include "MoveSplineInit.h"
 #include "ObjectGuid.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -98,12 +99,16 @@ namespace
     // A hop shorter than this is a step off a kerb, not a trick attempt.
     constexpr uint32 MinAirtimeMs = 250;
 
+    // How long after the carry's arc ends a FALLING edge is still read as that arc: a client frame
+    // plus the round trip, which on a self-hosted realm is single-digit milliseconds.
+    constexpr uint32 CarryArcSlackMs = 40;
+
     // Display ids behind the three deck names. 26609 is the stock "Log Ride"
     // creature display and needs no client patch; the two wall ids arrive with
     // the step-4 DBC patch and fall back to the log until then.
-    constexpr uint32 DeckLog          = 26609;
-    constexpr uint32 DeckEngravedWall = 90001;
-    constexpr uint32 DeckCoffinLid    = 90002;
+    constexpr uint32 DeckLog       = 26609;
+    constexpr uint32 DeckPlank     = 90001;
+    constexpr uint32 DeckCoffinLid = 90002;
 
     Skateboard::Config& ConfigMut()
     {
@@ -272,6 +277,7 @@ namespace
         deck.pendingAcks = 0;
         deck.gateDeadlineMs = 0;
         deck.driveNextMs = 0;
+        deck.impulseArcMs = 0;
         deck.lastImpulseMs = 0;
         deck.pushHeld = false;
         deck.pushNextMs = 0;
@@ -368,10 +374,11 @@ namespace
     }
 
     // The deck rides under the rider: every FollowMs the unit is put back at the feet it is
-    // under. A teleport, not a spline - a flat object under your own feet has nothing to
-    // interpolate, and a spline would keep the deck a step behind at deck speed. The window is
-    // armed before the summon, so a carrier that cannot be summoned retries once per FollowMs
-    // rather than once per player update.
+    // under. A spline rather than a relocate: NearTeleportTo sends an uninterpolated teleport, so at
+    // 25 object updates a second the client snapped the deck from point to point and it read as the
+    // deck chasing the rider. A segment whose velocity covers FollowMs is interpolated by the
+    // client instead, so the two move together. The window is armed before the summon, so a carrier
+    // that cannot be summoned retries once per FollowMs rather than once per player update.
     void Reseat(Player* player, Deck& deck, uint32 now)
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
@@ -397,8 +404,22 @@ namespace
             return;
         }
 
-        unit->NearTeleportTo(player->GetPositionX(), player->GetPositionY(), GroundUnder(player),
-            player->GetOrientation());
+        float const x = player->GetPositionX();
+        float const y = player->GetPositionY();
+        float const z = GroundUnder(player);
+
+        // Standing still: nothing to interpolate, and a zero-length spline is a teleport anyway.
+        if (unit->GetExactDist2dSq(x, y) < 0.0025f)
+        {
+            unit->NearTeleportTo(x, y, z, player->GetOrientation());
+            return;
+        }
+
+        Movement::MoveSplineInit init(unit);
+        init.MoveTo(x, y, z, false);
+        init.SetVelocity(std::max(unit->GetExactDist2d(x, y) / (float(cfg.FollowMs) / 1000.0f), 1.0f));
+        init.SetFacing(player->GetOrientation());
+        init.Launch();
     }
 
     // Put the run rate back where the core expects a character on foot to be, and do it from the
@@ -440,17 +461,23 @@ namespace
     //
     // The vertical half is what makes it carry at all: the client's knockback is an arc that lasts
     // 2 * zspeed / g, and a zspeed of 0 is a horizontal nudge it drops on the spot. The arc is
-    // sized to Drive.ImpulseMs - Drive.GroundMs, and the horizontal speed covers the whole cycle
-    // inside that arc, so the deck averages exactly its own v and the rider stands on the ground
-    // for Drive.GroundMs between impulses - the only window a jump can start in.
+    // sized to Drive.ArcMs, or to Drive.ImpulseMs - Drive.GroundMs when that key is 0, and the
+    // horizontal speed covers the whole cycle inside that arc, so the deck averages exactly its own
+    // v and the rider stands on the ground for Drive.GroundMs between impulses - the only window a
+    // jump can start in.
+    //
+    // The arc is also what OnMove() has to *not* read as a jump: the client reports FALLING for the
+    // knockback, with a positive zspeed on the way up, so the record carries the window it opened.
     void CarryImpulse(Player* player, Deck& deck, uint32 now)
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
 
         uint32 const cycleMs = cfg.DriveImpulseMs;
         // At least half the cycle, so a GroundMs an operator set too high cannot turn one impulse
-        // into an unbounded jump: the multiplier is capped at 2.
-        uint32 const arcMs = std::max(cycleMs / 2, cycleMs > cfg.DriveGroundMs ? cycleMs - cfg.DriveGroundMs : 0u);
+        // into an unbounded jump: the multiplier is capped at 2. Drive.ArcMs overrides the derived
+        // length but never exceeds the cycle, or the arc would outlive the impulse that replaces it.
+        uint32 const derivedMs = std::max(cycleMs / 2, cycleMs > cfg.DriveGroundMs ? cycleMs - cfg.DriveGroundMs : 0u);
+        uint32 const arcMs = cfg.DriveArcMs ? std::min(cfg.DriveArcMs, cycleMs) : derivedMs;
         float const arc = float(arcMs) / 1000.0f;
 
         float const zspeed = std::max(0.5f, 0.5f * Skateboard::CLIENT_GRAVITY * arc);
@@ -462,6 +489,65 @@ namespace
 
         deck.driveNextMs = now + cycleMs;
         deck.lastImpulseMs = now;
+        deck.impulseArcMs = arcMs;
+    }
+
+    // The spline carrier (Skateboard.Drive.Mode = 1). The server moves the rider itself, along a
+    // polyline it samples, so the path follows the hill - the knockback it replaces is horizontal by
+    // construction, which is why a deck under the kick carrier runs straight through a downhill
+    // instead of down it. While a player's spline is unfinalized the core drops the client's own
+    // movement (VerifyMovementInfo), so the rider has no steering *during* a segment: each new one
+    // is aimed along the freshest heading the client managed to report, and Drive.SplineMs is how
+    // often that chance comes. The client still animates the spline, so the ride itself is smooth.
+    //
+    // Nothing here is authoritative beyond the path: the height comes from the map, one sample per
+    // sub-segment, and an unloaded grid keeps the previous height rather than inventing a floor.
+    void CarrySpline(Player* player, Deck& deck, uint32 now)
+    {
+        Skateboard::Config const& cfg = Skateboard::GetConfig();
+
+        uint32 const segmentMs = std::max<uint32>(cfg.DriveSplineMs, 50);
+        float const seconds = float(segmentMs) / 1000.0f;
+        float const distance = std::max(1.0f, deck.v * seconds);
+        // A client-controlled player's orientation is the client's: HandleMoverRelocation writes the
+        // packet's position *and* facing, so this is the heading the rider last steered to.
+        float const o = player->GetOrientation();
+        float const x = player->GetPositionX();
+        float const y = player->GetPositionY();
+        Map* map = player->GetMap();
+
+        Movement::MoveSplineInit init(player);
+        Movement::PointsArray& path = init.Path();
+
+        constexpr uint32 Samples = 4;
+        float lastZ = player->GetPositionZ();
+
+        // The start vertex is ours to provide: MoveTo() adds it, a hand-built path does not, and a
+        // path whose first point is already the destination has nothing to walk (the taxi path does
+        // the same thing for the same reason).
+        path.push_back(G3D::Vector3(x, y, lastZ));
+
+        for (uint32 i = 1; i <= Samples; ++i)
+        {
+            float const t = float(i) / float(Samples);
+            float const px = x + std::cos(o) * distance * t;
+            float const py = y + std::sin(o) * distance * t;
+
+            float height = map->GetHeight(px, py, lastZ);
+            if (height <= INVALID_HEIGHT + 1.0f)
+                height = lastZ;
+
+            lastZ = height;
+            path.push_back(G3D::Vector3(px, py, height));
+        }
+
+        init.SetVelocity(std::max(deck.v, 1.0f));
+        init.SetFacing(o);
+        init.Launch();
+
+        deck.driveNextMs = now + segmentMs;
+        deck.lastImpulseMs = 0;
+        deck.impulseArcMs = 0;
     }
 
     // The wipeout: drop the deck, take the damage, and optionally root the
@@ -525,7 +611,7 @@ namespace Skateboard
         Config& cfg = ConfigMut();
 
         cfg.Enable = sConfigMgr->GetOption<bool>("Skateboard.Enable", true);
-        cfg.DeckName = sConfigMgr->GetOption<std::string>("Skateboard.Deck", "engravedwall");
+        cfg.DeckName = sConfigMgr->GetOption<std::string>("Skateboard.Deck", "plank");
         cfg.MaxSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.MaxSpeed", 21.0f), 1.0f, 40.0f);
         cfg.Cruise = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Cruise", 4.0f), 0.0f, 20.0f);
 
@@ -544,7 +630,10 @@ namespace Skateboard
         cfg.FrictionRolling = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Friction.Rolling", 0.004f), 0.0f, 1.0f);
         cfg.SlopeGain = std::clamp(sConfigMgr->GetOption<float>("Skateboard.SlopeGain", 30.0f), 0.0f, 90.0f);
         cfg.Drive = sConfigMgr->GetOption<bool>("Skateboard.Drive", true);
+        cfg.DriveMode = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.Mode", 0), 1);
         cfg.DriveImpulseMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.ImpulseMs", 350), 100, 2000);
+        cfg.DriveArcMs = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.ArcMs", 0), cfg.DriveImpulseMs);
+        cfg.DriveSplineMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.SplineMs", 150), 50, 1000);
         cfg.DriveGroundMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.GroundMs", 100), 0, 1000);
         cfg.DriveMinSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Drive.MinSpeed", 3.0f), 0.0f, 40.0f);
         cfg.Brake = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Brake", 6.0f), 0.0f, 50.0f);
@@ -570,6 +659,15 @@ namespace Skateboard
         // capped by it.
         if (cfg.Cruise > 0.0f)
             cfg.DriveMinSpeed = std::min(cfg.DriveMinSpeed, cfg.Cruise);
+
+        // The spline carrier *is* the movement, so it cannot be off: a deck with Drive = 0 only
+        // publishes a run-speed cap, which needs the forward key and leaves the spline nothing to do.
+        if (cfg.DriveMode == 1 && !cfg.Drive)
+        {
+            LOG_WARN("module", "Skateboard: Skateboard.Drive.Mode = 1 is the carrier itself, so Skateboard.Drive "
+                "is forced back on.");
+            cfg.Drive = true;
+        }
 
         // The deck is only named here. Resolving it needs CreatureDisplayInfo.dbc, and
         // OnAfterConfigLoad runs before LoadDBCStores (World.cpp:323 against :385), so a lookup
@@ -599,8 +697,10 @@ namespace Skateboard
 
         if (deck == "log")
             displayId = DeckLog;
-        else if (deck == "engravedwall")
-            displayId = DeckEngravedWall;
+        else if (deck == "plank")
+            displayId = DeckPlank;
+        else if (deck == "engravedwall")   // the old name for 90001, kept for confs written before it
+            displayId = DeckPlank;
         else if (deck == "coffinlid")
             displayId = DeckCoffinLid;
         else
@@ -611,7 +711,7 @@ namespace Skateboard
                 displayId = uint32(parsed);
             else
             {
-                LOG_WARN("module", "Skateboard: unknown deck '{}', expected log, engravedwall, coffinlid or a display id. Using {}.",
+                LOG_WARN("module", "Skateboard: unknown deck '{}', expected log, plank, coffinlid or a display id. Using {}.",
                     cfg.DeckName, DeckLog);
                 displayId = DeckLog;
             }
@@ -1287,9 +1387,15 @@ namespace Skateboard
         // Cruise so a config cannot board a deck that never moves.
         if (cfg.Drive && !deck.airborne && deck.v > 0.0f && deck.v >= cfg.DriveMinSpeed &&
             !player->HasUnitState(UNIT_STATE_ROOT) && !player->HasUnitState(UNIT_STATE_STUNNED) &&
-            Reached(now, deck.driveNextMs))
+            !player->IsBeingTeleported() && !player->GetTransport() && Reached(now, deck.driveNextMs))
         {
-            CarryImpulse(player, deck, now);
+            // One segment at a time: a spline that is still running owns the rider, and replacing it
+            // mid-path would snap the client to the new one. The knockback carrier has no such
+            // state, so it is issued on its own cycle.
+            if (cfg.DriveMode != 1)
+                CarryImpulse(player, deck, now);
+            else if (player->movespline->Finalized())
+                CarrySpline(player, deck, now);
         }
 
         // The published cap is only the mover when the carry is off. With the carry on, the deck
@@ -1343,11 +1449,22 @@ namespace Skateboard
 
         if (falling)
         {
-            // The carry pushes the rider forward with its own knockback, and the client reports
-            // that glide's falling flag on the way. It is not a jump: the arc's type is in the
-            // packet, because a knockback's jump carries a negative zspeed and a real jump a
-            // positive one. A client that reports 0 falls back to "an impulse just went out",
-            // which is what the carry's own rhythm looks like.
+            // The carry pushes the rider forward with its own knockback, and the client reports that
+            // glide's falling flag on the way - with a *positive* zspeed while the arc rises, so the
+            // sign alone cannot tell it from a jump. The only honest discriminator is the window the
+            // impulse opened: inside it, nothing is a trick.
+            //
+            // Reading the arc as a take-off was not cosmetic. Every arc queued a clip and paid the
+            // landing bonus, so a cruising deck earned LandingBonus three times a second - faster
+            // than friction and slope together could spend it - and v sat at MaxSpeed whichever way
+            // the hill went. That is what made a downhill read as flat.
+            if (deck->impulseArcMs && deck->lastImpulseMs &&
+                !Reached(now, deck->lastImpulseMs + deck->impulseArcMs + CarryArcSlackMs))
+                return;
+
+            // A knockback the deck did not send (a spell, a mob) is still not a take-off: its jump
+            // carries a negative zspeed, and a client that reports 0 falls back to "an impulse just
+            // went out", which is what the carry's own rhythm looks like.
             if (movementInfo.jump.zspeed < 0.0f)
                 return;
 
