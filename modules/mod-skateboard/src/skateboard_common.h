@@ -4,19 +4,25 @@
  * A trip to a private realm, not a mount: the character stays on foot, and the
  * module publishes a *run speed cap* instead of moving the character itself.
  * The player is the mover (MovementHandler.cpp), so a boarded character simply
- * keeps pressing forward and the core lets it travel faster. Between key
- * presses the deck carries the rider with the client's own knockback channel
- * (Skateboard.Drive), which moves a character that is still in control; forward
- * pumps and backward brakes (`Skateboard.Brake`).
+ * keeps pressing forward and the core lets it travel faster. The deck also
+ * carries the rider with the client's own knockback channel (Skateboard.Drive),
+ * which moves a character that is still in control, so a boarded character
+ * needs no key at all: the carry runs every Drive.ImpulseMs whatever the
+ * client is doing, forward only adds the client's own walk on top, and backward
+ * is the brake (Skateboard.Brake).
  *
- *   - '.board on' writes a mount display id into UNIT_FIELD_MOUNTDISPLAYID
- *     without setting UNIT_FLAG_MOUNT (Skateboard.MountedPose = 0), so the deck
- *     is drawn under a standing character; MountedPose = 1 calls Unit::Mount()
- *     for a sitting rider with the flag set.
+ *   - '.board on' puts a deck *under* the character. Skateboard.Deck.Render =
+ *     unit (the default) summons a creature carrying the deck display and
+ *     re-seats it under the rider's feet, because the client draws no mount
+ *     model for a unit without UNIT_FLAG_MOUNT, and the flag would sit the
+ *     rider. Render = mount is the older path: Unit::Mount(), a drawn deck and
+ *     a sitting rider.
  *   - A per-tick integrator keeps a deck speed `v` (yd/s): terrain slope pulls
- *     it down or lets it run, static + rolling friction bleed it off, and
- *     '.board push' adds one impulse. `v` is published as a run speed *rate*
- *     (v / 7.0f, the base run speed) through SetSpeed(MOVE_RUN, rate, true).
+ *     it down or lets it run, rolling friction bleeds it off, '.board push'
+ *     adds one impulse, and Skateboard.Cruise is the floor the deck never
+ *     drops below while it is rolling - a boarded deck is always moving.
+ *     `v` is published as a run speed *rate* (v / 7.0f, the base run speed)
+ *     through SetSpeed(MOVE_RUN, rate, true).
  *   - Publishing is gated: the core kicks a client that reports a higher speed
  *     than the server holds (MovementHandler.cpp), and it counts the
  *     unacknowledged changes in a uint8. One change is in flight at a time; the
@@ -40,6 +46,7 @@
 #define MOD_SKATEBOARD_COMMON_H
 
 #include "Define.h"
+#include "ObjectGuid.h"
 
 #include <string>
 #include <vector>
@@ -56,6 +63,14 @@ namespace Skateboard
     // crawl, and the rate never goes under the value a character on foot has.
     constexpr float BASE_RUN_RATE = 7.0f;
     constexpr float MIN_RUN_RATE = 1.0f;
+
+    // Yards ahead of the rider the terrain gradient is sampled over. Two points at the rider's
+    // feet read a single grid cell and twitch; a longer baseline reads the hill the deck is on.
+    constexpr float SLOPE_LOOKAHEAD = 6.0f;
+
+    // Gravity in the 3.3.5a client, yd/s^2. The carry sizes the vertical half of its knockback
+    // from this so one impulse lasts exactly Skateboard.Drive.ImpulseMs.
+    constexpr float CLIENT_GRAVITY = 19.2911f;
 
     // Trick clip lengths, by speed band: slow, medium, fast. A landing has to
     // last at least as long as the clip the take-off queued.
@@ -82,12 +97,15 @@ namespace Skateboard
         bool Enable                = true;     // Skateboard.Enable
         std::string DeckName       = "engravedwall";    // Skateboard.Deck, as configured
         uint32 DeckDisplayId       = 90001;    // Skateboard.Deck, resolved
-        uint32 MountedPose         = 0;        // Skateboard.MountedPose
+        bool RenderUnit            = true;     // Skateboard.Deck.Render (unit, not mount)
+        uint32 Carrier             = 16386;    // Skateboard.Deck.Carrier
+        uint32 FollowMs            = 100;      // Skateboard.Deck.FollowMs
         float MaxSpeed             = 21.0f;    // Skateboard.MaxSpeed
+        float Cruise               = 4.0f;     // Skateboard.Cruise
         float PushImpulse          = 4.0f;     // Skateboard.PushImpulse
         float FrictionStatic       = 1.5f;     // Skateboard.Friction.Static
         float FrictionRolling      = 0.004f;   // Skateboard.Friction.Rolling
-        float SlopeGain            = 9.0f;     // Skateboard.SlopeGain
+        float SlopeGain            = 30.0f;    // Skateboard.SlopeGain
         bool PushHold              = false;    // Skateboard.Push.Mode (1 = hold to pump)
         uint32 PushIntervalMs      = 500;      // Skateboard.Push.IntervalMs
         uint32 PushMaxHoldMs       = 2000;     // Skateboard.Push.MaxHoldMs
@@ -146,6 +164,8 @@ namespace Skateboard
         uint32 pushNextMs = 0;          // next kick while held
         uint32 pushHeldSinceMs = 0;     // when the hold started, for Push.MaxHoldMs
         uint32 driveNextMs = 0;         // next carry impulse (Skateboard.Drive)
+        uint32 followNextMs = 0;        // next re-seat of the summoned deck
+        ObjectGuid deckUnit;            // the summoned deck (Skateboard.Deck.Render = unit)
         uint32 lastImpulseMs = 0;       // the last carry impulse, to tell a glide's fall from a jump
         uint32 castDeadlineMs = 0;      // boarding cast in flight (0 = none, nothing written yet)
         float castX = 0.0f;             // where the cast started, to catch a step

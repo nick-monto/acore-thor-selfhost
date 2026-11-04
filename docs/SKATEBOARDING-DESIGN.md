@@ -16,7 +16,7 @@ Confidence: **[V]** verified here from source, artifact or API, **[R]** reported
 
 | Layer | Feasible today? | What it needs | Where the limit is |
 |---|---|---|---|
-| **Board under the feet** | **yes**, stock display | module call to `Unit::Mount(26609)` — the quest's `Log Ride` log; no client data, no SQL (§4.1) | rider keeps the client's mounted pose (§4) |
+| **Board under the feet** | **yes** | a summoned creature carrying the deck display, re-seated under the rider (§4.1), or `Unit::Mount()` for a drawn deck and a sitting rider | the field alone draws nothing (playtested), so the deck is an object of its own |
 | **Momentum (accel, friction, downhill, top speed)** | **yes, as an arcade approximation** | module: a velocity integrator on `PlayerScript::OnPlayerUpdate` + `MovementHandlerScript::OnPlayerMove`, pushing `Unit::SetSpeed(MOVE_RUN, …)` | the client is the mover; the server shapes a **cap**, it cannot push the player (§3) |
 | **Ramps / ollies / airtime** | **yes** | `Unit::KnockbackFrom` arc (client plays it), or a `MoveJump` spline (authoritative, input locked) | knockback is client-interruptible; spline velocity is clamped to `max(28, 4×run)` `MoveSplineInit.cpp:106` |
 | **Tricks** | **yes**, as animation + FX + timing | `Unit::HandleEmoteCommand` with stock trick emotes, `Unit::SendPlaySpellVisual`, fall-flag landing window | animation is a canned client clip; no skeletal manipulation (§5) |

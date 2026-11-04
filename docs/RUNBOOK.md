@@ -505,7 +505,7 @@ grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
 |---|---|---|
 | `Skateboard.Enable` | `1` | the whole feature; 0 refuses `.board on` and boards nobody |
 | `Skateboard.Deck` | `engravedwall` | the flat `Engraved Wall` shield (display 90001); `coffinlid` (90002) is the second shield; `log` is the stock `Log Ride` display id 26609 and needs no client patch. The shields only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
-| `Skateboard.MountedPose` | `0` | 0 writes `UNIT_FIELD_MOUNTDISPLAYID` alone (deck under a standing player), 1 mounts properly (deck under a sitting rider) |
+| `Skateboard.Deck.Render` | `unit` | how the deck is drawn: `unit` summons a creature carrying the display and re-seats it under the rider (`Deck.Carrier` 16386, `Deck.FollowMs` 100) so the rider stands; `mount` is `Unit::Mount()`, which every client draws but which seats the rider |
 | `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |
 | `Skateboard.MaxSpeed` | `21.0` | the cap in yd/s, three times the base run rate [V] |
 | `Skateboard.OffOnHit` | `1` | leaves the board when another unit hits the player (a 21 yd/s cap is a free disengage). Starting a fight does not take the deck and neither does fall damage; boarding while already in combat is refused either way |

@@ -307,15 +307,18 @@ $MercenaryConfDefaults = @(
 $SkateboardConfDefaults = @(
     'Skateboard.Enable=1'
     'Skateboard.Deck=engravedwall'
-    'Skateboard.MountedPose=0'
+    'Skateboard.Deck.Render=unit'
+    'Skateboard.Deck.Carrier=16386'
+    'Skateboard.Deck.FollowMs=100'
     'Skateboard.MaxSpeed=21.0'
+    'Skateboard.Cruise=4.0'
     'Skateboard.PushImpulse=4.0'
     'Skateboard.Push.Mode=0'
     'Skateboard.Push.IntervalMs=500'
     'Skateboard.Push.MaxHoldMs=2000'
     'Skateboard.Friction.Static=1.5'
     'Skateboard.Friction.Rolling=0.004'
-    'Skateboard.SlopeGain=9.0'
+    'Skateboard.SlopeGain=30.0'
     'Skateboard.Drive=1'
     'Skateboard.Drive.Mode=1'
     'Skateboard.Drive.ImpulseMs=350'
@@ -1287,15 +1290,19 @@ function Test-SkateboardValueOk {
     }
     # The switches are checked as text first: an integer-only guard would accept 1.0, which the
     # core's sConfigMgr does not read as a switch.
-    if (@('Skateboard.Enable', 'Skateboard.MountedPose', 'Skateboard.Tricks', 'Skateboard.Crash.Enable',
+    if (@('Skateboard.Enable', 'Skateboard.Tricks', 'Skateboard.Crash.Enable',
           'Skateboard.HardcoreSafe', 'Skateboard.OffOnHit', 'Skateboard.Debug') -ccontains $Key) {
         return ($Value -ceq '0' -or $Value -ceq '1')
     }
     if ($Value -notmatch '^[0-9]+(\.[0-9]+)?$') { return $false }
     $n = [double]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    if ($Key -ceq 'Skateboard.Deck.Render') { return ($Value -ceq 'unit' -or $Value -ceq 'mount') }
+    if ($Key -ceq 'Skateboard.Deck.Carrier') { return ($n -ge 1 -and $n -le 4294967295) }
     switch -CaseSensitive ($Key) {
         'Skateboard.BoardCastMs' { return ($n -ge 0 -and $n -le 10000) }
         'Skateboard.MaxSpeed' { return ($n -ge 1 -and $n -le 40) }
+        'Skateboard.Cruise' { return ($n -ge 0 -and $n -le 20) }
+        'Skateboard.Deck.FollowMs' { return ($n -ge 20 -and $n -le 1000) }
         'Skateboard.PushImpulse' { return ($n -ge 0 -and $n -le 20) }
         'Skateboard.Friction.Static' { return ($n -ge 0 -and $n -le 20) }
         'Skateboard.Friction.Rolling' { return ($n -ge 0 -and $n -le 1) }

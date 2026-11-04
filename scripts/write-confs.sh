@@ -78,15 +78,18 @@ MERCENARY_CONF_DEFAULTS=(
 SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Enable=1"
     "Skateboard.Deck=engravedwall"
-    "Skateboard.MountedPose=0"
+    "Skateboard.Deck.Render=unit"
+    "Skateboard.Deck.Carrier=16386"
+    "Skateboard.Deck.FollowMs=100"
     "Skateboard.MaxSpeed=21.0"
+    "Skateboard.Cruise=4.0"
     "Skateboard.PushImpulse=4.0"
     "Skateboard.Push.Mode=0"
     "Skateboard.Push.IntervalMs=500"
     "Skateboard.Push.MaxHoldMs=2000"
     "Skateboard.Friction.Static=1.5"
     "Skateboard.Friction.Rolling=0.004"
-    "Skateboard.SlopeGain=9.0"
+    "Skateboard.SlopeGain=30.0"
     "Skateboard.Drive=1"
     "Skateboard.Drive.Mode=1"
     "Skateboard.Drive.ImpulseMs=350"
@@ -250,6 +253,11 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
         # module itself, which is why anything with a colon is accepted.
         case "$val" in ?*:*) return 0 ;; *) return 1 ;; esac
     fi
+    if [ "$key" = Skateboard.Deck.Render ]; then
+        # unit or mount, nothing else: the module's own read falls back to unit with a warning,
+        # so a typo here would be a silent mode switch on the next boot.
+        case "$val" in unit|mount) return 0 ;; *) return 1 ;; esac
+    fi
     if [ "$key" = Skateboard.Deck ]; then
         case "$val" in
             log|engravedwall|coffinlid) return 0 ;;
@@ -258,11 +266,14 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
         esac
     fi
     case "$key" in
-        Skateboard.Enable|Skateboard.MountedPose|Skateboard.Tricks|Skateboard.Crash.Enable|\
+        Skateboard.Enable|Skateboard.Tricks|Skateboard.Crash.Enable|\
         Skateboard.HardcoreSafe|Skateboard.OffOnHit|Skateboard.Debug|Skateboard.Drive)
             case "$val" in 0|1) return 0 ;; *) return 1 ;; esac ;;
         Skateboard.BoardCastMs)      lo=0;  hi=10000 ;;
         Skateboard.MaxSpeed)         lo=1;  hi=40 ;;
+        Skateboard.Cruise)           lo=0;  hi=20 ;;
+        Skateboard.Deck.Carrier)     lo=1;  hi=4294967295 ;;
+        Skateboard.Deck.FollowMs)    lo=20; hi=1000 ;;
         Skateboard.PushImpulse)      lo=0;  hi=20 ;;
         Skateboard.Push.Mode)        lo=0;  hi=1 ;;
         Skateboard.Push.IntervalMs)  lo=100; hi=2000 ;;

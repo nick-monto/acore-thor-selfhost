@@ -125,16 +125,15 @@ On a self-hosted realm the RTT is ~1-5 ms, so the gate still allows tens of upda
 
 ### 2.5 The deck visual
 
-First experiment, one config line apart:
+Two shapes, and the playtest answered this one: writing the mount display field alone draws
+nothing, so the deck has to be an object of its own.
 
-| `Skateboard.MountedPose` | What the module writes | What it should look like |
+| `Skateboard.Deck.Render` | What the module does | What it looks like |
 |---|---|---|
-| `0` (first try) | `SetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID, id)` only (`UpdateFields.h:126`) | the deck under a **standing** player — the pose a skateboard wants |
-| `1` | `Unit::Mount(id)` (`Unit.cpp:10262`), which also sets `UNIT_FLAG_MOUNT` | the deck under a **sitting** rider, and `UpdateSpeed` takes the mounted branch |
+| `unit` (default) | summons a creature with the deck's display and re-seats it under the rider every `Deck.FollowMs` (`Creature::SetDisplayId`, `TempSummon`) | the deck under a **standing** player — the pose a skateboard wants, and a display every client draws |
+| `mount` | `Unit::Mount(id)` (`Unit.cpp:10262`), which writes the field *and* sets `UNIT_FLAG_MOUNT` | the deck for certain, but under a **sitting** rider, and `UpdateSpeed` takes the mounted branch |
 
-Mode 0 is unverified [I]: whether the 3.3.5a client draws a mount display without the flag is a
-device question, and answering it is the first thing the first boot is for. If it does not render,
-mode 1 is the fallback and §2.4's drift re-assert becomes mandatory rather than defensive.
+`mount` remains because it is the only path the core itself exercises; it costs the standing pose.
 
 The display id comes from config, validated once at load against `sCreatureDisplayInfoStore`
 (`DBCStores.cpp:294`); a missing id warns once and falls back to the stock `Log Ride` display
@@ -175,7 +174,8 @@ is ever boarded.
 |---|---|---|
 | `Skateboard.Enable` | 1 | whole feature |
 | `Skateboard.Deck` | `engravedwall` | `engravedwall` (90001, the flat shield) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id |
-| `Skateboard.MountedPose` | 0 | §2.5 |
+| `Skateboard.Deck.Render` | `unit` | §2.5: `unit` summons the deck under a standing rider, `mount` is the sitting fallback |
+| `Skateboard.Deck.Carrier` / `.FollowMs` | `16386` / `100` | the stock creature template the deck is summoned from (`unit` mode), and how often it is re-seated |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Push.Mode` | 0 | 0 = one kick per press, 1 = hold to pump (`push down` / `push up` from the add-on), one kick every `Push.IntervalMs`, capped by `Push.MaxHoldMs` |
@@ -342,7 +342,7 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 |---|---|---|
 | offline | `scripts/syntax-check.sh` on the module; `check_skateboard.py` | compiles against the pinned core, every conf key read by the code, every emote id exists |
 | boot | worldserver with the module | `Skateboard: <enabled|disabled> (deck '<name>', resolved on the first board).`, conf read, zero ERROR lines |
-| deck | `.board on` | the deck renders under the player; `MountedPose` decided and recorded |
+| deck | `.board on` | the deck renders under the player, standing rider (`Deck.Render = unit`) |
 | activation | bind a key to `Skateboard` in the stock Key Bindings frame, press it | boards, and a second press leaves; the same action appears in `/cp` for a pad button; `/say .board toggle` works with the add-on removed from the folder (a bare `/say .board` prints the subcommand list) |
 | momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts to a stop in ~8 s; `Debug` line shows `v`, slope and rate agreeing |
 | cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, rate within 0.01 of target between changes |

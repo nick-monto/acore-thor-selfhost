@@ -5,25 +5,28 @@
 ########################################
 #
 # A skateboard, not a mount: the character keeps walking, and the module turns
-# its run speed into a cap it has to earn. '.board on' puts a deck under the
-# character, '.board push' kicks the speed up, terrain slope and friction fight
-# it back, and the jump button becomes the trick button.
+# its run speed into a cap it has to earn while it drives the deck. '.board on'
+# puts a deck under the character, '.board push' kicks the speed up, terrain
+# slope and friction fight it back, and the jump button becomes the trick
+# button. A boarded deck always rolls - Skateboard.Cruise is its floor - so the
+# rider steers and pushes, and never has to hold forward to travel.
 #
 # Nothing here needs a client patch: the stock deck is the "Log Ride" display
 # 26609 that every 3.3.5a client already has. The two wall decks (90001, 90002)
 # only look right once the step-4 DBC patch is installed; until then the module
 # warns once at startup and uses 26609 instead.
 #
-# Two ways to draw the board (Skateboard.MountedPose):
+# Two ways to draw the board (Skateboard.Deck.Render):
 #
-#   0 - the module writes UNIT_FIELD_MOUNTDISPLAYID only. The character keeps
-#       its standing pose, which is what a skateboard wants. This is the first
-#       thing to look at in game: whether the 3.3.5a client draws a mount
-#       display without UNIT_FLAG_MOUNT is unverified, and if it does not, use 1.
-#   1 - the module calls Unit::Mount(). The client draws a sitting rider and the
-#       mount flag is set, which also makes the core's own UpdateSpeed take the
-#       mounted branch. The module re-asserts the rate when it is wiped, so the
-#       cap still holds.
+#   unit  - the deck is a creature summoned under the rider and re-seated at the
+#           feet every Skateboard.Deck.FollowMs. The rider stands on it, and
+#           every client draws a creature display. This is the default, because
+#           the client draws no mount model for a unit without UNIT_FLAG_MOUNT
+#           (playtested: the field alone shows nothing).
+#   mount - the older path: Unit::Mount(). The deck is drawn for certain, but
+#           the client seats the rider on it and the mount flag makes the core's
+#           own UpdateSpeed take the mounted branch. The module re-asserts the
+#           rate when it is wiped, so the cap still holds.
 #
 # The speed gate: the cap travels to the client as SMSG_FORCE_RUN_SPEED_CHANGE
 # and the core kicks a client that claims a higher speed than the server holds,
@@ -78,12 +81,38 @@ Skateboard.BoardCastMs = 2000
 Skateboard.Deck = engravedwall
 
 #
-#    Skateboard.MountedPose
-#        0 = write the mount display field only, character keeps its standing
-#        pose. 1 = Unit::Mount(), sitting rider with the mount flag set.
-#        Default: 0, range: 0/1
+#    Skateboard.Deck.Render
+#        unit = summon a creature that carries Skateboard.Deck's display and
+#        follow the rider with it, so the deck is a real object under a standing
+#        character. mount = Unit::Mount(), the deck as a mount display: drawn by
+#        every client, but the rider sits on it. Changing this takes effect on
+#        the next '.board on': a deck already down keeps the shape it was drawn
+#        in, so '.board off' first.
+#        Default: unit, range: unit|mount
 #
-Skateboard.MountedPose = 0
+Skateboard.Deck.Render = unit
+
+#
+#    Skateboard.Deck.Carrier
+#        The creature_template row the deck unit is summoned from, in
+#        Deck.Render = unit. The carrier's own model never shows - the deck's
+#        display is written over it - so what matters is that it is harmless:
+#        the default (16386, a friendly, unselectable trigger with no AI and no
+#        extra flags) is one of the stock rows the world database already has,
+#        so the deck needs no SQL.
+#        Default: 16386, range: any creature_template entry
+#
+Skateboard.Deck.Carrier = 16386
+
+#
+#    Skateboard.Deck.FollowMs
+#        How often the deck unit is re-seated under the rider, in milliseconds.
+#        100 is one client update: the deck is where the feet are, with no
+#        visible lag at deck speed. Higher costs fewer packets and drags the
+#        deck further behind.
+#        Default: 100, range: 20 - 1000
+#
+Skateboard.Deck.FollowMs = 100
 
 #
 #    Skateboard.MaxSpeed
@@ -92,6 +121,17 @@ Skateboard.MountedPose = 0
 #        Default: 21.0, range: 1.0 - 40.0
 #
 Skateboard.MaxSpeed = 21.0
+
+#
+#    Skateboard.Cruise
+#        The speed, in yd/s, a boarded deck never drops below while it is
+#        rolling. Friction, an uphill and a rider who never pushes can slow the
+#        deck to here and no further, so a board that is on is always moving.
+#        The backward key (the brake) is the only way to stand still on a deck,
+#        and '.board off' is the way off it.
+#        Default: 4.0, range: 0.0 - 20.0
+#
+Skateboard.Cruise = 4.0
 
 #
 #    Skateboard.PushImpulse
@@ -136,8 +176,9 @@ Skateboard.Push.MaxHoldMs = 2000
 #
 #    Skateboard.Friction.Static
 #        Constant deceleration in yd/s^2, applied whether the deck is moving or
-#        not. With the default rolling term this stops a full-speed deck in
-#        about eight seconds.
+#        not. With the default rolling term this bleeds a full-speed deck down
+#        in about eight seconds - down to Skateboard.Cruise, never below it: a
+#        boarded deck does not stop on its own.
 #        Default: 1.5, range: 0.0 - 20.0
 #
 Skateboard.Friction.Static = 1.5
@@ -153,24 +194,25 @@ Skateboard.Friction.Rolling = 0.004
 #
 #    Skateboard.SlopeGain
 #        Multiplier on the terrain gradient under the character's heading,
-#        sampled over 2 yd. 0 = flat ground everywhere; higher values make
-#        hills matter more. Only terrain, never vmaps.
-#        Default: 9.0, range: 0.0 - 90.0
+#        sampled over 6 yd ahead, and the term that makes hills mean something:
+#        at 30.0 a 10% downhill adds 3 yd/s^2 and a 10% uphill takes the same
+#        away, so a long slope is felt within a second or two. 0 = flat ground
+#        everywhere. Only terrain, never vmaps.
+#        Default: 30.0, range: 0.0 - 90.0
 #
-Skateboard.SlopeGain = 9.0
+Skateboard.SlopeGain = 30.0
 
 #
 #    Skateboard.Drive
-#        The deck carries an idle rider. A player's movement belongs to the
-#        client, so the server cannot simply move a character that is still in
-#        control; the one channel the client obeys is its own knockback. With
-#        this on, a rider holding no movement key is pushed one horizontal
-#        impulse along the facing every Drive.ImpulseMs, so slope and push keep
-#        the deck going between key presses.
-#        Forward cancels the carry (the run-speed cap is what makes a pumping
-#        rider fast), backward brakes (Skateboard.Brake), and a rooted or
-#        stunned rider is not carried. 0 restores key-driven movement only,
-#        which is what the module did before.
+#        The carry, which is what moves a boarded character. A player's movement
+#        belongs to the client, so the server cannot simply move a character
+#        that is still in control; the one channel the client obeys is its own
+#        knockback, so the deck is pushed one horizontal impulse along the
+#        facing every Drive.ImpulseMs at the deck's current speed. It runs
+#        whether or not a movement key is held: forward is not needed to travel
+#        (the client's own walk is only extra), backward brakes
+#        (Skateboard.Brake), and a rooted or stunned rider is not carried. 0
+#        makes the deck a run-speed cap again, which needs the forward key.
 #        Default: 1, range: 0|1
 #
 Skateboard.Drive = 1
