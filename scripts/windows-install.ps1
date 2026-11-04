@@ -139,7 +139,7 @@
     thing here; -Force, -DataZip and -MysqlUrl do not apply.
 
 .PARAMETER DockerDir
-    Where the four container files are staged, laid out the way this repository lays them out
+    Where the container files are staged, laid out the way this repository lays them out
     because docker/docker-compose.yml builds with the repository root as its context
     (default <root>\docker-src).
 
@@ -232,15 +232,18 @@ $NearVisitMax = 2400
 $NearAwayMin = 240
 $NearAwayMax = 600
 
-# The container mode's four files - the compose file, the image and the two scripts it runs - and
-# the repository layout they are staged in. It is the layout of this repository on purpose:
-# docker/docker-compose.yml builds with the repository root as its context, so the staging
-# directory has to hold docker\ and scripts\ at its top level.
+# The container mode's staged files, in the layout of this repository on purpose:
+# docker/docker-compose.yml builds with the repository root as its context, so the staging directory
+# has to hold docker\ and scripts\ at its top level. It is every file the Dockerfile COPYs, because a
+# file missing here fails the build at its COPY line, long after the download that was supposed to
+# have staged it.
 $DockerFiles = @(
     'docker/Dockerfile'
     'docker/docker-compose.yml'
     'docker/entrypoint.sh'
     'scripts/write-confs.sh'
+    'scripts/item-dbc/patch_item_dbc.py'
+    'scripts/loot-bags/gen_loot_bags.py'
 )
 $SelfRefDefault = 'main'
 $DockerRepoBase = 'https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/'
@@ -4042,7 +4045,7 @@ function Install-ForMode {
 # The realm can also run as two containers: an image built from docker/Dockerfile (a headless
 # ubuntu server) and mysql:8.4, driven by docker/docker-compose.yml. That is the "easy to serve
 # and delete" path - every piece of state is a named volume, so "docker compose down -v" puts the
-# host back the way it was. This mode stages the four container files from this repository at
+# host back the way it was. This mode stages the container files from this repository at
 # -SelfRef into <root>\docker-src (the layout docker/docker-compose.yml expects, since it builds
 # with the repository root as its context) and drives compose from there.
 #
@@ -4193,7 +4196,7 @@ function Test-DockerPrerequisites {
 }
 
 function Install-DockerAssets {
-    <# Install-DockerAssets - fetch the four container files into <root>\docker-src at -SelfRef. #>
+    <# Install-DockerAssets - fetch the container files into <root>\docker-src at -SelfRef. #>
     Step 'Container files'
     $base = $DockerRepoBase + (Get-FetchRef) + '/'
     if ($script:DryRun) {
@@ -4223,7 +4226,35 @@ function Install-DockerAssets {
     if ($missing.Count -gt 0) {
         Die ("the fetched container files are missing or empty: {0}" -f ($missing -join ', '))
     }
-    Log ("staged four files in {0}" -f $script:DockerDir)
+    Log ("staged {0} files in {1}" -f $DockerFiles.Count, $script:DockerDir)
+}
+
+function Get-DockerArtifactPin {
+    <# Get-DockerArtifactPin - the artifact URL and its published sha256, or $null. #>
+    # Docker decides what to rebuild by hashing each instruction and the build args in scope. The
+    # artifact step is one RUN that downloads a release asset from a moving URL
+    # (releases/download/<tag>/...), and its sha256 is fetched inside that same layer - so with no
+    # args the layer's key is identical from one release to the next and Docker replays the old
+    # tarball, whatever was published since. Handing the sha in as a build arg changes the key with
+    # every release, so the download re-runs and the verification is against the same hash.
+    #
+    # The URL is read out of the staged Dockerfile rather than repeated here: that file is the one
+    # the build reads, so the two cannot drift.
+    param()
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -match '^ARM64$') { 'arm64' } else { 'amd64' }
+    $dockerfile = Join-Path $script:DockerDir 'docker\Dockerfile'
+    if (-not (Test-Path -LiteralPath $dockerfile)) { return $null }
+    $text = [System.IO.File]::ReadAllText($dockerfile)
+    $m = [regex]::Match($text, '(?m)^\s*' + [regex]::Escape($arch) + '\)\s*default_url="([^"]+)"')
+    if (-not $m.Success) { return $null }
+    $url = $m.Groups[1].Value
+    $shaFile = Join-Path $env:TEMP 'acore-artifact.sha256'
+    if (-not (Get-RemoteFile -Uri ($url + '.sha256') -Destination $shaFile -Attempts 2)) { return $null }
+    $sha = ([System.IO.File]::ReadAllText($shaFile)).Trim()
+    Remove-Item -LiteralPath $shaFile -Force -ErrorAction SilentlyContinue
+    if ($sha) { $sha = ($sha -split '\s+')[0].ToLowerInvariant() }
+    if ($sha -notmatch '^[0-9a-f]{64}$') { return $null }
+    return @{ Url = $url; Sha = $sha }
 }
 
 function Set-DockerEnvironment {
@@ -4241,7 +4272,22 @@ function Set-DockerEnvironment {
     }
     if ($script:DryRun) {
         Note ("would start the acore container with BOTS={0} HORDE_RATIO={1} BIND_IP=0.0.0.0 (the entrypoint renders both into playerbots.conf at every start)" -f $script:Bots, $script:HordeRatio)
+        Note 'would pin the published artifact sha256 as a build arg, so a new release re-runs the download layer instead of reusing its cache'
         return
+    }
+    $pin = Get-DockerArtifactPin
+    if ($pin) {
+        $env:ARTIFACT_URL = $pin.Url
+        $env:ARTIFACT_SHA256 = $pin.Sha
+        Log ("artifact pin: {0} {1}" -f $pin.Sha.Substring(0, 12), $pin.Url)
+    }
+    else {
+        # Falls back to what the Dockerfile does by itself: fetch the .sha256 inside the layer. That
+        # still verifies the bytes it downloads, but it cannot invalidate an earlier layer, so a
+        # release published since the last build stays invisible until the cache is busted.
+        Remove-Item Env:\ARTIFACT_URL, Env:\ARTIFACT_SHA256 -ErrorAction SilentlyContinue
+        Warn 'could not read the published artifact sha256: the image build will not re-fetch a cached artifact'
+        Warn '  if the realm is older than the release, rebuild with: docker compose -f <compose> build --no-cache acore'
     }
     $env:DB_PASS = $script:DbPass
     $env:DB_ROOT_PASS = $script:DockerRootPass

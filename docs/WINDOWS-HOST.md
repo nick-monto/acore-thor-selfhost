@@ -362,6 +362,30 @@ installs it once.
 Because the client data lives in `data` and the schemas in `db`, a rebuild (`up -d --build`) keeps a
 populated realm untouched: only the binaries under `/opt/acore` are replaced.
 
+`/opt/acore/etc` is *not* a volume. It is the image's own layer, laid down from the artifact's
+`etc/` at build time, and the confs in it are re-rendered from the artifact's `.dist` files at every
+start. So a hand edit to `/opt/acore/etc/modules/*.conf` survives a `docker compose restart` and is
+gone at the next recreate; the switch for anything the entrypoint knows about is the compose
+environment (see `SKATEBOARD_ENABLE`, `BOTS`, `HORDE_RATIO`).
+
+### A new release reaches an image only through the artifact pin
+
+The artifact step is one `RUN` that downloads `releases/download/<tag>/acore-server-x86_64.tar.zst`.
+That tag is a moving name, and the sha256 is fetched *inside* the layer, so nothing in the layer's
+cache key changes when a new build is published: `up -d --build` and `-Repair` replay the tarball
+they downloaded the first time. The installer therefore reads the URL out of the staged Dockerfile,
+fetches the `.sha256` published beside it, and passes both as build args (`ARTIFACT_URL`,
+`ARTIFACT_SHA256`). A new release changes the sha, which changes the key, which re-runs the layer -
+and the bytes are verified against the hash the release published, not one fetched a month ago.
+
+If the sha256 cannot be read (offline, or a release that published none), the installer says so and
+leaves the build to its own fetch: correct bytes, but no cache invalidation. The escape hatch is then
+
+```powershell
+docker compose -f C:\acore\docker-src\docker\docker-compose.yml build --no-cache acore
+docker compose -f C:\acore\docker-src\docker\docker-compose.yml up -d acore
+```
+
 ### The confs come from one writer
 
 The entrypoint sources `scripts/write-confs.sh` and calls `wc_write_all`, which is the same library
@@ -387,11 +411,11 @@ pre-refactor installer [V].
 | Flag | Default | What it does |
 |---|---|---|
 | `-Docker` | | Selects the container mode instead of a native install |
-| `-DockerDir DIR` | `<root>\docker-src` | Staging directory the four files are fetched into |
+| `-DockerDir DIR` | `<root>\docker-src` | Staging directory the container files are fetched into |
 | `-SelfRef REF` | `main` | Branch or tag the files are fetched from (`raw.githubusercontent.com/nick-monto/acore-thor-selfhost/<ref>/...`) |
 | `-Check` | | Prints every command it would run and touches nothing |
 | `-Status` | | Reads `docker compose ps` and reports the services |
-| `-Repair` | | Re-fetches the four files and rebuilds |
+| `-Repair` | | Re-fetches the container files and rebuilds |
 | `-Uninstall` | | `docker compose down -v --remove-orphans`, then removes the staging directory |
 | `-KeepDb` | | With `-Uninstall`: dumps each schema with `docker compose exec -T db mysqldump` into `%USERPROFILE%\.win-wow\dumps\` first |
 
@@ -452,7 +476,7 @@ docker compose -f docker/docker-compose.yml up -d --build
 ```
 
 Same image, same volumes, same published ports; `docker compose -f docker/docker-compose.yml down -v`
-is the same delete. The PowerShell wrapper only exists to fetch the four files and to keep the mode
+is the same delete. The PowerShell wrapper only exists to fetch the container files and to keep the mode
 record in step with the native installer.
 
 ### What is verified about this path
