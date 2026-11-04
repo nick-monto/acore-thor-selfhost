@@ -710,6 +710,11 @@ namespace Skateboard
                 deck.castDeadlineMs = 0;
                 BoardNow(player, now);
                 PushCastState(player, "done");
+                // The instant path says this from the command handler; a cast that finishes has no
+                // handler left, and the deck appearing is not the only thing worth saying.
+                if (WorldSession* session = player->GetSession())
+                    ChatHandler(session).PSendSysMessage("You step onto the board. Display {}.",
+                        Skateboard::GetConfig().DeckDisplayId);
             }
             return;
         }
