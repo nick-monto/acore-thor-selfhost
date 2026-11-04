@@ -115,6 +115,15 @@ set +euo pipefail
 SQL_LOG="$WORK/sql.log"
 mysql_realm() { printf '%s\n' "$*" >> "$SQL_LOG"; return 0; }
 
+# A stale marker from the previous boot must not survive into this one: -Docker reads the health to
+# decide the realm is up, and a marker left in the state volume made it restart the container seven
+# seconds into the world's boot.
+mkdir -p "$STATE"
+: > "$READY"
+: > "$AUTH_READY"
+clear_readiness
+check "a stale readiness marker does not survive the start of a boot" test ! -e "$READY" -a ! -e "$AUTH_READY"
+
 trap on_signal TERM INT
 ( sleep 20; kill -TERM $$ ) &
 KILLER=$!

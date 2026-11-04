@@ -401,6 +401,15 @@ start_auth() {
     log "authserver started (pid $AS_PID)"
 }
 
+# Both markers live in the state volume, so they survive a container restart: a container that is
+# still booting must not look ready to the compose healthcheck or to windows-install.ps1 -Docker,
+# which reads the health. Removed before anything slow runs, not when the worldserver starts - a
+# stale world-ready from the previous boot is what made -Docker believe a fresh start was already
+# up and restart the container 7 s into the world's boot.
+clear_readiness() {
+    rm -f "$READY" "$AUTH_READY"
+}
+
 start_world() {
     WS_OFFSET=0
     if [ -f "$WS_LOG" ]; then WS_OFFSET=$(wc -c < "$WS_LOG"); fi
@@ -424,6 +433,7 @@ run_realm() {
     world_up=0
     auth_up=0
     waited=0
+    clear_readiness
     start_world
 
     while [ "$STOPPING" -eq 0 ]; do
@@ -504,6 +514,9 @@ main() {
     # import must reach worldserver as SIGTERM too, not as the SIGKILL docker sends after its grace
     # period. on_signal only signals processes this script has recorded a pid for.
     trap on_signal TERM INT
+    # Before the slow steps, so nothing that asks "is this realm ready" during a restart can be
+    # answered by the previous boot's markers.
+    clear_readiness
     wait_for_db
     init_schemas
     ensure_data
