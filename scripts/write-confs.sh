@@ -340,6 +340,8 @@ conf_defaults() {
 #   WC_MYSQL_EXEC the mysql client the server runs SQL with
 #   WC_DB_USER    / WC_DB_PASS   credentials in the three *DatabaseInfo strings
 #   WC_BOTS       playerbots population (Min and Max)
+#   WC_BOT_TICK_MS Playerbots.RandomBotUpdateInterval: how often the random-bot manager runs, and
+#                   therefore what a large population costs in CPU. Unset leaves the dist value.
 #   WC_HORDE_RATIO  percentage of random bots on the Horde side; Alliance is 100 minus it. Empty
 #                   leaves the pair alone, which is what the Thor's set-ratio.sh relies on.
 #   WC_BIND_IP    the worldserver/authserver bind address
@@ -395,6 +397,15 @@ wc_write_all() {
         wc_set_conf "$pb" Playerbots.RandomBotAutologin    1
         wc_set_conf "$pb" Playerbots.MinRandomBots         "$WC_BOTS"
         wc_set_conf "$pb" Playerbots.MaxRandomBots         "$WC_BOTS"
+        # The manager's tick: every pass walks the whole population, so this is the knob that
+        # decides what N bots cost. 20 ms is the dist value and what the Thor runs; 500 bots at
+        # 20 ms saturates a core on its own.
+        if [ -n "${WC_BOT_TICK_MS:-}" ]; then
+            case "${WC_BOT_TICK_MS}" in
+                ''|*[!0-9]*) wc_warn "WC_BOT_TICK_MS must be a number of milliseconds, got '${WC_BOT_TICK_MS}'" ;;
+                *) wc_set_conf "$pb" Playerbots.RandomBotUpdateInterval "$WC_BOT_TICK_MS" ;;
+            esac
+        fi
         # Faction split. Alliance is the remainder, so the pair always sums to 100 - the same rule
         # the Thor's set-ratio.sh applies, kept here so a container render and a device render
         # cannot disagree. WC_HORDE_RATIO is unset on the Thor, where set-ratio.sh owns the pair, so

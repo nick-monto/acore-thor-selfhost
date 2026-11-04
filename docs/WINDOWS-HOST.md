@@ -303,9 +303,14 @@ data and the logs together.
   the entrypoint waits for `db`, creates `acore_auth`, `acore_world`, `acore_characters` and
   `acore_playerbots` plus the realm's user, installs the client data, writes the confs, and on the
   first start only boots worldserver to populate the databases and create the GM account, then runs
-  authserver beside a worldserver restart loop (a crash restarts it after 5 s) with SIGTERM
-  forwarded to both, so `docker stop` is a clean shutdown rather than a half-written database. Its
-  conf copy for that first boot has `Console.Enable = 1`, because `Main.cpp:402-408` starts the CLI
+  both servers under one supervisor: a crash of either restarts it after 5 s, SIGTERM is forwarded
+  to both, so `docker stop` is a clean shutdown rather than a half-written database. The authserver
+  is started once the world reports "World initialized", not alongside it, because the worldserver
+  holds its realm row at `VERSION_MISMATCH` for the whole of its startup and an authserver that
+  reads that row inside the window ORs `OFFLINE` onto it, sees `flag = 3`, and exits with
+  "No valid realms specified" - leaving the login port dead while the world runs. The healthcheck
+  requires both `.state/world-ready` and `.state/auth-ready` for the same reason. The conf copy the
+  entrypoint stages for that first boot has `Console.Enable = 1`, because `Main.cpp:402-408` starts the CLI
   thread - the only stdin reader - only when the key is 1; the live conf keeps `0`.
 
 Every value in the compose file is a `${VAR:-default}`, so it runs with no `.env` at all, and the
@@ -389,6 +394,35 @@ The mode needs a reachable Docker daemon (Docker Desktop with the Linux engine).
 with a native install: the chosen mode is recorded in `<root>\.win-state\mode`, and a `-Docker` run
 against a native root - or the reverse - stops and says so rather than producing two realms that
 fight over port 3724.
+
+### When the client is disconnected at the login screen
+
+`docker compose ps` can say `running (healthy)` while nothing answers the login: the two processes
+are independent, and the authserver is the only one that speaks the login protocol. Since the
+supervisor restarts it, a dead authserver now makes the container `unhealthy` instead (the
+`auth-ready` marker is removed), and the entrypoint logs `authserver exited with status N`.
+
+If that status is `1`, read its log:
+
+```
+docker compose logs acore | grep -i 'authserver'
+docker compose exec -T acore tail -20 /opt/acore/logs/Auth.log
+```
+
+`No valid realms specified` means no row in `acore_auth.realmlist` passed the query, which is
+`WHERE flag <> 3` - the state a worldserver leaves behind when it is killed between marking its
+realm `VERSION_MISMATCH` at start and clearing it once the world is up. The entrypoint clears that
+bit before every authserver start, so this should not survive a restart; to confirm what is stored:
+
+```
+docker compose exec -T db mysql -uroot -p"$DB_ROOT_PASS" -e \
+  "SELECT id, name, address, port, flag, gamebuild FROM acore_auth.realmlist;"
+```
+
+A healthy row is `flag = 0` (or `2` while the world is starting), `address = 127.0.0.1`,
+`port = 8085`, `gamebuild = 12340`. A client on another machine needs `address` set to this host's
+LAN address instead of `127.0.0.1` - that is the realm's own pointer, and Docker's port mapping
+cannot substitute for it.
 
 ### Deleting the realm
 

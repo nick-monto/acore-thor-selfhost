@@ -4263,12 +4263,12 @@ function Test-DockerWorldReady {
     if ($status -eq 'exited' -or $status -eq 'dead') { return 'down' }
     $health = Get-DockerInspectField -Id $id -Format '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
     if ($health -eq 'healthy') { return 'ok' }
-    # The acore healthcheck is the entrypoint's world-ready marker, so it is the answer whenever it
-    # is there. An image built before that healthcheck has none, and the world's own "World
+    # The acore healthcheck is the entrypoint's markers (world up *and* the login port answering),
+    # so it is the answer whenever it is there. An image built before that healthcheck has none, and the world's own "World
     # initialized" line never reaches the container's stdout - it goes to the logs volume - so the
     # entrypoint's readiness line is the signal to fall back to.
     $log = Invoke-Compose -Arguments @('logs', '--no-color', '--tail', '400', 'acore') -Capture -AllowFailure
-    if ($log -match 'the world is up|World initialized') { return 'ok' }
+    if ($log -match 'authserver is answering|the world is up|World initialized') { return 'ok' }
     return 'waiting'
 }
 
@@ -4457,15 +4457,15 @@ function Invoke-DockerStatus {
         }
     }
 
-    # "Healthy recently" for the acore service is its own healthcheck - the entrypoint's world-ready
-    # marker, removed on every start - or, for an image built before it, the entrypoint's readiness
-    # line. The world's own "World initialized" goes to the logs volume, never to the container's
-    # stdout, so it is not what compose logs can show.
+    # "Healthy recently" for the acore service is its own healthcheck - the entrypoint's world and
+    # auth markers, removed as each goes away - or, for an image built before it, the entrypoint's
+    # readiness lines. The servers' own "World initialized" goes to the logs volume, never to the
+    # container's stdout, so it is not what compose logs can show.
     $acoreId = ([string](Invoke-Compose -Arguments @('ps', '-q', 'acore') -Capture -AllowFailure)).Trim()
     if ($acoreId) {
         $health = Get-DockerInspectField -Id $acoreId -Format '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
         $log = Invoke-Compose -Arguments @('logs', '--no-color', '--tail', '400', 'acore') -Capture -AllowFailure
-        $worldUp = ($log -match 'the world is up|World initialized')
+        $worldUp = ($log -match 'authserver is answering|the world is up|World initialized')
         if ($health -eq 'healthy') {
             Ok 'acore: healthy'
         } elseif ($health -eq 'unhealthy') {

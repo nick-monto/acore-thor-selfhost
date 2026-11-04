@@ -24,6 +24,7 @@ on:
     paths:
       - "modules/**"
       - "scripts/**"
+      - "docker/**"
       - "patches/**"
       - "pins.toml"
       - ".github/workflows/module-checks.yml"
@@ -119,3 +120,25 @@ jobs:
             echo "::error::DirectCommitTransaction cannot carry prepared statements; see this step's comment" >&2
             exit 1
           fi
+
+  # Separate from `checks` on purpose: the supervisor check needs no pinned core, no module headers
+  # and no compiler, so it answers in twenty seconds what the compile gate takes two minutes to
+  # reach. It is also the only test of docker/entrypoint.sh, whose boot order decides whether the
+  # login port is up at all - a realm that starts the authserver before the world marks its own
+  # realm incompatible and then exits with "No valid realms specified".
+  entrypoint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Parse the entrypoint
+        run: bash -n docker/entrypoint.sh
+
+      - name: Check the supervisor's boot order and restarts
+        run: bash scripts/docker/check_entrypoint.sh

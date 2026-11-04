@@ -27,6 +27,9 @@ DB_USER="${DB_USER:-acore}"
 DB_PASS="${DB_PASS:-}"
 DB_ROOT_PASS="${DB_ROOT_PASS:-}"
 BOTS="${BOTS:-50}"
+# Milliseconds between random-bot manager passes. The whole population is walked each time, so this
+# is what BOTS costs: 500 bots at the stock 20 ms is one saturated core.
+BOT_TICK_MS="${BOT_TICK_MS:-20}"
 HORDE_RATIO="${HORDE_RATIO:-50}"
 BIND_IP="${BIND_IP:-0.0.0.0}"
 ACCOUNT="${ACCOUNT:-admin}"
@@ -41,7 +44,7 @@ NEAR_VISIT_MAX="${NEAR_VISIT_MAX:-2400}"
 NEAR_AWAY_MIN="${NEAR_AWAY_MIN:-240}"
 NEAR_AWAY_MAX="${NEAR_AWAY_MAX:-600}"
 
-ROOT=/opt/acore
+ROOT="${ROOT:-/opt/acore}"
 CONF="$ROOT/etc"
 DATA="$ROOT/data"
 LOGS="$ROOT/logs"
@@ -53,6 +56,9 @@ AS_LOG="$LOGS/authserver.out"
 # Written once the world has reported "World initialized", removed before every start: the
 # compose healthcheck for this service and the -Docker readiness probe both read it.
 READY="$STATE/world-ready"
+# Written once the authserver accepts on its port, removed whenever it is not: the healthcheck needs
+# both, because a realm whose world is up but whose login port is dead cannot be played on.
+AUTH_READY="$STATE/auth-ready"
 
 # The core asks on stdin before creating a database it cannot find (DBUpdater.cpp:228-232). This
 # container has no console, so the answer is pre-given: anything missing is created. AC_* is the
@@ -63,6 +69,7 @@ for required in DB_PASS DB_ROOT_PASS ACCOUNT_PASS; do
     [ -n "${!required}" ] || die "$required is empty: set it (docker/docker-compose.yml gives it a default, docker run does not)"
 done
 case "$BOTS" in ''|*[!0-9]*) die "BOTS must be a number, got '$BOTS'" ;; esac
+case "$BOT_TICK_MS" in ''|*[!0-9]*) die "BOT_TICK_MS must be a number of milliseconds, got '$BOT_TICK_MS'" ;; esac
 case "$HORDE_RATIO" in ''|*[!0-9]*) die "HORDE_RATIO must be a number, got '$HORDE_RATIO'" ;; esac
 # 10# so a leading zero stays decimal: write-confs.sh subtracts from this to get the Alliance side,
 # where 010 would be ten in the conf and eight to the arithmetic, and 08 would abort the render
@@ -194,6 +201,7 @@ write_confs() {
     WC_DB_USER="$DB_USER"
     WC_DB_PASS="$DB_PASS"
     WC_BOTS="$BOTS"
+    WC_BOT_TICK_MS="$BOT_TICK_MS"
     WC_HORDE_RATIO="$HORDE_RATIO"
     WC_BIND_IP="$BIND_IP"
     WC_NEAR_BOTS="$NEAR_BOTS"
@@ -328,6 +336,9 @@ first_boot_if_needed() {
 WS_PID=0
 AS_PID=0
 STOPPING=0
+WS_PID=''
+AS_PID=''
+WS_OFFSET=0
 
 on_signal() {
     # Docker sends SIGTERM on `docker compose down`/`stop`, and bash as PID 1 does not pass it on to
@@ -336,58 +347,159 @@ on_signal() {
     # auction and mail tables behind.
     STOPPING=1
     local pid
-    for pid in "$WS_PID" "$AS_PID"; do
+    for pid in "${WS_PID:-}" "${AS_PID:-}"; do
         case "$pid" in ''|0) continue ;; esac
         kill -TERM "$pid" 2>/dev/null || true
     done
 }
 
-run_realm() {
+# --- 6. the realm ------------------------------------------------------------------------------
+# The authserver is the only process that answers the login port, and it is not part of the world:
+# when it exited here, the container stayed "healthy" on the world marker alone and the client was
+# disconnected at the login screen with a running realm reported. It is supervised for the whole
+# container lifetime below, and it is started only after the world is up - see start_auth.
+
+auth_port() { # auth_port - the port the authserver binds, as its own conf has it
+    local port
+    port="$(sed -n 's/^RealmServerPort *= *\([0-9]\{1,\}\).*/\1/p' "$CONF/authserver.conf" 2>/dev/null | head -1)"
+    printf '%s\n' "${port:-3724}"
+}
+
+port_is_open() { # port_is_open PORT - true when a listener accepts on the loopback
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+realm_id() { # realm_id - the realm this worldserver owns, as its own conf has it
+    local id
+    id="$(sed -n 's/^RealmID *= *\([0-9]\{1,\}\).*/\1/p' "$CONF/worldserver.conf" 2>/dev/null | head -1)"
+    printf '%s\n' "${id:-1}"
+}
+
+# The authserver exits at startup when no realm passes its query, and the query is `WHERE flag <> 3`
+# (LoginDatabase.cpp:51): flag 3 is VERSION_MISMATCH|OFFLINE. A worldserver that dies between marking
+# its realm VERSION_MISMATCH (worldserver/Main.cpp:294) and clearing it once the world is ready
+# (:383) - a crash, or `docker stop` during the boot - leaves flag 1 behind, and the authserver's own
+# "every realm offline" UPDATE (:135) turns that into 3. Nothing then clears the bit before the
+# authserver reads it on the next boot, so the realm stays unloggable while the restarted
+# worldserver quietly clears the bit and makes the database look healthy again. Clear it first, for
+# this realm only and only that bit: VERSION_MISMATCH is what the worldserver owns.
+clear_realm_version_mismatch() {
+    local id
+    id="$(realm_id)"
+    mysql_realm acore_auth -e "UPDATE realmlist SET flag = flag & 254 WHERE id = $id;" >/dev/null 2>&1 ||
+        warn "could not clear realmlist.flag for realm $id (the authserver may refuse to start)"
+}
+
+# Started only after the world reports "World initialized", which is also when the worldserver
+# clears VERSION_MISMATCH from its realm row. An authserver that starts inside the world's startup
+# window ORs OFFLINE onto that bit, sees flag 3, and exits with "No valid realms specified" - the
+# failure this ordering removes rather than retries inside.
+start_auth() {
+    clear_realm_version_mismatch
     "$ROOT/bin/authserver" -c "$CONF/authserver.conf" >> "$AS_LOG" 2>&1 &
     AS_PID=$!
     log "authserver started (pid $AS_PID)"
+}
 
-    local rc waited offset
+start_world() {
+    WS_OFFSET=0
+    if [ -f "$WS_LOG" ]; then WS_OFFSET=$(wc -c < "$WS_LOG"); fi
+    rm -f "$READY"
+    "$ROOT/bin/worldserver" -c "$CONF/worldserver.conf" >> "$WS_LOG" 2>&1 &
+    WS_PID=$!
+    log "worldserver started (pid $WS_PID)"
+}
+
+# Docker Desktop leaves no core in this container - the host's core_pattern pipes to a handler that
+# does not exist here - so a segfault shows up only as status 139. Keep what the process wrote last,
+# beside the markers, so a crash can be read after the log has scrolled past it.
+preserve_crash_tail() { # preserve_crash_tail STATUS
+    local out="$STATE/worldserver-exit-$1.log"
+    tail -n 200 "$WS_LOG" > "$out" 2>/dev/null || return 0
+    warn "kept the last 200 lines of $WS_LOG in $out"
+}
+
+run_realm() {
+    local rc done_pid tick waited world_up auth_up
+    world_up=0
+    auth_up=0
+    waited=0
+    start_world
+
     while [ "$STOPPING" -eq 0 ]; do
         # Readiness is judged on what THIS start writes. worldserver.out is appended to across
         # restarts, so a "World initialized" line left by the previous run would make a world that
         # is still importing - or one that crashes on start - look healthy.
-        offset=0
-        if [ -f "$WS_LOG" ]; then offset=$(wc -c < "$WS_LOG"); fi
-        rm -f "$READY"
-        "$ROOT/bin/worldserver" -c "$CONF/worldserver.conf" >> "$WS_LOG" 2>&1 &
-        WS_PID=$!
-        log "worldserver started (pid $WS_PID)"
-        waited=0
-        while [ "$STOPPING" -eq 0 ] && [ "$waited" -lt "$BOOT_TIMEOUT" ]; do
-            if tail -c +"$((offset + 1))" "$WS_LOG" 2>/dev/null | grep -qi 'world initialized'; then
-                # The compose healthcheck and windows-install.ps1 -Docker read the marker and this
-                # line: the world's own output goes to the logs volume, never to the container's
-                # stdout, so neither of them can see "World initialized" directly.
+        if [ "$world_up" -eq 0 ]; then
+            if tail -c +"$((WS_OFFSET + 1))" "$WS_LOG" 2>/dev/null | grep -qi 'world initialized'; then
+                world_up=1
                 : > "$READY"
                 log "the world is up (pid $WS_PID)"
-                break
+            elif [ "$waited" -ge "$BOOT_TIMEOUT" ]; then
+                warn "worldserver has not reported 'World initialized' after ${BOOT_TIMEOUT}s; still watching"
+                waited=$((BOOT_TIMEOUT + 1))
+            else
+                waited=$((waited + 2))
             fi
-            kill -0 "$WS_PID" 2>/dev/null || break
-            sleep 2 &
-            wait $! || true
-            waited=$((waited + 2))
-        done
+        fi
+
+        # The authserver is started once the world is up and restarted whenever it is gone - not
+        # restarted alongside the worldserver, whose restarts leave it serving: a second authserver
+        # would collide on the port and orphan the first.
+        if [ "$world_up" -eq 1 ]; then
+            if [ -z "${AS_PID:-}" ]; then
+                start_auth
+            elif [ "$auth_up" -eq 0 ] && port_is_open "$(auth_port)"; then
+                auth_up=1
+                : > "$AUTH_READY"
+                log "authserver is answering on port $(auth_port) (pid $AS_PID)"
+            fi
+        fi
+
+        # wait -n -p, not wait "$WS_PID": blocking on the worldserver would leave a dead authserver
+        # unnoticed for as long as the world runs, which is days. The background sleep bounds the
+        # wait, and wait -n -p names which child ended so the right one is restarted.
+        done_pid=''
         rc=0
-        wait "$WS_PID" || rc=$?
+        sleep 2 & tick=$!
+        wait -n -p done_pid 2>/dev/null || rc=$?
+        kill "$tick" 2>/dev/null || true
+        wait "$tick" 2>/dev/null || true
         if [ "$STOPPING" -ne 0 ]; then break; fi
-        warn "worldserver exited with status $rc; restarting in 5s"
-        sleep 5 &
-        wait $! || true
+
+        if [ "$done_pid" = "$WS_PID" ]; then
+            warn "worldserver exited with status $rc; restarting in 5s"
+            preserve_crash_tail "$rc"
+            world_up=0
+            waited=0
+            rm -f "$READY"
+            sleep 5 & wait $! || true
+            if [ "$STOPPING" -ne 0 ]; then break; fi
+            start_world
+        elif [ -n "${AS_PID:-}" ] && [ "$done_pid" = "$AS_PID" ]; then
+            warn "authserver exited with status $rc; restarting in 5s"
+            auth_up=0
+            AS_PID=''
+            rm -f "$AUTH_READY"
+            sleep 5 & wait $! || true
+            if [ "$STOPPING" -ne 0 ]; then break; fi
+        fi
     done
 
     # The trap has already signalled both; wait for them to finish writing before the container ends.
-    wait "$WS_PID" 2>/dev/null || true
-    wait "$AS_PID" 2>/dev/null || true
+    if [ -n "${WS_PID:-}" ]; then wait "$WS_PID" 2>/dev/null || true; fi
+    if [ -n "${AS_PID:-}" ]; then wait "$AS_PID" 2>/dev/null || true; fi
+    rm -f "$READY" "$AUTH_READY"
     log "realm stopped"
 }
 
 main() {
+    # wait -n -p, which lets one loop supervise both servers, needs bash 5.1+; the image is
+    # ubuntu:24.04 (bash 5.2). Saying so beats supervising the authserver's death silently.
+    if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then
+        die "bash 5.1 or newer is required for wait -n -p; this is $BASH_VERSION"
+    fi
+
     # Installed before anything long-running: `docker compose down` during the first boot's SQL
     # import must reach worldserver as SIGTERM too, not as the SIGKILL docker sends after its grace
     # period. on_signal only signals processes this script has recorded a pid for.
@@ -400,4 +512,8 @@ main() {
     run_realm
 }
 
-main "$@"
+# Only when executed: a smoke test sources this file to call the functions above without starting a
+# realm, the same guard scripts/thor-install.sh uses.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

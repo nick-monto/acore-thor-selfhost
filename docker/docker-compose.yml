@@ -71,12 +71,17 @@ services:
       - "8085:8085"   # worldserver
     restart: unless-stopped
     healthcheck:
-      # The entrypoint touches .state/world-ready once worldserver has logged "World initialized",
-      # and removes it before every start, so this answers "is the realm serving right now" - a
-      # restart is unhealthy until the world is back up. The world's own output goes to the logs
-      # volume, never to this container's stdout, which is why the marker exists at all.
-      # start_period covers the first boot, where the SQL import and the world build run.
-      test: ["CMD-SHELL", "test -f /opt/acore/.state/world-ready"]
+      # Both markers. world-ready is touched once worldserver has logged "World initialized" and
+      # removed before every start, so a restart is unhealthy until the world is back. auth-ready is
+      # touched once authserver accepts on its port and removed whenever it is not: the two
+      # processes are independent, and a realm whose world is up but whose login port is dead cannot
+      # be played on - that is exactly how a dead authserver used to look healthy while the client
+      # was disconnected at the login screen. Needing both also means auth-ready is absent through
+      # the world's boot, because the entrypoint starts the authserver only after it.
+      # The servers' own output goes to the logs volume, never to this container's stdout, which is
+      # why the markers exist at all. start_period covers the first boot, where the SQL import and
+      # the world build run.
+      test: ["CMD-SHELL", "test -f /opt/acore/.state/world-ready && test -f /opt/acore/.state/auth-ready"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -91,6 +96,12 @@ services:
       # Root is used once, by the entrypoint, to create the schemas and DB_USER.
       DB_ROOT_PASS: ${DB_ROOT_PASS:-acore}
       BOTS: ${BOTS:-50}
+      # Milliseconds between random-bot manager passes, rendered into playerbots.conf on every
+      # start. The whole population is walked each pass, so this is the knob that decides what
+      # BOTS costs: 500 bots at the stock 20 ms was measured at one core at 100%. The manager walks
+      # the whole population once per pass, so the work falls in proportion to the tick - 60 is a
+      # third of the passes, 100 is a fifth - and a solo player cannot see the difference.
+      BOT_TICK_MS: ${BOT_TICK_MS:-20}
       # Percentage of the random bots on the Horde side; Alliance is the remainder. Rendered into
       # playerbots.conf on every start, the same way BOTS is.
       HORDE_RATIO: ${HORDE_RATIO:-50}
