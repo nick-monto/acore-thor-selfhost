@@ -21,10 +21,18 @@ import re
 import sys
 import tomllib
 
-import yaml
-
 WINDOWS_WORKFLOW = pathlib.Path(".github/workflows/server-win64.yml")
 INSTALLER = pathlib.Path("scripts/windows-install.ps1")
+
+
+def workflow_env(name: str) -> str:
+    """One `NAME: value` from the workflow's top-level env: block.
+
+    Read with a regex rather than a YAML parser so this needs nothing installed: the runners
+    have python3, and the file is source, not user input.
+    """
+    match = re.search(rf"^  {re.escape(name)}: (\S+)\s*$", WINDOWS_WORKFLOW.read_text(), re.M)
+    return match.group(1) if match else ""
 
 
 def installer_constant(name: str) -> str:
@@ -35,13 +43,14 @@ def installer_constant(name: str) -> str:
 
 def main() -> int:
     pins = tomllib.loads(pathlib.Path("pins.toml").read_text())["artifact"]["win64"]["build_deps"]
-    env = yaml.safe_load(WINDOWS_WORKFLOW.read_text())["env"]
+    env = {name: workflow_env(name) for name in
+           ("BOOST_VERSION", "BOOST_SHA256", "MYSQL_VERSION", "MYSQL_SHA256")}
 
     checks = [
-        ("boost version (pins.toml / BOOST_VERSION)", pins["boost"]["version"], env.get("BOOST_VERSION")),
-        ("boost sha256 (pins.toml / BOOST_SHA256)", pins["boost"]["sha256"], env.get("BOOST_SHA256")),
-        ("mysql version (pins.toml / MYSQL_VERSION)", pins["mysql"]["version"], env.get("MYSQL_VERSION")),
-        ("mysql sha256 (pins.toml / MYSQL_SHA256)", pins["mysql"]["sha256"], env.get("MYSQL_SHA256")),
+        ("boost version (pins.toml / BOOST_VERSION)", pins["boost"]["version"], env["BOOST_VERSION"]),
+        ("boost sha256 (pins.toml / BOOST_SHA256)", pins["boost"]["sha256"], env["BOOST_SHA256"]),
+        ("mysql version (pins.toml / MYSQL_VERSION)", pins["mysql"]["version"], env["MYSQL_VERSION"]),
+        ("mysql sha256 (pins.toml / MYSQL_SHA256)", pins["mysql"]["sha256"], env["MYSQL_SHA256"]),
         ("mysql version (pins.toml / installer $MysqlVersion)", pins["mysql"]["version"], installer_constant("MysqlVersion")),
         ("mysql sha256 (pins.toml / installer $MysqlSha256Default)", pins["mysql"]["sha256"], installer_constant("MysqlSha256Default")),
         ("mysql url (pins.toml / installer $MysqlUrlDefault)", pins["mysql"]["url"], installer_constant("MysqlUrlDefault")),
