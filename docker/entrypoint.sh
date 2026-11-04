@@ -59,6 +59,9 @@ READY="$STATE/world-ready"
 # Written once the authserver accepts on its port, removed whenever it is not: the healthcheck needs
 # both, because a realm whose world is up but whose login port is dead cannot be played on.
 AUTH_READY="$STATE/auth-ready"
+# The Item.dbc patcher as the image carries it (Dockerfile: COPY scripts/item-dbc and
+# scripts/loot-bags). Overridable so the check can point it at a stub.
+DBC_PATCH_DIR="${DBC_PATCH_DIR:-$ROOT/dbc-patch}"
 
 # The core asks on stdin before creating a database it cannot find (DBUpdater.cpp:228-232). This
 # container has no console, so the answer is pre-given: anything missing is created. AC_* is the
@@ -180,6 +183,30 @@ ensure_data() {
         die "$DATA has no dbc/ and maps/ at the top level after unpacking $DATA_URL"
     fi
     log "client data installed in $DATA"
+}
+
+# --- 3b. the loot-bag records in Item.dbc ------------------------------------------------------
+# The worldserver loads Item.dbc once, at startup, and the same start imports the bag items into
+# item_template, so the file has to be patched before run_realm - not after the realm is up, which is
+# what a host-side patch costs: a second boot, and a first boot in which the DB and the DBC disagree.
+# The tool drops its own records before appending them (extend_records), so running it on every start
+# is a no-op rewrite of a 1.4 MiB file rather than a file that grows.
+patch_item_dbc() { # patch_item_dbc - put the 64 bag records into the server's Item.dbc
+    local tool="$DBC_PATCH_DIR/item-dbc/patch_item_dbc.py"
+    if [ ! -f "$tool" ]; then
+        warn "no $tool in this image, so the bag records are not in Item.dbc"
+        return 0
+    fi
+    if [ ! -f "$DATA/dbc/Item.dbc" ]; then
+        warn "no $DATA/dbc/Item.dbc, so the bag records were not added"
+        return 0
+    fi
+    if python3 "$tool" --dbc "$DATA/dbc/Item.dbc" --server-dbc "$DATA/dbc" --out /tmp/item-dbc >/dev/null 2>&1; then
+        log "Item.dbc: the 64 bag records are in $DATA/dbc/Item.dbc"
+    else
+        # Not fatal: a realm without them runs, and the bags only lose their DBC half.
+        warn "Item.dbc: the bag records could not be added (python3 or the tool failed)"
+    fi
 }
 
 # --- 4. confs ----------------------------------------------------------------------------------
@@ -332,13 +359,10 @@ first_boot_if_needed() {
     fi
 }
 
-# --- 6. the realm ------------------------------------------------------------------------------
-WS_PID=0
-AS_PID=0
-STOPPING=0
 WS_PID=''
 AS_PID=''
 WS_OFFSET=0
+STOPPING=0
 
 on_signal() {
     # Docker sends SIGTERM on `docker compose down`/`stop`, and bash as PID 1 does not pass it on to
@@ -520,6 +544,7 @@ main() {
     wait_for_db
     init_schemas
     ensure_data
+    patch_item_dbc
     write_confs
     first_boot_if_needed
     run_realm

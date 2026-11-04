@@ -302,7 +302,12 @@ data and the logs together.
   **8085** (worldserver). It runs as many processes as you would expect from a foreground container:
   the entrypoint waits for `db`, creates `acore_auth`, `acore_world`, `acore_characters` and
   `acore_playerbots` plus the realm's user, installs the client data, writes the confs, and on the
-  first start only boots worldserver to populate the databases and create the GM account, then runs
+  first start only boots worldserver to populate the databases and create the GM account. After the
+  client data is unpacked and before anything reads it, the entrypoint runs
+  `scripts/item-dbc/patch_item_dbc.py` against `data/dbc/Item.dbc`: the same start imports the
+  loot-bag items into `item_template`, and a `Item.dbc` without them is what makes the bags
+  unusable. The tool replaces its own 64 records rather than appending, so this runs on every start
+  as a no-op rewrite, and the installer no longer writes that file or restarts the realm. It then runs
   both servers under one supervisor: a crash of either restarts it after 5 s, SIGTERM is forwarded
   to both, so `docker stop` is a clean shutdown rather than a half-written database. The authserver
   is started once the world reports "World initialized", not alongside it, because the worldserver

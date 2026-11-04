@@ -156,6 +156,42 @@ check "SIGTERM ends the supervisor" grep -q 'realm stopped' "$LOG"
 check "neither marker outlives the realm" test ! -e "$READY" -a ! -e "$AUTH_READY"
 check "no stub process is left behind" test -z "$(pgrep -f "$WORK/bin/" || true)"
 
+# --- the boot order in main, with every slow step stubbed ---------------------------------------
+# The patch has to run before the worldserver reads Item.dbc, which is a property of main's order -
+# so main runs here with the db, the data and the realm replaced by log lines.
+ORDER="$WORK/order.log"
+: > "$ORDER"
+export ORDER
+wait_for_db() { printf 'wait_for_db\n' >> "$ORDER"; }
+init_schemas() { printf 'init_schemas\n' >> "$ORDER"; }
+ensure_data() { printf 'ensure_data\n' >> "$ORDER"; }
+write_confs() { printf 'write_confs\n' >> "$ORDER"; }
+first_boot_if_needed() { printf 'first_boot_if_needed\n' >> "$ORDER"; }
+run_realm() { printf 'run_realm\n' >> "$ORDER"; }
+
+mkdir -p "$WORK/dbc-patch/item-dbc" "$DATA/dbc"
+printf 'not really a dbc' > "$DATA/dbc/Item.dbc"
+cat > "$WORK/dbc-patch/item-dbc/patch_item_dbc.py" <<'TOOL'
+#!/usr/bin/env python3
+import os, sys
+args = " ".join(sys.argv[1:])
+open(os.environ["ORDER"], "a").write("patch_item_dbc " + args + "\n")
+TOOL
+chmod +x "$WORK/dbc-patch/item-dbc/patch_item_dbc.py"
+
+main
+order_line() { grep -n "$1" "$ORDER" | head -1 | cut -d: -f1; }
+check "the DBC patch runs in main" test -n "$(order_line '^patch_item_dbc ')"
+check "the DBC patch writes the server data directory" grep -q -- "--server-dbc $DATA/dbc" "$ORDER"
+check "the DBC patch runs after the client data is unpacked" test "$(order_line '^patch_item_dbc ')" -gt "$(order_line '^ensure_data$')"
+check "the DBC patch runs before the realm starts" test "$(order_line '^patch_item_dbc ')" -lt "$(order_line '^run_realm$')"
+
+# A missing tool is a warning, not a failed boot: the bags lose their DBC half, the realm still runs.
+mv "$WORK/dbc-patch/item-dbc/patch_item_dbc.py" "$WORK/dbc-patch/item-dbc/patch_item_dbc.py.gone"
+if patch_item_dbc 2>/dev/null; then pass "a missing DBC patch tool does not fail the boot"
+else fail "a missing DBC patch tool does not fail the boot"; fi
+mv "$WORK/dbc-patch/item-dbc/patch_item_dbc.py.gone" "$WORK/dbc-patch/item-dbc/patch_item_dbc.py"
+
 if [ "$FAILURES" -ne 0 ]; then
     printf '\n%d check(s) failed; supervisor log:\n' "$FAILURES"
     sed 's/^/  | /' "$LOG"

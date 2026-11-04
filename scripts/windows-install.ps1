@@ -3113,17 +3113,16 @@ function Install-ClientPatch {
         Warn ("the Item.dbc patch failed (exit {0}); the bags keep the red question mark until it runs" -f $LASTEXITCODE)
         return
     }
-    Ok ("server Item.dbc: the 64 bag records are in {0}" -f (Join-Path $dbcDir 'Item.dbc'))
-
-    # The container's worldserver read Item.dbc at startup, so the patched copy only counts after a
-    # restart; the data volume is what makes the copy survive one.
     if ((Resolve-Mode) -eq 'docker') {
-        $null = Invoke-Compose -Arguments @('cp', (Join-Path $dbcDir 'Item.dbc'), 'acore:/opt/acore/data/dbc/Item.dbc') -AllowFailure
-        if (-not $script:DryRun) {
-            Step 'Restarting the realm so it reads the patched Item.dbc'
-            $null = Invoke-Compose -Arguments @('restart', 'acore') -AllowFailure
-            if (-not (Wait-DockerWorld -TimeoutSeconds $script:BootTimeout)) { $script:FirstBootOk = $false }
-        }
+        # The server half belongs to the container: entrypoint.sh runs this same tool against
+        # /opt/acore/data/dbc/Item.dbc on every start, before worldserver reads it (patch_item_dbc).
+        # So the copy this step took from the volume was only needed to build the client archive
+        # below. Writing it back and restarting the realm, which this used to do, cost a second boot
+        # of the world - and restarted the container mid-boot whenever the readiness marker had
+        # survived the previous one, which is how a realm ended up with the authserver dead.
+        Ok 'server Item.dbc: the container adds the 64 bag records on every start, before the world reads it'
+    } else {
+        Ok ("server Item.dbc: the 64 bag records are in {0}" -f (Join-Path $dbcDir 'Item.dbc'))
     }
 
     if (-not $clientData) {
@@ -4358,8 +4357,9 @@ function Invoke-DockerInstall {
         $script:FirstBootOk = $false
     }
     Set-DockerRealmPin
-    # After the first boot, because the container's data volume - and with it the server's
-    # Item.dbc - only exists once the entrypoint has unpacked the client data.
+    # After the first boot, because the file the client archive is built from - the server's
+    # data/dbc/Item.dbc - only exists once the entrypoint has unpacked the client data. The server
+    # half needs nothing from here: the container patches its own copy before the world starts.
     Install-ClientPatch
     # -LanIp opens the same two rules as the native path, through the same helper and the same
     # manifest entries, so -Uninstall removes them whichever mode installed them.

@@ -141,7 +141,13 @@ python3 scripts/item-dbc/patch_item_dbc.py \
   `Item (Entry: 910xx) does not have a correct SoundOverrideSubclass (-1), must
   be 0` for every bag at startup.
 - Re-running is safe: existing records in 91000-91063 are replaced, and the
-  script refuses a stock file that already has ids above 91000.
+  script refuses a stock file that already has ids above 91000. That is what
+  lets the container run it on every boot (docker/entrypoint.sh:
+  `patch_item_dbc`) instead of a host step after the world is up: the server's
+  `Item.dbc` is patched after the client data is unpacked and before the
+  worldserver reads it, so the DBC and `item_template` cannot disagree for a
+  whole boot. Verified on the real 1.4 MiB file: patching an already-patched
+  copy produces the identical bytes.
 
 `--verify --client-data <Data>` reports which archive the client reads `Item.dbc`
 from and whether it carries the bags, and exits non-zero when it does not — that

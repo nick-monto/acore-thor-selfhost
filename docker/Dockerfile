@@ -41,10 +41,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                     libc, libstdc++6, libssl3t64 (pulled in by the MySQL client), libbz2,
 #                     liblzma and libzstd. MySQL's client library and ICU travel in the artifact's
 #                     lib/ and are found through the $ORIGIN/../lib rpath the build sets.
+#                     python3-minimal is for scripts/item-dbc/patch_item_dbc.py, which the
+#                     entrypoint runs before every start so the server's Item.dbc carries the
+#                     loot-bag records the same start adds to item_template. It is the only
+#                     interpreter in the image: nothing here builds anything.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        python3-minimal \
         zstd \
         tzdata \
         unzip \
@@ -89,6 +94,10 @@ RUN set -eu; \
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/write-confs.sh /opt/acore/write-confs.sh
+# The Item.dbc patcher and the generator it imports for the bag records. The layout is the
+# repository's own (item-dbc/ beside loot-bags/), because the tool loads its sibling by path.
+COPY scripts/item-dbc/patch_item_dbc.py /opt/acore/dbc-patch/item-dbc/patch_item_dbc.py
+COPY scripts/loot-bags/gen_loot_bags.py /opt/acore/dbc-patch/loot-bags/gen_loot_bags.py
 
 # The exec bit comes from the checkout, and a checkout made on Windows can lose it; the entrypoint
 # is what the container runs, so set it rather than trust the copy.
