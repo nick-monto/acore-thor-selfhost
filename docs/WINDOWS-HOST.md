@@ -299,7 +299,8 @@ data and the logs together.
   is the `db` volume. Only the root password is handed to the image; the realm's own user is created
   and kept in step by the entrypoint, so changing `DB_PASS` later works.
 - **`acore`** - the image built from `docker/Dockerfile`, publishing **3724** (authserver) and
-  **8085** (worldserver). It runs as many processes as you would expect from a foreground container:
+  **8085** (worldserver) on **127.0.0.1** unless `BIND_HOST` says otherwise (the installer sets it
+  to `0.0.0.0` only for `-LanIp`; a `.env` beside the compose file changes it for a hand-run). It runs as many processes as you would expect from a foreground container:
   the entrypoint waits for `db`, creates `acore_auth`, `acore_world`, `acore_characters` and
   `acore_playerbots` plus the realm's user, installs the client data, writes the confs, and on the
   first start only boots worldserver to populate the databases and create the GM account. After the

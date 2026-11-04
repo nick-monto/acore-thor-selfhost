@@ -4475,7 +4475,7 @@ function Set-DockerEnvironment {
         Warn ("-DataZip '{0}' does not apply in Docker mode: the container downloads the pinned v20.0 archive on its first boot" -f $script:DataZip)
     }
     if ($script:DryRun) {
-        Note ("would start the acore container with BOTS={0} HORDE_RATIO={1} BIND_IP=0.0.0.0 (the entrypoint renders both into playerbots.conf at every start)" -f $script:Bots, $script:HordeRatio)
+        Note ("would start the acore container with BOTS={0} HORDE_RATIO={1}, published on {2} (the entrypoint renders both into playerbots.conf at every start)" -f $script:Bots, $script:HordeRatio, $(if ($script:LanIp) { '0.0.0.0 (LAN)' } else { '127.0.0.1' }))
         Note 'would pin the published artifact sha256 as a build arg, so a new release re-runs the download layer instead of reusing its cache'
         return
     }
@@ -4500,8 +4500,11 @@ function Set-DockerEnvironment {
     $env:BOTS = [string]$script:Bots
     $env:HORDE_RATIO = [string]$script:HordeRatio
     # 0.0.0.0 inside the container: the published ports are what decides whether the realm answers
-    # on the LAN, and the firewall rule -LanIp adds is the only thing in front of them.
+    # on the LAN, and they are bound to 127.0.0.1 unless -LanIp asked otherwise. BIND_IP is the
+    # server's bind address inside the container's network namespace; BIND_HOST is the host side of
+    # the published ports, and it is what puts the login port on the LAN.
     $env:BIND_IP = '0.0.0.0'
+    $env:BIND_HOST = if ($script:LanIp) { '0.0.0.0' } else { '127.0.0.1' }
     $env:BOOT_TIMEOUT = [string]$script:BootTimeout
 }
 
@@ -4611,7 +4614,7 @@ function Invoke-DockerInstall {
     # so -Uninstall removes it from the manifest and not just because it happens to sit under -Root.
     Add-Manifest $script:DockerDir
     if ($script:DryRun) {
-        Note 'set DB_PASS, DB_ROOT_PASS, ACCOUNT, ACCOUNT_PASS, BOTS, HORDE_RATIO, BIND_IP=0.0.0.0 and BOOT_TIMEOUT for the compose project'
+        Note ('set DB_PASS, DB_ROOT_PASS, ACCOUNT, ACCOUNT_PASS, BOTS, HORDE_RATIO, BIND_HOST={0}, BIND_IP=0.0.0.0 and BOOT_TIMEOUT for the compose project' -f $(if ($script:LanIp) { '0.0.0.0' } else { '127.0.0.1' }))
     }
     # Written before the containers start, not after: an install that dies in the middle has to be
     # removable by -Uninstall, and the mode file is what makes -Uninstall run compose down instead

@@ -39,6 +39,26 @@ state.env
 etc/
 configs/
 
+# The rest of an install root placed inside a checkout: the portable MySQL data directory, the
+# unpacked client data, the server logs, the dependency trees and the generated wrappers. Anchored
+# to the repository root with a leading slash on purpose - the modules keep their own src/ and
+# data/ directories, which are source and must stay stageable.
+/db/
+/data/
+/logs/
+/mysql/
+/src/
+/docker-src/
+/worldserver.exe
+/authserver.exe
+/start.ps1
+/stop.ps1
+/set-bots.ps1
+/set-bots.sh
+/wow-server.cmd
+/start-wow-server.cmd
+/stop-wow-server.cmd
+
 # A .env beside docker/docker-compose.yml holds DB_ROOT_PASS, DB_PASS and ACCOUNT_PASS, and both
 # installers write credentials.txt at their root. Both are secrets, both are created next to the
 # compose file the docs tell you to run from here.

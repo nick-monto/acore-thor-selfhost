@@ -9,6 +9,8 @@
 # and the installer never writes one.
 # A password that contains `;` or `"` breaks the core's DatabaseInfo strings, and one that contains
 # `'` is escaped by the entrypoint but is best avoided - pick something else.
+# The published ports are bound to 127.0.0.1 unless BIND_HOST names another address, so the default
+# install is reachable from this machine only.
 
 # The project name is fixed so the volumes are named acore-realm_* wherever compose is run from.
 # Without it, the name is the directory the compose file sits in, and scripts/windows-install.ps1
@@ -67,8 +69,13 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "3724:3724"   # authserver
-      - "8085:8085"   # worldserver
+      # Loopback by default. A bare "3724:3724" binds every interface, and what sits behind that
+      # port is the game account's login - with the default ACCOUNT/ACCOUNT_PASS that is an
+      # administrator login for anything on the same network. Set BIND_HOST=0.0.0.0 (the Windows
+      # installer does it for -LanIp only) when the realm is meant to be reachable, and pair it
+      # with -AccountPass/-DbPass values that are not the defaults.
+      - "${BIND_HOST:-127.0.0.1}:3724:3724"   # authserver
+      - "${BIND_HOST:-127.0.0.1}:8085:8085"   # worldserver
     restart: unless-stopped
     healthcheck:
       # Both markers. world-ready is touched once worldserver has logged "World initialized" and

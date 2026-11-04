@@ -87,7 +87,10 @@ case "$BOOT_TIMEOUT" in ''|*[!0-9]*) die "BOOT_TIMEOUT must be a number, got '$B
 
 # sql_escape VALUE - VALUE as the body of a MySQL string literal. Credentials are user input; a
 # quote in one must not be able to turn the CREATE USER below into different SQL.
-sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+# Backslash first, quote second. MySQL reads a backslash inside a string literal as an escape, so a
+# value ending in `\` would otherwise turn the doubled quote into an escaped one and run on past the
+# literal - `\'; GRANT ALL ... -- ` was SQL, not a password.
+sql_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/''/g"; }
 
 # MYSQL_PWD rather than -p: -p puts the password in argv, where every process on the host can read
 # it, and the client prints a warning about it on every call.
