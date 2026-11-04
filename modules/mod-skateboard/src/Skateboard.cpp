@@ -240,6 +240,9 @@ namespace
         deck.gateDeadlineMs = 0;
         deck.driveNextMs = 0;
         deck.lastImpulseMs = 0;
+        deck.pushHeld = false;
+        deck.pushNextMs = 0;
+        deck.pushHeldSinceMs = 0;
     }
 
     // Put the run rate back where the core expects a character on foot to be, and do it from the
@@ -770,11 +773,15 @@ namespace Skateboard
             return;
         }
 
+        // The down edge is a kick in its own right: a rider should feel the press, not the tick
+        // that follows it. The rest of the hold follows at Push.IntervalMs.
         if (!deck->pushHeld)
         {
+            uint32 const now = NowMs();
             deck->pushHeld = true;
-            deck->pushHeldSinceMs = NowMs();
-            deck->pushNextMs = NowMs();
+            deck->pushHeldSinceMs = now;
+            deck->pushNextMs = now + cfg.PushIntervalMs;
+            deck->v = std::min(deck->v + cfg.PushImpulse, cfg.MaxSpeed);
         }
     }
 
