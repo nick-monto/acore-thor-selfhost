@@ -475,6 +475,12 @@ world-server restart.
 
 `mod-skateboard` ships **on**: the installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` with `Skateboard.Enable = 1`. That makes the board *available*; nobody is boarded until a player presses `.board on` or the add-on's Board button, so it costs a realm nothing to leave on.
 
+A conf is written once, from the `.dist` of the artifact that was installed. A newer artifact that adds or renames keys therefore leaves an existing realm on the old file, and the module falls back to its own defaults for the keys the file lacks - the same values, but invisible in the conf. To pick up a new key (for example `Skateboard.Cruise` or `Skateboard.Deck.Render`), delete the live conf and restart; it is re-created from the new `.dist` and the dials below re-apply:
+```bash
+rm /opt/acore/etc/modules/mod-skateboard.conf && docker compose -f docker/docker-compose.yml restart acore
+```
+The deck itself draws as a creature summoned under the rider (`Skateboard.Deck.Render = unit`) rather than as a mount display, so the two deck rows still have to be in the **client's** DBC pair - Part 5e's `patch-8.MPQ` - or the summon shows the carrier template's own model.
+
 On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start and defaults to on:
 
 ```bash
