@@ -541,6 +541,25 @@ function Get-FreeSpaceGb {
     }
 }
 
+function Test-GitRef {
+    <# Test-GitRef REF - true for a name git would accept as a branch or tag, or a commit id. #>
+    # -SelfRef is interpolated into raw.githubusercontent.com and codeload.github.com paths, and a
+    # URL path is normalised *before* the request: "../../other/repo/main" leaves this repository
+    # and lands on another one, whose entrypoint.sh would then be staged and run. So each slash
+    # separated component is checked, not just the characters in it.
+    param([string]$Ref)
+    if (-not $Ref) { return $false }
+    if ($Ref -match '^[0-9a-fA-F]{40}$') { return $true }
+    if ($Ref -notmatch '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$') { return $false }
+    if ($Ref -match '\.\.') { return $false }
+    foreach ($part in $Ref.Split('/')) {
+        if ($part -eq '.' -or $part -eq '..') { return $false }
+        if ($part.StartsWith('-')) { return $false }
+        if ($part.EndsWith('.lock') -or $part.EndsWith('.')) { return $false }
+    }
+    return $true
+}
+
 function Get-FetchRef {
     <# Get-FetchRef - the ref every download uses: the resolved commit, or the ref as given. #>
     if ($script:SelfRefSha) { return $script:SelfRefSha }
@@ -797,10 +816,10 @@ function Confirm-Arguments {
             Die ("-ClientData must be an absolute path or 'none' (got '{0}')" -f $script:ClientData)
         }
     }
-    # -SelfRef becomes part of a URL and of nothing else, but a space or a quote in it would break
-    # both the request and the path it is written to.
-    if ($script:SelfRef -notmatch '^[A-Za-z0-9._/-]+$') {
-        Die ("-SelfRef must be a git ref: letters, digits, dot, dash and slash (got '{0}')" -f $script:SelfRef)
+    # -SelfRef becomes part of a URL and of nothing else, and a URL path normalises dot segments:
+    # ".." there is not a git ref, it is another repository.
+    if (-not (Test-GitRef $script:SelfRef)) {
+        Die ("-SelfRef must be a git ref - letters, digits, dot, dash and slash, with no empty, '.' or '..' component (got '{0}')" -f $script:SelfRef)
     }
     # A root that is one of Windows' own directories would be deleted wholesale by -Uninstall.
     $forbidden = @(

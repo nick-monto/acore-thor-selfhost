@@ -216,6 +216,7 @@ parse_args() {
     case "$BOOT_TIMEOUT" in ''|*[!0-9]*) die "--boot-timeout must be a number" ;; esac
     case "$ROOT" in /*) ;; *) die "--root must be an absolute path" ;; esac
     case "$ROOT" in /|/opt|/usr|/home|/etc|/var) die "--root must be a private directory, not $ROOT" ;; esac
+    valid_ref "$SELF_REF" || die "SELF_REF must be a git ref - letters, digits, dot, dash and slash, with no empty, '.' or '..' component (got '$SELF_REF')"
     refresh_paths
 }
 
@@ -245,6 +246,44 @@ is_commit() {   # is_commit TEXT - true when TEXT is a full git commit id
 }
 
 short_commit() { printf '%s' "$1" | cut -c1-12; }
+
+# A name git would accept as a branch or tag, or a full commit id. Every fetch below interpolates
+# SELF_REF into a URL and curl removes dot segments from a path, so `../..` in the ref does not climb
+# out of the repository at fetch time - it resolves to *another* repository on the same host, whose
+# tarball, entrypoint.sh and sql are then fetched, extracted and run. The ref is therefore checked
+# as the URL path component it becomes: no empty, `.` or `..` component, no leading dash, no `.lock`
+# suffix, and only the characters git allows there.
+valid_ref() {
+    local ref="$1" part
+    [ -n "$ref" ] || return 1
+    is_commit "$ref" && return 0
+    case "$ref" in
+        -* | */ | /* | *//* | *..* | *.lock | *.) return 1 ;;
+    esac
+    case "$ref" in
+        *[!A-Za-z0-9._/-]*) return 1 ;;
+    esac
+    local IFS=/
+    for part in $ref; do
+        case "$part" in '' | . | ..) return 1 ;; esac
+    done
+    return 0
+}
+
+# The hosts a GitHub token may be sent to. Anything else - --release-url, THOR_RELEASE_URL, a
+# mirror - gets the request without it: the token exists for the private repository, and a URL the
+# operator names is not the repository.
+GH_TOKEN_HOSTS="github.com api.github.com raw.githubusercontent.com codeload.github.com objects.githubusercontent.com"
+
+url_host() {   # url_host URL - the host of an http(s) URL, lowercased, without userinfo or port
+    local url="$1"
+    case "$url" in *://*) ;; *) return 0 ;; esac
+    url="${url#*://}"
+    url="${url%%/*}"
+    url="${url##*@}"
+    url="${url%%:*}"
+    printf '%s' "$url" | tr 'A-Z' 'a-z'
+}
 
 resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and fetch from that commit
     [ -n "$FETCH_REF" ] && return 0
@@ -297,12 +336,39 @@ refresh_self_ref() {   # refresh_self_ref - drop a recorded pin and resolve SELF
     resolve_self_ref
 }
 
+GH_TOKEN_REFUSED=""   # what a token was withheld from, said once per host
+
 curl_gh() {   # curl_gh ARGS... - adds the token when one is set, i.e. for a private repository
-    if [ -n "$GH_TOKEN_OPT" ]; then
-        curl -H "Authorization: Bearer $GH_TOKEN_OPT" -H "Accept: application/octet-stream" "$@"
-    else
+    local arg host untrusted=""
+    if [ -z "$GH_TOKEN_OPT" ]; then
         curl "$@"
+        return 0
     fi
+    for arg in "$@"; do
+        case "$arg" in
+            https://*) ;;
+            # Over plain http the bearer would be readable on the way; nothing here needs it.
+            http://*) untrusted="$arg"; break ;;
+            *) continue ;;
+        esac
+        host="$(url_host "$arg")"
+        case " $GH_TOKEN_HOSTS " in
+            *" $host "*) ;;
+            *) untrusted="$host"; break ;;
+        esac
+    done
+    if [ -n "$untrusted" ]; then
+        case " $GH_TOKEN_REFUSED " in
+            *" $untrusted "*) ;;
+            *) GH_TOKEN_REFUSED="$GH_TOKEN_REFUSED $untrusted"
+               warn "not sending the GitHub token to $untrusted: it is only sent to $GH_TOKEN_HOSTS over https" ;;
+        esac
+        curl -H "Accept: application/octet-stream" "$@"
+        return 0
+    fi
+    # --oauth2-bearer, not -H: curl treats that form as a credential and drops it when a redirect
+    # leaves the host, which the release asset URL does (github.com -> objects.githubusercontent.com).
+    curl --oauth2-bearer "$GH_TOKEN_OPT" -H "Accept: application/octet-stream" "$@"
 }
 
 human_size() { du -sh "$1" 2>/dev/null | awk '{print $1}' || true; }
