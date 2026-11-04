@@ -1258,9 +1258,16 @@ namespace Skateboard
 
         if (falling)
         {
-            // The carry pushes the rider forward, and the client reports the glide's own flying
-            // flags on the way - that is not a jump, so nothing is queued and nothing is scored.
-            if (deck->lastImpulseMs && !Reached(now, deck->lastImpulseMs + cfg.DriveImpulseMs * 2))
+            // The carry pushes the rider forward with its own knockback, and the client reports
+            // that glide's falling flag on the way. It is not a jump: the arc's type is in the
+            // packet, because a knockback's jump carries a negative zspeed and a real jump a
+            // positive one. A client that reports 0 falls back to "an impulse just went out",
+            // which is what the carry's own rhythm looks like.
+            if (movementInfo.jump.zspeed < 0.0f)
+                return;
+
+            if (movementInfo.jump.zspeed == 0.0f && deck->lastImpulseMs &&
+                !Reached(now, deck->lastImpulseMs + cfg.DriveImpulseMs * 2))
                 return;
 
             // Rising edge: this is the take-off. Remember when, and which clip
