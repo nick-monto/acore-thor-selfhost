@@ -41,15 +41,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                     libc, libstdc++6, libssl3t64 (pulled in by the MySQL client), libbz2,
 #                     liblzma and libzstd. MySQL's client library and ICU travel in the artifact's
 #                     lib/ and are found through the $ORIGIN/../lib rpath the build sets.
-#                     python3-minimal is for scripts/item-dbc/patch_item_dbc.py, which the
-#                     entrypoint runs before every start so the server's Item.dbc carries the
-#                     loot-bag records the same start adds to item_template. It is the only
-#                     interpreter in the image: nothing here builds anything.
+#                     python3 is for scripts/item-dbc/patch_item_dbc.py, which the entrypoint runs
+#                     before every start so the server's Item.dbc carries the loot-bag records the
+#                     same start adds to item_template. It is the full package, not -minimal: the
+#                     tool imports difflib through the loot-bag generator, and -minimal's curated
+#                     stdlib does not have it - the first build of this step failed on exactly that
+#                     and warned instead of patching. It is the only interpreter here; nothing builds.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        python3-minimal \
+        python3 \
         zstd \
         tzdata \
         unzip \

@@ -475,6 +475,17 @@ world-server restart.
 
 `mod-skateboard` ships **off**. The installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` and leaves `Skateboard.Enable = 0`; nothing else in the realm depends on it, so leaving it at 0 costs nothing.
 
+On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start:
+
+```bash
+# C:\acore\docker-src\docker\.env, beside the compose file
+SKATEBOARD_ENABLE=1
+```
+
+```bash
+docker compose -f docker/docker-compose.yml up -d acore
+```
+
 ```bash
 # turn it on, then apply it without a restart
 sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/' /opt/acore/etc/modules/mod-skateboard.conf

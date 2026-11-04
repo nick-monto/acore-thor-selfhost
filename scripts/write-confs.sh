@@ -563,6 +563,15 @@ wc_write_all() {
         # live file looking like it still did something.
         sed -i -E '/^[[:space:]]*Skateboard\.OffInCombat[[:space:]]*=/d' "$sb"
         conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
+        # WC_SKATEBOARD is how a container or the Thor asks for the board on a given boot. The conf
+        # is rendered from the .dist every start, and the container's /opt/acore/etc is part of the
+        # image layer rather than a volume, so a hand edit there is gone at the next rebuild: the
+        # dial is what survives. Unset leaves the shipped default (off).
+        case "${WC_SKATEBOARD:-}" in
+            0|1) wc_set_conf "$sb" Skateboard.Enable "$WC_SKATEBOARD" ;;
+            '') ;;
+            *) wc_warn "mod-skateboard.conf: WC_SKATEBOARD must be 0 or 1, keeping $(wc_get_conf "$sb" Skateboard.Enable)" ;;
+        esac
         wc_log "mod-skateboard.conf: Enable=$(wc_get_conf "$sb" Skateboard.Enable) Deck=$(wc_get_conf "$sb" Skateboard.Deck) MaxSpeed=$(wc_get_conf "$sb" Skateboard.MaxSpeed) BoardCastMs=$(wc_get_conf "$sb" Skateboard.BoardCastMs) OffOnHit=$(wc_get_conf "$sb" Skateboard.OffOnHit) Crash.Enable=$(wc_get_conf "$sb" Skateboard.Crash.Enable)"
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-skateboard.conf.dist - the artifact was built without the module, the skateboard is unavailable"
