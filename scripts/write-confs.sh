@@ -84,6 +84,11 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Friction.Static=1.5"
     "Skateboard.Friction.Rolling=0.004"
     "Skateboard.SlopeGain=9.0"
+    "Skateboard.Drive=1"
+    "Skateboard.Drive.Mode=1"
+    "Skateboard.Drive.ImpulseMs=350"
+    "Skateboard.Drive.MinSpeed=3.0"
+    "Skateboard.Brake=6.0"
     "Skateboard.LandingBonus=2.0"
     "Skateboard.Tricks=1"
     "Skateboard.Trick.VisualKit=5036"
@@ -228,8 +233,9 @@ survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one t
 skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is one the module accepts
     # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s, PushImpulse
     # and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain 0-90, the
-    # visual kit 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000 ms and the
-    # ACK timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is settled
+    # carry mode 1-2, impulse 100-2000 ms, its floor 0-40 yd/s and the brake 0-50 yd/s^2, the visual kit
+    # 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000 ms and the ACK
+    # timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is settled
     # before the numeric guard below can see it. The momentum keys carry decimals, so the
     # comparison is awk's rather than a shell integer test.
     local key="$1" val="$2" lo hi
@@ -242,7 +248,7 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
     fi
     case "$key" in
         Skateboard.Enable|Skateboard.MountedPose|Skateboard.Tricks|Skateboard.Crash.Enable|\
-        Skateboard.HardcoreSafe|Skateboard.OffOnHit|Skateboard.Debug)
+        Skateboard.HardcoreSafe|Skateboard.OffOnHit|Skateboard.Debug|Skateboard.Drive)
             case "$val" in 0|1) return 0 ;; *) return 1 ;; esac ;;
         Skateboard.BoardCastMs)      lo=0;  hi=10000 ;;
         Skateboard.MaxSpeed)         lo=1;  hi=40 ;;
@@ -250,6 +256,10 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
         Skateboard.Friction.Static)  lo=0;  hi=20 ;;
         Skateboard.Friction.Rolling) lo=0;  hi=1 ;;
         Skateboard.SlopeGain)        lo=0;  hi=90 ;;
+        Skateboard.Drive.Mode)       lo=1;  hi=2 ;;
+        Skateboard.Drive.ImpulseMs)  lo=100; hi=2000 ;;
+        Skateboard.Drive.MinSpeed)   lo=0;  hi=40 ;;
+        Skateboard.Brake)            lo=0;  hi=50 ;;
         Skateboard.LandingBonus)     lo=0;  hi=20 ;;
         Skateboard.Trick.VisualKit)  lo=0;  hi=100000 ;;
         Skateboard.Crash.DamagePct)  lo=0;  hi=99 ;;

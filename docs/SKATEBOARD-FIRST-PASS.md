@@ -80,12 +80,29 @@ the movement packets through `MovementHandlerScript::OnPlayerMove` (`MovementHan
 | slope | `a = SlopeGain * -(h(pos + heading*2) - h(pos)) / 2` | `Map::GetGridHeight` (`Map.cpp:1222`) — terrain only, no `z` needed, no normals exist |
 | friction | `a -= FrictionStatic + FrictionRolling * v * v` | stops in ~8 s from 21 yd/s at the defaults |
 | push | `v += PushImpulse` on the command, clamped | one kick per press, not hold-to-accelerate |
+| brake | `a -= Brake` while `MOVEMENTFLAG_BACKWARD` is set | the back key is a foot on the ground, on top of friction |
 | airtime | friction and slope skipped while `airborne` | speed is kept through the arc |
 | clamp | `v = clamp(v, 0, MaxSpeed)` | 21 yd/s default = 3× the 7.0 base run rate (`Unit.cpp:93-100`) |
 
 The player is the mover (`MovementHandler.cpp:434`), so `v` is published as a **cap**:
-`SetSpeed(MOVE_RUN, v / 7.0f, true)`. A player who is not pressing forward does not move — that is
-the model, not a bug (design §3).
+`SetSpeed(MOVE_RUN, v / 7.0f, true)`. A cap alone means a rider who is not holding a key does not
+move, so the deck also **carries** an idle rider (`Skateboard.Drive`): one horizontal impulse along
+the facing every `Skateboard.Drive.ImpulseMs`, through the client's own knockback channel
+(`Unit::KnockbackFrom` → `SMSG_MOVE_KNOCK_BACK`).
+
+Two carriers exist because the second one's client behaviour cannot be checked offline:
+`Skateboard.Drive.Mode = 1` is the knockback, `2` is a short `SMSG_MONSTER_MOVE` spline the length of
+one impulse, taken by the core's own `UpdateSplineMovement` so the server position follows it. If a
+client ignores a spline addressed to its own character, nothing moves and mode 1 is the answer.
+
+That channel is the only one that moves a character the client still controls. A relocation is
+undone by the next movement packet, and a server spline is obeyed only by a unit the client has
+stopped steering (`Unit::KnockbackFrom` states the rule for feared/confused units: the *client* is
+what moves a controlled unit, so the server either sends it a movement message or takes control
+away). The impulse keeps the character in control, so forward still pumps (the cap), backward still
+brakes, and the camera still steers between impulses. `zspeed = 0` keeps the impulse horizontal:
+no `HandleFall`, no fall damage, and the glide's own `MOVEMENTFLAG_FALLING` reports are not scored
+as jumps.
 
 ### 2.4 The cap gate — the one dangerous operation
 
@@ -319,6 +336,8 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | activation | bind a key to `Skateboard` in the stock Key Bindings frame, press it | boards, and a second press leaves; the same action appears in `/cp` for a pad button; `/say .board toggle` works with the add-on removed from the folder (a bare `/say .board` prints the subcommand list) |
 | momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts to a stop in ~8 s; `Debug` line shows `v`, slope and rate agreeing |
 | cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, rate within 0.01 of target between changes |
+| carry | push on flat ground, then release every key | the deck keeps rolling; `Drive.ImpulseMs` 250-500 matches the impulse's own duration without a stutter |
+| brake | at 15+ yd/s, hold backward | `v` falls to 0 in a couple of seconds and the cap follows; no `Incorrect speed` kick from the backward walk |
 | tricks | jump while boarded | one clip per take-off, clean landing adds `v`, mistimed landing crashes once |
 | cleanup | logout, die, change map, `.board off` | no `UNIT_FIELD_MOUNTDISPLAYID` left, no state left in the map |
 | bar | click the add-on's board button, then its push button | boards and pushes the same as the bindings, and the first button becomes `Bail` while boarded; a trick slot the module has not advertised is hidden rather than failing |

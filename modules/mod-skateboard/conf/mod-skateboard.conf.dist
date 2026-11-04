@@ -124,6 +124,59 @@ Skateboard.Friction.Rolling = 0.004
 Skateboard.SlopeGain = 9.0
 
 #
+#    Skateboard.Drive
+#        The deck carries an idle rider. A player's movement belongs to the
+#        client, so the server cannot simply move a character that is still in
+#        control; the one channel the client obeys is its own knockback. With
+#        this on, a rider holding no movement key is pushed one horizontal
+#        impulse along the facing every Drive.ImpulseMs, so slope and push keep
+#        the deck going between key presses.
+#        Forward cancels the carry (the run-speed cap is what makes a pumping
+#        rider fast), backward brakes (Skateboard.Brake), and a rooted or
+#        stunned rider is not carried. 0 restores key-driven movement only,
+#        which is what the module did before.
+#        Default: 1, range: 0|1
+#
+Skateboard.Drive = 1
+
+#
+#    Skateboard.Drive.Mode
+#        How the carry reaches the client. 1 = a knockback impulse
+#        (SMSG_MOVE_KNOCK_BACK), the channel a hit uses, so the character
+#        stays in control between impulses. 2 = a short server spline
+#        (SMSG_MONSTER_MOVE) the length of one impulse. A client is the mover
+#        for its own character, so mode 2 is only obeyed while it is not
+#        steering; if nothing moves with 2, 1 is the one that works here.
+#        Default: 1, range: 1 - 2
+#
+Skateboard.Drive.Mode = 1
+
+#
+#    Skateboard.Drive.ImpulseMs
+#        Milliseconds between carry impulses. The duration of one impulse is
+#        the client's, so this is the knob that matches it: too long and the
+#        glide stutters, too short and the rider never gets steering back.
+#        Default: 350, range: 100 - 2000
+#
+Skateboard.Drive.ImpulseMs = 350
+
+#
+#    Skateboard.Drive.MinSpeed
+#        Below this deck speed, in yd/s, the carry stops, so a nearly stopped
+#        deck does not crawl its rider forward.
+#        Default: 3.0, range: 0.0 - 40.0
+#
+Skateboard.Drive.MinSpeed = 3.0
+
+#
+#    Skateboard.Brake
+#        Extra deceleration while the backward key is held, in yd/s^2, on top of
+#        the two friction terms below.
+#        Default: 6.0, range: 0.0 - 50.0
+#
+Skateboard.Brake = 6.0
+
+#
 #    Skateboard.LandingBonus
 #        Speed added by a clean landing, in yd/s, clamped to MaxSpeed. Independent
 #        of Skateboard.Tricks: with tricks off there is no clip to mistime, so

@@ -4,7 +4,10 @@
  * A trip to a private realm, not a mount: the character stays on foot, and the
  * module publishes a *run speed cap* instead of moving the character itself.
  * The player is the mover (MovementHandler.cpp), so a boarded character simply
- * keeps pressing forward and the core lets it travel faster.
+ * keeps pressing forward and the core lets it travel faster. Between key
+ * presses the deck carries the rider with the client's own knockback channel
+ * (Skateboard.Drive), which moves a character that is still in control; forward
+ * pumps and backward brakes (`Skateboard.Brake`).
  *
  *   - '.board on' writes a mount display id into UNIT_FIELD_MOUNTDISPLAYID
  *     without setting UNIT_FLAG_MOUNT (Skateboard.MountedPose = 0), so the deck
@@ -73,6 +76,11 @@ namespace Skateboard
         float FrictionStatic       = 1.5f;     // Skateboard.Friction.Static
         float FrictionRolling      = 0.004f;   // Skateboard.Friction.Rolling
         float SlopeGain            = 9.0f;     // Skateboard.SlopeGain
+        bool Drive                 = true;     // Skateboard.Drive
+        uint32 DriveImpulseMs      = 350;      // Skateboard.Drive.ImpulseMs
+        float DriveMinSpeed        = 3.0f;     // Skateboard.Drive.MinSpeed
+        float Brake                = 6.0f;     // Skateboard.Brake
+        uint32 DriveMode           = 1;        // Skateboard.Drive.Mode (1 = impulse, 2 = spline)
         float LandingBonus         = 2.0f;     // Skateboard.LandingBonus
         bool Tricks                = true;     // Skateboard.Tricks
         uint32 TrickVisualKit      = 5036;     // Skateboard.Trick.VisualKit
@@ -117,6 +125,8 @@ namespace Skateboard
         uint32 displayId = 0;           // what was written to the mount field
         uint32 mapId = 0;               // map the deck was boarded on
         uint32 debugNextMs = 0;         // next '.board' debug log line
+        uint32 driveNextMs = 0;         // next carry impulse (Skateboard.Drive)
+        uint32 lastImpulseMs = 0;       // the last carry impulse, to tell a glide's fall from a jump
         uint32 castDeadlineMs = 0;      // boarding cast in flight (0 = none, nothing written yet)
         float castX = 0.0f;             // where the cast started, to catch a step
         float castY = 0.0f;

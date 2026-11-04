@@ -4,7 +4,10 @@
  * A self-hosted-realm toy, and a deliberate experiment: the character is not
  * moved by the server, it is *allowed* to move faster. Everything below is
  * either bookkeeping around that one number (`Deck::v`) or safety around the
- * one dangerous operation (publishing it as a run speed rate).
+ * one dangerous operation (publishing it as a run speed rate). The deck does
+ * carry an idle rider, but through the client's own knockback channel - one
+ * horizontal impulse along the facing per Skateboard.Drive.ImpulseMs - never
+ * by relocating or spline-moving a character that the client still controls.
  *
  *   - '.board on' refuses a long list of situations first (dead, already
  *     boarded, in combat, mounted, on a vehicle, flying, in water, a
@@ -50,6 +53,7 @@
 #include "GridTerrainData.h"
 #include "Log.h"
 #include "Map.h"
+#include "MoveSplineInit.h"
 #include "ObjectGuid.h"
 #include "Opcodes.h"
 #include "Player.h"
@@ -162,6 +166,8 @@ namespace
         deck.publishedRate = 1.0f;
         deck.pendingAcks = 0;
         deck.gateDeadlineMs = 0;
+        deck.driveNextMs = 0;
+        deck.lastImpulseMs = 0;
     }
 
     // Put the run rate back where the core expects a character on foot to be, and do it from the
@@ -186,6 +192,47 @@ namespace
         deck.publishedRate = target;
         deck.pendingAcks = 1;
         deck.gateDeadlineMs = now + Skateboard::GetConfig().AckTimeoutMs;
+    }
+
+    // One carry impulse. A player's movement is the client's (MovementHandler.cpp): the server
+    // cannot drive a character that is still in control - a relocation is undone by the next
+    // movement packet and a server spline is only obeyed by a unit the client has stopped
+    // steering. The client's own knockback channel is the one exception (Unit::KnockbackFrom ->
+    // SMSG_MOVE_KNOCK_BACK), so an idle rider is pushed along the facing with it, one horizontal
+    // impulse at a time. zspeed 0 keeps the deck on the ground and out of HandleFall.
+    void CarryImpulse(Player* player, Deck& deck, uint32 now)
+    {
+        float const o = player->GetOrientation();
+        player->KnockbackFrom(std::cos(o), std::sin(o), deck.v, 0.0f);
+        deck.driveNextMs = now + Skateboard::GetConfig().DriveImpulseMs;
+        deck.lastImpulseMs = now;
+    }
+
+    // The second carrier: a short server spline the length of one impulse. The client is the
+    // mover for a player, so this only works while it is not steering - which is exactly when the
+    // carry runs - and if a client ignores a spline on its own character, nothing moves and
+    // Skateboard.Drive.Mode = 1 is the answer. Same rhythm as an impulse, so the knob means the
+    // same thing either way.
+    void CarrySpline(Player* player, Deck& deck, uint32 now)
+    {
+        Skateboard::Config const& cfg = Skateboard::GetConfig();
+        float const o = player->GetOrientation();
+        float const step = deck.v * (float(cfg.DriveImpulseMs) / 1000.0f);
+        float const x = player->GetPositionX() + std::cos(o) * step;
+        float const y = player->GetPositionY() + std::sin(o) * step;
+        float z = player->GetMap()->GetHeight(x, y, player->GetPositionZ());
+
+        if (z <= INVALID_HEIGHT + 1.0f)
+            z = player->GetPositionZ();
+
+        Movement::MoveSplineInit init(player);
+        init.MoveTo(x, y, z);
+        init.SetVelocity(deck.v);
+        init.SetFacing(o);
+        init.Launch();
+
+        deck.driveNextMs = now + cfg.DriveImpulseMs;
+        deck.lastImpulseMs = now;
     }
 
     // The wipeout: drop the deck, take the damage, and optionally root the
@@ -256,6 +303,11 @@ namespace Skateboard
         cfg.FrictionStatic = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Friction.Static", 1.5f), 0.0f, 20.0f);
         cfg.FrictionRolling = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Friction.Rolling", 0.004f), 0.0f, 1.0f);
         cfg.SlopeGain = std::clamp(sConfigMgr->GetOption<float>("Skateboard.SlopeGain", 9.0f), 0.0f, 90.0f);
+        cfg.Drive = sConfigMgr->GetOption<bool>("Skateboard.Drive", true);
+        cfg.DriveImpulseMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.ImpulseMs", 350), 100, 2000);
+        cfg.DriveMinSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Drive.MinSpeed", 3.0f), 0.0f, 40.0f);
+        cfg.Brake = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Brake", 6.0f), 0.0f, 50.0f);
+        cfg.DriveMode = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.Mode", 1), 1, 2);
         cfg.LandingBonus = std::clamp(sConfigMgr->GetOption<float>("Skateboard.LandingBonus", 2.0f), 0.0f, 20.0f);
         cfg.Tricks = sConfigMgr->GetOption<bool>("Skateboard.Tricks", true);
         cfg.TrickVisualKit = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Trick.VisualKit", 5036), 100000);
@@ -792,8 +844,31 @@ namespace Skateboard
             float acceleration = slope;
             acceleration -= cfg.FrictionStatic + cfg.FrictionRolling * deck.v * deck.v;
 
+            // The brake key. Backward is a foot on the ground: a strong deceleration on top of
+            // friction, so the deck stops in a couple of seconds from the top speed and the cap
+            // follows it down. The client's own backward walk is what the rider sees while it does.
+            if (player->HasUnitMovementFlag(MOVEMENTFLAG_BACKWARD))
+                acceleration -= cfg.Brake;
+
             deck.v += acceleration * dt;
             deck.v = std::clamp(deck.v, 0.0f, cfg.MaxSpeed);
+        }
+
+        // The carry: legs off the keys, the deck keeps going. Forward cancels it (the run-speed
+        // cap is what makes a pumping rider fast) and backward is the brake above, so the client
+        // is never fighting the server for the same yard. A rooted or stunned rider is not
+        // carried: the client would drop every impulse anyway.
+        bool const riderPumping = player->HasUnitMovementFlag(
+            MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_BACKWARD | MOVEMENTFLAG_STRAFE_LEFT | MOVEMENTFLAG_STRAFE_RIGHT);
+
+        if (cfg.Drive && !deck.airborne && !riderPumping && deck.v > cfg.DriveMinSpeed &&
+            !player->HasUnitState(UNIT_STATE_ROOT) && !player->HasUnitState(UNIT_STATE_STUNNED) &&
+            Reached(now, deck.driveNextMs))
+        {
+            if (cfg.DriveMode == 2)
+                CarrySpline(player, deck, now);
+            else
+                CarryImpulse(player, deck, now);
         }
 
         float const target = std::max(1.0f, deck.v / BASE_RUN_RATE);
@@ -839,6 +914,11 @@ namespace Skateboard
 
         if (falling)
         {
+            // The carry pushes the rider forward, and the client reports the glide's own flying
+            // flags on the way - that is not a jump, so nothing is queued and nothing is scored.
+            if (deck->lastImpulseMs && !Reached(now, deck->lastImpulseMs + cfg.DriveImpulseMs * 2))
+                return;
+
             // Rising edge: this is the take-off. Remember when, and which clip
             // the speed band queued.
             deck->airborne = true;
@@ -1125,8 +1205,11 @@ public:
         uint32 const tricks = cfg.Tricks ? 3 : 0;
         uint32 const push = cfg.PushImpulse > 0.0f ? 1 : 0;
 
-        handler->PSendSysMessage("boarded={} tricks={} push={} deck={} speed={:.1f}",
-            boarded, tricks, push, cfg.DeckDisplayId, manager.Speed(player));
+        // The carry's knobs ride at the end, after the fields the add-on parses: tuning
+        // Skateboard.Drive.* then needs `.reload config` and one look, not a conf file read.
+        handler->PSendSysMessage("boarded={} tricks={} push={} deck={} speed={:.1f} drive={} mode={} impulse={} brake={:.1f}",
+            boarded, tricks, push, cfg.DeckDisplayId, manager.Speed(player),
+            cfg.Drive ? 1 : 0, cfg.DriveMode, cfg.DriveImpulseMs, cfg.Brake);
         return true;
     }
 
