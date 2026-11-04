@@ -484,6 +484,12 @@ sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/' /opt/acore/etc/module
 
 The module reads its config in `OnAfterConfigLoad`, so `.reload config` is enough [V]; a restart works too and is what an installer re-run expects.
 
+An artifact built before `mod-skateboard` landed has no `.board` command at all, and the client cannot tell that from a typo: the add-on's Board button and `/sb` both answer `Command 'board on' does not exist`, and the status poll answers `Command 'board status' does not exist` until it gives up. No conf edit fixes that, because there is no conf to read - the check is one command, and 0 means the artifact predates the module:
+
+```bash
+grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
+```
+
 | Key | Default | What it does |
 |---|---|---|
 | `Skateboard.Enable` | `0` | the whole feature; 0 refuses `.board on` and boards nobody |
