@@ -322,15 +322,24 @@ COMPRESSION_ZLIB_NAMES = {
 }
 
 
-def _decompress(block: bytes, label: str) -> bytes:
-    """Undo one compressed block, or say precisely which codec stopped us."""
+def _decompress(block: bytes, label: str, limit: int) -> bytes:
+    """Undo one compressed block, or say precisely which codec stopped us.
+
+    The declared size, not the compressed length, is what bounds the output: a member can claim one
+    byte and expand to any amount, and this reader runs on a phone. Anything past the declaration is
+    a malformed archive, not something to trim.
+    """
     if not block:
         return block
     kind = block[0]
     body = block[1:]
     if kind == 0x02:
         import zlib
-        return zlib.decompress(body)
+        engine = zlib.decompressobj()
+        out = engine.decompress(body, limit)
+        if engine.unconsumed_tail:
+            raise SystemExit(f"{label}: decompresses past its declared {limit} bytes")
+        return out
     name = COMPRESSION_ZLIB_NAMES.get(kind, f"codec 0x{kind:02x}")
     raise SystemExit(f"{label}: the block is compressed with {name}, which this reader does not undo")
 
@@ -343,6 +352,14 @@ def _archive_entries(index, label: str):
         raise SystemExit(f"{label}: archive header is malformed")
     if archive_size > len(index):
         raise SystemExit(f"{label}: archive says {archive_size} bytes, file has {len(index)}")
+    # Both tables are addressed by offsets and counts the file itself supplies, so they are bounded
+    # against the file before anything is decrypted or sliced with them: a hostile header would
+    # otherwise decide how much memory this process allocates.
+    if hash_size == 0 or hash_size & (hash_size - 1):
+        raise SystemExit(f"{label}: hash table size {hash_size} is not a power of two")
+    if hash_pos + hash_size * 16 > len(index) or block_pos + block_count * 16 > len(index):
+        raise SystemExit(f"{label}: the tables say {hash_size} hash and {block_count} block entries, "
+                         f"which do not fit in {len(index)} bytes")
     hash_table = mpq_decrypt(index[hash_pos:hash_pos + hash_size * 16], HASH_TABLE_KEY)
     block_table = mpq_decrypt(index[block_pos:block_pos + block_count * 16], BLOCK_TABLE_KEY)
     return hash_table, block_table, hash_size, block_count
@@ -371,6 +388,9 @@ def read_mpq_path(path: Path, name: str) -> bytes:
                 pos, archived, size, flags = struct.unpack_from("<IIII", block_table, block_index * 16)
                 if not flags & MPQ_FILE_EXISTS:
                     raise SystemExit(f"{path.name}: {name} is not present")
+                if size > len(index) or archived > len(index) or pos + archived > len(index):
+                    raise SystemExit(f"{path.name}: {name}: the block table points outside the archive "
+                                     f"(offset {pos}, {archived} bytes, size {size}, file {len(index)})")
                 raw = index[pos:pos + archived]
                 # Encrypted members continue their key across sectors with FIX_KEY adjustments, and
                 # getting that subtly wrong returns plausible garbage instead of an error - so this
@@ -383,13 +403,17 @@ def read_mpq_path(path: Path, name: str) -> bytes:
                 # Compressed blocks come in sectors, each with its own codec byte, behind a
                 # sector offset table. A single-unit block is one sector with no table.
                 if flags & MPQ_FILE_SINGLE_UNIT:
-                    return _decompress(raw, f"{path.name}: {name}")[:size]
+                    return _decompress(raw, f"{path.name}: {name}", size)[:size]
                 count = (size + SECTOR_SIZE - 1) // SECTOR_SIZE
+                if (count + 1) * 4 > len(raw):
+                    raise SystemExit(f"{path.name}: {name}: {count} sectors do not fit in {len(raw)} bytes")
                 offsets = struct.unpack_from(f"<{count + 1}I", raw)
-                if offsets[0] != (count + 1) * 4:
+                if offsets[0] != (count + 1) * 4 or offsets[-1] > len(raw) or \
+                        any(offsets[i] > offsets[i + 1] for i in range(count)):
                     raise SystemExit(f"{path.name}: {name}: malformed sector table")
-                return b"".join(_decompress(raw[offsets[i]:offsets[i + 1]], f"{path.name}: {name}")
-                                for i in range(count))[:size]
+                sectors = b"".join(_decompress(raw[offsets[i]:offsets[i + 1]], f"{path.name}: {name}", size)
+                                   for i in range(count))
+                return sectors[:size]
             slot = (slot + step) & (hash_size - 1)
     raise SystemExit(f"{path.name}: {name} is not in the archive")
 
