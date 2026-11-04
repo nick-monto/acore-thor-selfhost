@@ -48,6 +48,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "lib"))
+sys.dont_write_bytecode = True      # keep the run out of the source tree
 import dbc_mpq  # noqa: E402  (the shared DBC container and MPQ writer)
 
 # The two DBCs, at the width this client ships. Both counts were read off the files the installer

@@ -2,14 +2,13 @@
  * mod-skateboard - shared declarations.
  *
  * A trip to a private realm, not a mount: the character stays on foot, and the
- * module publishes a *run speed cap* instead of moving the character itself.
- * The player is the mover (MovementHandler.cpp), so a boarded character simply
- * keeps pressing forward and the core lets it travel faster. The deck also
- * carries the rider with the client's own knockback channel (Skateboard.Drive),
- * which moves a character that is still in control, so a boarded character
- * needs no key at all: the carry runs every Drive.ImpulseMs whatever the
- * client is doing, forward only adds the client's own walk on top, and backward
- * is the brake (Skateboard.Brake).
+ * module moves it with the client's own knockback channel (Skateboard.Drive) -
+ * the one channel that moves a character the client still controls. The carry
+ * runs every Drive.ImpulseMs whatever the client is doing, so a boarded
+ * character needs no key at all: forward only adds the client's own walk on top,
+ * and backward is the brake (Skateboard.Brake). With Drive = 0 the module
+ * publishes a run-speed cap instead, which is the older path and needs the
+ * forward key.
  *
  *   - '.board on' puts a deck *under* the character. Skateboard.Deck.Render =
  *     unit (the default) summons a creature carrying the deck display and
@@ -62,7 +61,6 @@ namespace Skateboard
     // a floor of 1.0: below 7 yd/s the cap is normal run speed rather than a
     // crawl, and the rate never goes under the value a character on foot has.
     constexpr float BASE_RUN_RATE = 7.0f;
-    constexpr float MIN_RUN_RATE = 1.0f;
 
     // Yards ahead of the rider the terrain gradient is sampled over. Two points at the rider's
     // feet read a single grid cell and twitch; a longer baseline reads the hill the deck is on.
@@ -98,8 +96,8 @@ namespace Skateboard
         std::string DeckName       = "engravedwall";    // Skateboard.Deck, as configured
         uint32 DeckDisplayId       = 90001;    // Skateboard.Deck, resolved
         bool RenderUnit            = true;     // Skateboard.Deck.Render (unit, not mount)
-        uint32 Carrier             = 16386;    // Skateboard.Deck.Carrier
-        uint32 FollowMs            = 100;      // Skateboard.Deck.FollowMs
+        uint32 Carrier             = 29443;    // Skateboard.Deck.Carrier
+        uint32 FollowMs            = 40;       // Skateboard.Deck.FollowMs
         float MaxSpeed             = 21.0f;    // Skateboard.MaxSpeed
         float Cruise               = 4.0f;     // Skateboard.Cruise
         float PushImpulse          = 4.0f;     // Skateboard.PushImpulse
@@ -113,7 +111,7 @@ namespace Skateboard
         uint32 DriveImpulseMs      = 350;      // Skateboard.Drive.ImpulseMs
         float DriveMinSpeed        = 3.0f;     // Skateboard.Drive.MinSpeed
         float Brake                = 6.0f;     // Skateboard.Brake
-        uint32 DriveMode           = 1;        // Skateboard.Drive.Mode (1 = impulse, 2 = spline)
+        uint32 DriveGroundMs       = 100;      // Skateboard.Drive.GroundMs (the gap between impulses)
         std::string TrickList;                 // Skateboard.Trick.List, as configured
         std::vector<Trick> TrickEntries;       // Skateboard.Trick.List, parsed (never empty)
         float LandingBonus         = 2.0f;     // Skateboard.LandingBonus
@@ -157,7 +155,7 @@ namespace Skateboard
         uint8 pendingAcks = 0;          // SMSG_FORCE_RUN_SPEED_CHANGE not ACKed
         uint32 gateDeadlineMs = 0;      // ACK deadline, or the 100 ms send throttle
         uint32 staggerDeadlineMs = 0;   // root release after a crash (0 = none)
-        uint32 displayId = 0;           // what was written to the mount field
+        uint32 displayId = 0;           // the deck id this ride draws (0 = not boarded)
         uint32 mapId = 0;               // map the deck was boarded on
         uint32 debugNextMs = 0;         // next '.board' debug log line
         bool pushHeld = false;          // '.board push down' is in effect (Skateboard.Push.Mode = 1)

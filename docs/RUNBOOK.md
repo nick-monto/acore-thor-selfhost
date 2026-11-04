@@ -475,10 +475,8 @@ world-server restart.
 
 `mod-skateboard` ships **on**: the installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` with `Skateboard.Enable = 1`. That makes the board *available*; nobody is boarded until a player presses `.board on` or the add-on's Board button, so it costs a realm nothing to leave on.
 
-A conf is written once, from the `.dist` of the artifact that was installed. A newer artifact that adds or renames keys therefore leaves an existing realm on the old file, and the module falls back to its own defaults for the keys the file lacks - the same values, but invisible in the conf. To pick up a new key (for example `Skateboard.Cruise` or `Skateboard.Deck.Render`), delete the live conf and restart; it is re-created from the new `.dist` and the dials below re-apply:
-```bash
-rm /opt/acore/etc/modules/mod-skateboard.conf && docker compose -f docker/docker-compose.yml restart acore
-```
+A conf is written once, from the `.dist` of the artifact that was installed, but it is not frozen: on every container start `scripts/write-confs.sh` appends every key the live file is missing with the shipped default, validates each existing value, and refuses an out-of-range one - so a newer artifact's new keys (`Skateboard.Cruise`, `Skateboard.Drive.GroundMs`, ...) appear in the live conf on the next boot without deleting anything. Deleting the conf is only for starting over from the shipped values, and it throws away hand-set dials. Retired keys (the ones the module no longer reads - `Skateboard.OffInCombat`, `Skateboard.Drive.Mode`, `Skateboard.MountedPose`) are deleted from the live file on the same pass, and `Skateboard.Deck.Carrier = 16386` is migrated to `29443`: the old default turned out to carry a script, which the module now refuses, so an upgraded realm would otherwise board an invisible deck.
+
 The deck itself draws as a creature summoned under the rider (`Skateboard.Deck.Render = unit`) rather than as a mount display, so the two deck rows still have to be in the **client's** DBC pair - Part 5e's `patch-8.MPQ` - or the summon shows the carrier template's own model.
 
 On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start and defaults to on:
@@ -511,9 +509,13 @@ grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
 |---|---|---|
 | `Skateboard.Enable` | `1` | the whole feature; 0 refuses `.board on` and boards nobody |
 | `Skateboard.Deck` | `engravedwall` | the flat `Engraved Wall` shield (display 90001); `coffinlid` (90002) is the second shield; `log` is the stock `Log Ride` display id 26609 and needs no client patch. The shields only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
-| `Skateboard.Deck.Render` | `unit` | how the deck is drawn: `unit` summons a creature carrying the display and re-seats it under the rider (`Deck.Carrier` 16386, `Deck.FollowMs` 100) so the rider stands; `mount` is `Unit::Mount()`, which every client draws but which seats the rider |
+| `Skateboard.Deck.Render` | `unit` | how the deck is drawn (a `.reload config` switches it under a live rider): `unit` summons a creature carrying the display and re-seats it under the rider (`Deck.Carrier` 29443, `Deck.FollowMs` 40) so the rider stands; `mount` is `Unit::Mount()`, which every client draws but which seats the rider |
 | `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |
-| `Skateboard.MaxSpeed` | `21.0` | the cap in yd/s, three times the base run rate [V] |
+| `Skateboard.MaxSpeed` | `21.0` | the deck's speed in yd/s, three times the base run rate [V] |
+| `Skateboard.Cruise` | `4.0` | the floor a boarded deck never rolls below |
+| `Skateboard.Drive` | `1` | the carry: the module moves the rider with one knockback impulse along the facing every `Drive.ImpulseMs`, so no key is needed to travel. `0` goes back to publishing the deck as a run-speed cap (`SetSpeed(MOVE_RUN, v / 7.0f, true)`), which needs the forward key |
+| `Skateboard.Drive.ImpulseMs` / `.GroundMs` | `350` / `100` | the carry's cycle, and how much of it the rider spends standing (the jump window). The impulse is `ImpulseMs / (ImpulseMs - GroundMs)` times the deck speed, and the average is the deck speed |
+| `Skateboard.Deck.Carrier` | `29443` | the stock `creature_template` the deck is summoned from. It must be inert - no `AIName`, no `ScriptName` - or the summon is refused with one log line: a scripted row gives the deck an AI of its own (`16386`, the relay this module shipped first, marks the creature active) |
 | `Skateboard.OffOnHit` | `1` | leaves the board when another unit hits the player (a 21 yd/s cap is a free disengage). Starting a fight does not take the deck and neither does fall damage; boarding while already in combat is refused either way |
 
 A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `engravedwall`/`coffinlid` on an unpatched realm looks like `log`, not like a bug. That warning is the signal to run Part 5e.

@@ -22,10 +22,15 @@
  *     the rider, so the deck is an object of its own and the rider stands on
  *     it. Render = mount keeps the older Unit::Mount() path.
  *   - Every PlayerScript update integrates the deck: terrain gradient under the
- *     heading (Map::GetGridHeight, two samples 2 yd apart, no vmaps, no normals
+ *     heading (Map::GetGridHeight, one sample 6 yd ahead, no vmaps, no normals
  *     exist), static plus rolling friction, an optional push impulse, airtime
  *     that ignores both.
- *   - Publishing is a *cap*, not movement: SetSpeed(MOVE_RUN, max(1, v / 7), true).
+ *   - The carry is the movement: one knockback impulse along the facing every
+ *     Drive.ImpulseMs, sized so the deck averages its own v and leaves a
+ *     standing gap for a jump. The run rate is held at 1.0 while the deck moves
+ *     the rider, so the client's own walk is only extra.
+ *   - With Drive = 0 the module publishes a *cap* instead:
+ *     SetSpeed(MOVE_RUN, max(1, v / 7), true), and the cap only ever lowers.
  *     MovementHandler.cpp kicks a client that reports more speed than the
  *     server holds, so exactly one forced change is in flight at a time and the
  *     gate is opened by CMSG_FORCE_RUN_SPEED_CHANGE_ACK - or by AckTimeoutMs passing,
@@ -56,8 +61,8 @@
 #include "GridTerrainData.h"
 #include "Log.h"
 #include "Map.h"
+#include "MapMgr.h"
 #include "MotionMaster.h"
-#include "MoveSplineInit.h"
 #include "ObjectGuid.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -223,21 +228,31 @@ namespace
         return Skateboard::CLIP_LONG_MS;
     }
 
-    // Clears the mount display field and the flags around it. Mode 0 never set
+    // The summoned deck is an object of its own: it has to leave with the record, or the realm
+    // keeps a plank standing wherever the rider got off. It lives on the map it was summoned on,
+    // which is the *old* map once the rider has teleported, hearthstoned or queued for a
+    // battleground, so it is looked up through Deck::mapId rather than the rider's current map. A
+    // grid that has already unloaded took the temp summon with it, which is why a miss is not an
+    // error.
+    void DespawnDeck(Deck& deck)
+    {
+        if (deck.deckUnit.IsEmpty())
+            return;
+
+        if (Map* map = sMapMgr->FindMap(deck.mapId, 0))
+            if (Creature* unit = map->GetCreature(deck.deckUnit))
+                unit->DespawnOrUnsummon();
+
+        deck.deckUnit.Clear();
+    }
+
+    // Clears the mount display field and the flags around it. The unit render never set
     // UNIT_FLAG_MOUNT, so Dismount() (which returns early when IsMounted() is
-    // false) is only the half of the job the Pose == 1 case needs; the field
+    // false) is only the half of the job the mount render needs; the field
     // itself is always written back to 0.
     void ClearVisual(Player* player, Deck& deck)
     {
-        // The summoned deck is an object of its own: it has to leave with the record, or the
-        // realm keeps a plank standing wherever the rider got off.
-        if (!deck.deckUnit.IsEmpty())
-        {
-            if (Creature* unit = player->GetMap()->GetCreature(deck.deckUnit))
-                unit->DespawnOrUnsummon();
-
-            deck.deckUnit.Clear();
-        }
+        DespawnDeck(deck);
 
         // Always cleared, not just in mount mode: a '.reload config' that switches Render from
         // mount to unit must not leave a mount display on a character that is now on foot.
@@ -265,24 +280,29 @@ namespace
     }
 
     // The ground under a rider, or the rider's own feet when no grid is loaded.
-    float GroundUnder(Player* player, float x, float y)
+    float GroundUnder(Player* player)
     {
         float const z = player->GetPositionZ();
-        float const height = player->GetMap()->GetHeight(x, y, z);
+        float const height = player->GetMap()->GetHeight(player->GetPositionX(), player->GetPositionY(), z);
 
         return height > INVALID_HEIGHT + 1.0f ? height : z;
     }
 
     // The summoned deck. A unit's own model comes from its creature_template, and
-    // Creature::SetDisplayId writes the deck over it, so the carrier is only ever a harmless
-    // template: friendly, unselectable, no AI, no extra flags.
+    // Creature::SetDisplayId writes the deck over it, so the carrier has to be a prop: no AI, no C++
+    // script, nothing an idle object would otherwise be doing. A row with either is not harmless -
+    // 16386 (Necropolis Relay) looks inert in the display columns but carries ScriptName
+    // npc_necropolis_relay, whose AI constructor calls setActive(true), so every rider's deck would
+    // be an always-updated object that keeps its grid loaded.
     void SummonDeck(Player* player, Deck& deck)
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
+        CreatureTemplate const* carrier = sObjectMgr->GetCreatureTemplate(cfg.Carrier);
 
-        if (!sObjectMgr->GetCreatureTemplate(cfg.Carrier))
+        if (!carrier || !carrier->AIName.empty() || carrier->ScriptID != 0)
         {
-            LOG_ERROR("module", "Skateboard: Skateboard.Deck.Carrier {} is not a creature_template row, the deck cannot be summoned.",
+            LOG_ERROR("module", "Skateboard: Skateboard.Deck.Carrier {} is not an inert creature_template row "
+                "(missing, or it has an AIName or a ScriptName), so the deck cannot be summoned.",
                 cfg.Carrier);
             deck.deckUnit.Clear();
             return;
@@ -291,7 +311,7 @@ namespace
         float const x = player->GetPositionX();
         float const y = player->GetPositionY();
 
-        TempSummon* unit = player->SummonCreature(cfg.Carrier, x, y, GroundUnder(player, x, y),
+        TempSummon* unit = player->SummonCreature(cfg.Carrier, x, y, GroundUnder(player),
             player->GetOrientation(), TEMPSUMMON_MANUAL_DESPAWN);
 
         if (!unit)
@@ -312,12 +332,54 @@ namespace
         deck.followNextMs = NowMs() + cfg.FollowMs;
     }
 
+    // The mount render: the deck as UNIT_FIELD_MOUNTDISPLAYID, written through Player::Mount so the
+    // client is sent the mount flag with it.
+    void WriteMount(Player* player, Deck& deck)
+    {
+        Skateboard::Config const& cfg = Skateboard::GetConfig();
+
+        player->Mount(cfg.DeckDisplayId);
+        player->ForceValuesUpdateAtIndex(UNIT_FIELD_MOUNTDISPLAYID);
+
+        deck.displayId = cfg.DeckDisplayId;
+    }
+
+    // Whether the live visual still describes the config - '.reload config' can switch Deck.Render
+    // or land a Deck name on a different display id, and neither retires a deck that is already
+    // drawn. Stateless on purpose: the record stores no copy of what it built.
+    bool VisualStale(Player* player, Deck const& deck, Skateboard::Config const& cfg)
+    {
+        uint32 const field = player->GetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID);
+
+        if (!cfg.RenderUnit)
+            return !player->IsMounted() || field != cfg.DeckDisplayId;
+
+        // Only a mount the module drew counts: a real mount the rider climbed onto mid-ride is
+        // theirs, and the deck is drawn under them anyway.
+        if (field == cfg.DeckDisplayId && player->IsMounted())
+            return true;
+
+        if (deck.deckUnit.IsEmpty())
+            return false;   // Reseat summons it
+
+        Creature* unit = player->GetMap()->GetCreature(deck.deckUnit);
+
+        return unit && unit->GetDisplayId() != cfg.DeckDisplayId;
+    }
+
     // The deck rides under the rider: every FollowMs the unit is put back at the feet it is
     // under. A teleport, not a spline - a flat object under your own feet has nothing to
-    // interpolate, and a spline would keep the deck a step behind at deck speed.
+    // interpolate, and a spline would keep the deck a step behind at deck speed. The window is
+    // armed before the summon, so a carrier that cannot be summoned retries once per FollowMs
+    // rather than once per player update.
     void Reseat(Player* player, Deck& deck, uint32 now)
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
+
+        if (!Reached(now, deck.followNextMs))
+            return;
+
+        deck.followNextMs = now + cfg.FollowMs;
 
         if (deck.deckUnit.IsEmpty())
         {
@@ -325,12 +387,9 @@ namespace
             return;
         }
 
-        if (!Reached(now, deck.followNextMs))
-            return;
-
         Creature* unit = player->GetMap()->GetCreature(deck.deckUnit);
 
-        // A deck that died, despawned or was left on the last map comes back under the rider.
+        // A deck that died or was unloaded comes back under the rider.
         if (!unit)
         {
             deck.deckUnit.Clear();
@@ -338,11 +397,8 @@ namespace
             return;
         }
 
-        float const x = player->GetPositionX();
-        float const y = player->GetPositionY();
-        unit->NearTeleportTo(x, y, GroundUnder(player, x, y), player->GetOrientation());
-
-        deck.followNextMs = now + cfg.FollowMs;
+        unit->NearTeleportTo(player->GetPositionX(), player->GetPositionY(), GroundUnder(player),
+            player->GetOrientation());
     }
 
     // Put the run rate back where the core expects a character on foot to be, and do it from the
@@ -372,50 +428,39 @@ namespace
     // One carry impulse. A player's movement is the client's (MovementHandler.cpp): the server
     // cannot drive a character that is still in control - a relocation is undone by the next
     // movement packet and a server spline is only obeyed by a unit the client has stopped
-    // steering. The client's own knockback channel is the one exception (Unit::KnockbackFrom ->
-    // SMSG_MOVE_KNOCK_BACK), so an idle rider is pushed along the facing with it, one horizontal
-    // impulse at a time. zspeed 0 keeps the deck on the ground and out of HandleFall.
+    // steering (see VerifyMovementInfo, which drops a client's own movement while a spline is
+    // unfinalized). The client's own knockback channel is the one exception (Unit::KnockbackFrom
+    // -> SMSG_MOVE_KNOCK_BACK), so a rider is pushed along the facing with it, one impulse at a
+    // time.
+    //
+    // KnockbackFrom(x, y, speedXY, speedZ) takes the *source* of the knockback, not a direction:
+    // Position::GetSinCos normalizes (thisPosition - source). Passing (cos o, sin o) would push the
+    // rider away from a fixed point near the world origin instead of along the facing, so the
+    // source is placed one yard behind the rider.
+    //
+    // The vertical half is what makes it carry at all: the client's knockback is an arc that lasts
+    // 2 * zspeed / g, and a zspeed of 0 is a horizontal nudge it drops on the spot. The arc is
+    // sized to Drive.ImpulseMs - Drive.GroundMs, and the horizontal speed covers the whole cycle
+    // inside that arc, so the deck averages exactly its own v and the rider stands on the ground
+    // for Drive.GroundMs between impulses - the only window a jump can start in.
     void CarryImpulse(Player* player, Deck& deck, uint32 now)
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
 
-        // The vertical half of the impulse is what makes it carry at all: the client's knockback
-        // is an arc, its length is 2 * zspeed / g, and a zspeed of 0 is a horizontal nudge the
-        // client drops on the spot. Sizing the arc to DriveImpulseMs makes one impulse travel
-        // exactly v * DriveImpulseMs yards, so the average speed over a second is the deck's v.
-        float const seconds = float(cfg.DriveImpulseMs) / 1000.0f;
-        float const zspeed = std::max(0.5f, 0.5f * Skateboard::CLIENT_GRAVITY * seconds);
+        uint32 const cycleMs = cfg.DriveImpulseMs;
+        // At least half the cycle, so a GroundMs an operator set too high cannot turn one impulse
+        // into an unbounded jump: the multiplier is capped at 2.
+        uint32 const arcMs = std::max(cycleMs / 2, cycleMs > cfg.DriveGroundMs ? cycleMs - cfg.DriveGroundMs : 0u);
+        float const arc = float(arcMs) / 1000.0f;
+
+        float const zspeed = std::max(0.5f, 0.5f * Skateboard::CLIENT_GRAVITY * arc);
+        float const speed = deck.v * float(cycleMs) / float(arcMs);
 
         float const o = player->GetOrientation();
-        player->KnockbackFrom(std::cos(o), std::sin(o), deck.v, zspeed);
-        deck.driveNextMs = now + cfg.DriveImpulseMs;
-        deck.lastImpulseMs = now;
-    }
+        player->KnockbackFrom(player->GetPositionX() - std::cos(o), player->GetPositionY() - std::sin(o),
+            speed, zspeed);
 
-    // The second carrier: a short server spline the length of one impulse. The client is the
-    // mover for a player, so this only works while it is not steering - which is exactly when the
-    // carry runs - and if a client ignores a spline on its own character, nothing moves and
-    // Skateboard.Drive.Mode = 1 is the answer. Same rhythm as an impulse, so the knob means the
-    // same thing either way.
-    void CarrySpline(Player* player, Deck& deck, uint32 now)
-    {
-        Skateboard::Config const& cfg = Skateboard::GetConfig();
-        float const o = player->GetOrientation();
-        float const step = deck.v * (float(cfg.DriveImpulseMs) / 1000.0f);
-        float const x = player->GetPositionX() + std::cos(o) * step;
-        float const y = player->GetPositionY() + std::sin(o) * step;
-        float z = player->GetMap()->GetHeight(x, y, player->GetPositionZ());
-
-        if (z <= INVALID_HEIGHT + 1.0f)
-            z = player->GetPositionZ();
-
-        Movement::MoveSplineInit init(player);
-        init.MoveTo(x, y, z);
-        init.SetVelocity(deck.v);
-        init.SetFacing(o);
-        init.Launch();
-
-        deck.driveNextMs = now + cfg.DriveImpulseMs;
+        deck.driveNextMs = now + cycleMs;
         deck.lastImpulseMs = now;
     }
 
@@ -492,17 +537,17 @@ namespace Skateboard
             render = "unit";
         }
         cfg.RenderUnit = render == "unit";
-        cfg.Carrier = sConfigMgr->GetOption<uint32>("Skateboard.Deck.Carrier", 16386);
-        cfg.FollowMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Deck.FollowMs", 100), 20, 1000);
+        cfg.Carrier = sConfigMgr->GetOption<uint32>("Skateboard.Deck.Carrier", 29443);
+        cfg.FollowMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Deck.FollowMs", 40), 20, 1000);
         cfg.PushImpulse = std::clamp(sConfigMgr->GetOption<float>("Skateboard.PushImpulse", 4.0f), 0.0f, 20.0f);
         cfg.FrictionStatic = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Friction.Static", 1.5f), 0.0f, 20.0f);
         cfg.FrictionRolling = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Friction.Rolling", 0.004f), 0.0f, 1.0f);
         cfg.SlopeGain = std::clamp(sConfigMgr->GetOption<float>("Skateboard.SlopeGain", 30.0f), 0.0f, 90.0f);
         cfg.Drive = sConfigMgr->GetOption<bool>("Skateboard.Drive", true);
         cfg.DriveImpulseMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.ImpulseMs", 350), 100, 2000);
+        cfg.DriveGroundMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.GroundMs", 100), 0, 1000);
         cfg.DriveMinSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Drive.MinSpeed", 3.0f), 0.0f, 40.0f);
         cfg.Brake = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Brake", 6.0f), 0.0f, 50.0f);
-        cfg.DriveMode = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.Mode", 1), 1, 2);
         cfg.LandingBonus = std::clamp(sConfigMgr->GetOption<float>("Skateboard.LandingBonus", 2.0f), 0.0f, 20.0f);
         cfg.Tricks = sConfigMgr->GetOption<bool>("Skateboard.Tricks", true);
         cfg.PushHold = sConfigMgr->GetOption<uint32>("Skateboard.Push.Mode", 0) != 0;
@@ -519,6 +564,12 @@ namespace Skateboard
         cfg.Debug = sConfigMgr->GetOption<bool>("Skateboard.Debug", false);
         cfg.TrickList = sConfigMgr->GetOption<std::string>("Skateboard.Trick.List", "kickflip:399:5036, ollie:394:5036, grind:388:5036");
         ParseTricks(cfg.TrickList, cfg.TrickVisualKit, cfg.TrickEntries);
+
+        // The gate the carry opens at can never sit above the floor a deck rolls at, or the config
+        // asks for a boarded deck that never moves: Cruise is applied first, then the gate is
+        // capped by it.
+        if (cfg.Cruise > 0.0f)
+            cfg.DriveMinSpeed = std::min(cfg.DriveMinSpeed, cfg.Cruise);
 
         // The deck is only named here. Resolving it needs CreatureDisplayInfo.dbc, and
         // OnAfterConfigLoad runs before LoadDBCStores (World.cpp:323 against :385), so a lookup
@@ -716,13 +767,13 @@ namespace
         }
         else
         {
-            player->Mount(cfg.DeckDisplayId);
-            player->ForceValuesUpdateAtIndex(UNIT_FIELD_MOUNTDISPLAYID);
+            WriteMount(player, deck);
         }
 
         // A rate of 1.0 is the character's own run speed: SetSpeed() returns without a packet when
-        // the server already holds it, so the gate only arms when a change is actually sent.
-        if (std::fabs(player->GetSpeedRate(MOVE_RUN) - 1.0f) > 0.001f)
+        // the server already holds it, so the gate only arms when a change is actually sent - and
+        // only downwards, so stepping on while snared does not clear the snare.
+        if (player->GetSpeedRate(MOVE_RUN) > 1.0f + 0.01f)
             PublishRate(player, deck, 1.0f, now);
     }
 }
@@ -1136,7 +1187,39 @@ namespace Skateboard
         }
 
         // The deck under the rider: re-seated every FollowMs, first thing, so a freshly boarded
-        // deck exists before anything can move it.
+        // deck exists before anything can move it. A '.reload config' that switched the render or
+        // landed on a different deck id left the live visual describing the old config, so it is
+        // rebuilt here - the ride continues, only the drawing changes.
+        // A '.reload config' unresolves the deck name. A live rider keeps the deck it boarded, so
+        // the name is re-resolved here instead of falling back to the stock log until the next
+        // board.
+        Skateboard::ResolveDeck();
+
+        if (VisualStale(player, deck, cfg))
+        {
+            DespawnDeck(deck);
+
+            // Only the display the module itself drew comes off. In unit mode a real mount the rider
+            // climbed onto is left alone; in mount mode the field is the deck, so it is always taken
+            // back before the new shape is written.
+            if (!cfg.RenderUnit || player->GetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID) == cfg.DeckDisplayId)
+            {
+                player->SetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID, 0);
+                player->ForceValuesUpdateAtIndex(UNIT_FIELD_MOUNTDISPLAYID);
+
+                if (player->IsMounted())
+                    player->Dismount();
+            }
+
+            deck.followNextMs = 0;
+            deck.displayId = cfg.DeckDisplayId;
+
+            if (cfg.RenderUnit)
+                SummonDeck(player, deck);
+            else
+                WriteMount(player, deck);
+        }
+
         if (cfg.RenderUnit)
             Reseat(player, deck, now);
 
@@ -1200,25 +1283,27 @@ namespace Skateboard
         // whether or not a movement key is held, so a boarded character never has to press
         // forward to travel - the client's own walk is only extra if the rider does. Backward is
         // the brake above, and a rooted or stunned rider is not carried: the client would drop
-        // every impulse anyway.
-        if (cfg.Drive && !deck.airborne && deck.v > cfg.DriveMinSpeed &&
+        // every impulse anyway. The gate closes at Drive.MinSpeed, which LoadConfig() caps by
+        // Cruise so a config cannot board a deck that never moves.
+        if (cfg.Drive && !deck.airborne && deck.v > 0.0f && deck.v >= cfg.DriveMinSpeed &&
             !player->HasUnitState(UNIT_STATE_ROOT) && !player->HasUnitState(UNIT_STATE_STUNNED) &&
             Reached(now, deck.driveNextMs))
         {
-            if (cfg.DriveMode == 2)
-                CarrySpline(player, deck, now);
-            else
-                CarryImpulse(player, deck, now);
+            CarryImpulse(player, deck, now);
         }
 
         // The published cap is only the mover when the carry is off. With the carry on, the deck
         // is what travels: the client's own rate stays at 1.0, so a held forward key adds its
         // walk on top of the impulse instead of doubling it, and the ACK gate stays idle
         // (SetSpeed() sends nothing for an unchanged rate).
+        //
+        // The cap only ever lowers the rate: a rider who boards while snared keeps the snare,
+        // because a rate the core already holds below the cap is not raised to it. UpdateSpeed()
+        // puts the rider back when the aura ends.
         float const target = cfg.Drive ? 1.0f : std::max(1.0f, deck.v / BASE_RUN_RATE);
 
         if (deck.pendingAcks == 0 && Reached(now, deck.gateDeadlineMs) &&
-            std::fabs(player->GetSpeedRate(MOVE_RUN) - target) > 0.01f)
+            player->GetSpeedRate(MOVE_RUN) > target + 0.01f)
         {
             PublishRate(player, deck, target, now);
         }
@@ -1559,9 +1644,9 @@ public:
 
         // The carry's knobs ride at the end, after the fields the add-on parses: tuning
         // Skateboard.Drive.* then needs `.reload config` and one look, not a conf file read.
-        handler->PSendSysMessage("boarded={} tricks={} push={} deck={} speed={:.1f} drive={} mode={} impulse={} brake={:.1f}",
+        handler->PSendSysMessage("boarded={} tricks={} push={} deck={} speed={:.1f} drive={} impulse={} ground={} brake={:.1f}",
             boarded, tricks, push, cfg.DeckDisplayId, manager.Speed(player),
-            cfg.Drive ? 1 : 0, cfg.DriveMode, cfg.DriveImpulseMs, cfg.Brake);
+            cfg.Drive ? 1 : 0, cfg.DriveImpulseMs, cfg.DriveGroundMs, cfg.Brake);
         return true;
     }
 

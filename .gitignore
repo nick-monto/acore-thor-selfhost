@@ -33,10 +33,11 @@ state.env
 
 # The rendered conf trees. Both installers accept a root inside a checkout (-Root, --root), and the
 # worldserver.conf they write carries the database password in LoginDatabaseInfo, so a `git add -A`
-# after such a run must not pick it up. Anchored, because nothing in this repo lives at /etc or
-# /configs.
-/etc/
-/configs/
+# after such a run must not pick it up. Unanchored on purpose: an install root inside a checkout is
+# `<root>/etc/...`, which `/etc/` (root only) never matched. Nothing in this repo ships an etc/ or
+# configs/ directory of its own.
+etc/
+configs/
 
 # A .env beside docker/docker-compose.yml holds DB_ROOT_PASS, DB_PASS and ACCOUNT_PASS, and both
 # installers write credentials.txt at their root. Both are secrets, both are created next to the

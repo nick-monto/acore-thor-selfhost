@@ -4,17 +4,18 @@
 # mod-skateboard configuration
 ########################################
 #
-# A skateboard, not a mount: the character keeps walking, and the module turns
-# its run speed into a cap it has to earn while it drives the deck. '.board on'
-# puts a deck under the character, '.board push' kicks the speed up, terrain
-# slope and friction fight it back, and the jump button becomes the trick
-# button. A boarded deck always rolls - Skateboard.Cruise is its floor - so the
-# rider steers and pushes, and never has to hold forward to travel.
+# A skateboard, not a mount: the character keeps walking, and the module gives it
+# a deck to ride. '.board on' puts a deck under the character, '.board push' kicks
+# its speed up, terrain slope and friction fight it back, and the jump button
+# becomes the trick button. A boarded deck always rolls - Skateboard.Cruise is
+# its floor - and Skateboard.Drive is what moves the character: one knockback
+# impulse along the facing every Drive.ImpulseMs, so the rider steers and pushes
+# and never has to hold forward to travel.
 #
 # Nothing here needs a client patch: the stock deck is the "Log Ride" display
 # 26609 that every 3.3.5a client already has. The two wall decks (90001, 90002)
 # only look right once the step-4 DBC patch is installed; until then the module
-# warns once at startup and uses 26609 instead.
+# warns the first time a player boards and uses 26609 instead.
 #
 # Two ways to draw the board (Skateboard.Deck.Render):
 #
@@ -28,12 +29,16 @@
 #           own UpdateSpeed take the mounted branch. The module re-asserts the
 #           rate when it is wiped, so the cap still holds.
 #
-# The speed gate: the cap travels to the client as SMSG_FORCE_RUN_SPEED_CHANGE
-# and the core kicks a client that claims a higher speed than the server holds,
-# so exactly one change is in flight at a time. The gate reopens on the client's
-# ACK, or after Skateboard.AckTimeoutMs if the ACK never comes, and the next
-# send waits 100 ms. On a self-hosted realm the RTT is 1-5 ms, so the deck
-# still updates many times per second.
+# The speed cap: while the deck is the mover the character's own run rate is held
+# at 1.0, and with Skateboard.Drive = 0 the deck speed is published as a run-speed
+# cap instead. Either way the cap only ever lowers the rate: a rider who boards
+# while snared, slowed or otherwise below it keeps that effect, and the core
+# restores the rate when the aura ends. The cap travels to the client as
+# SMSG_FORCE_RUN_SPEED_CHANGE and the core kicks a client that claims a higher
+# speed than the server holds, so exactly one change is in flight at a time. The
+# gate reopens on the client's ACK, or after Skateboard.AckTimeoutMs if the ACK
+# never comes, and the next send waits 100 ms. On a self-hosted realm the RTT is
+# 1-5 ms, so the deck still updates many times per second.
 #
 # Nothing is persisted: the deck lives in memory and is dropped on death,
 # logout, a map change, water, flying, a battleground, an arena and (optionally)
@@ -85,9 +90,9 @@ Skateboard.Deck = engravedwall
 #        unit = summon a creature that carries Skateboard.Deck's display and
 #        follow the rider with it, so the deck is a real object under a standing
 #        character. mount = Unit::Mount(), the deck as a mount display: drawn by
-#        every client, but the rider sits on it. Changing this takes effect on
-#        the next '.board on': a deck already down keeps the shape it was drawn
-#        in, so '.board off' first.
+#        every client, but the rider sits on it. Changing this takes effect at the
+#        next tick: a deck already down is taken away and drawn again in the new
+#        shape, so '.reload config' is enough and an active ride is not lost.
 #        Default: unit, range: unit|mount
 #
 Skateboard.Deck.Render = unit
@@ -96,23 +101,25 @@ Skateboard.Deck.Render = unit
 #    Skateboard.Deck.Carrier
 #        The creature_template row the deck unit is summoned from, in
 #        Deck.Render = unit. The carrier's own model never shows - the deck's
-#        display is written over it - so what matters is that it is harmless:
-#        the default (16386, a friendly, unselectable trigger with no AI and no
-#        extra flags) is one of the stock rows the world database already has,
-#        so the deck needs no SQL.
-#        Default: 16386, range: any creature_template entry
+#        display is written over it - so what matters is that it is inert: no
+#        AIName and no ScriptName, because either gives the deck an AI of its own
+#        (16386 looked harmless but carries the Necropolis Relay script, whose
+#        constructor marks the creature active). The default, 29443, is a stock
+#        display-only prop with neither, so the deck needs no SQL. A row with an
+#        AIName or a ScriptName is refused with one log line and no deck.
+#        Default: 29443, range: any inert creature_template entry
 #
-Skateboard.Deck.Carrier = 16386
+Skateboard.Deck.Carrier = 29443
 
 #
 #    Skateboard.Deck.FollowMs
 #        How often the deck unit is re-seated under the rider, in milliseconds.
-#        100 is one client update: the deck is where the feet are, with no
-#        visible lag at deck speed. Higher costs fewer packets and drags the
-#        deck further behind.
-#        Default: 100, range: 20 - 1000
+#        The deck trails the rider by up to FollowMs x v / 1000 yards: at the
+#        default 40 that is 0.84 yd at the 21 yd/s ceiling and 0.16 yd at cruise,
+#        and at 1000 it is a visible 21 yd. The lower bound is one server tick.
+#        Default: 40, range: 20 - 1000
 #
-Skateboard.Deck.FollowMs = 100
+Skateboard.Deck.FollowMs = 40
 
 #
 #    Skateboard.MaxSpeed
@@ -218,22 +225,26 @@ Skateboard.SlopeGain = 30.0
 Skateboard.Drive = 1
 
 #
-#    Skateboard.Drive.Mode
-#        How the carry reaches the client. 1 = a knockback impulse
-#        (SMSG_MOVE_KNOCK_BACK), the channel a hit uses, so the character
-#        stays in control between impulses. 2 = a short server spline
-#        (SMSG_MONSTER_MOVE) the length of one impulse. A client is the mover
-#        for its own character, so mode 2 is only obeyed while it is not
-#        steering; if nothing moves with 2, 1 is the one that works here.
-#        Default: 1, range: 1 - 2
+#    Skateboard.Drive.GroundMs
+#        How much of each Drive.ImpulseMs cycle the rider spends standing on the
+#        ground, in milliseconds. The impulse is an arc: it takes the rider off
+#        their feet for its own duration, and a jump cannot start in mid-air, so
+#        without this gap the jump button would do nothing on a deck that is
+#        always being carried. The arc keeps its length and covers the whole cycle
+#        (so the deck still averages its own speed), which makes the impulse
+#        ImpulseMs / (ImpulseMs - GroundMs) times faster than the deck: 1.4x at
+#        the defaults. 0 = one continuous glide, and no tricks from a cruising
+#        deck.
+#        Default: 100, range: 0 - 1000
 #
-Skateboard.Drive.Mode = 1
+Skateboard.Drive.GroundMs = 100
 
 #
 #    Skateboard.Drive.ImpulseMs
-#        Milliseconds between carry impulses. The duration of one impulse is
-#        the client's, so this is the knob that matches it: too long and the
-#        glide stutters, too short and the rider never gets steering back.
+#        Milliseconds between carry impulses - one cycle of the carry. Each impulse
+#        is an arc sized to ImpulseMs - GroundMs, and the arc's length is the
+#        client's, so this is the knob that matches it: too long and the glide
+#        stutters, too short and the rider never gets steering back.
 #        Default: 350, range: 100 - 2000
 #
 Skateboard.Drive.ImpulseMs = 350
@@ -241,7 +252,9 @@ Skateboard.Drive.ImpulseMs = 350
 #
 #    Skateboard.Drive.MinSpeed
 #        Below this deck speed, in yd/s, the carry stops, so a nearly stopped
-#        deck does not crawl its rider forward.
+#        deck does not crawl its rider forward. It is capped by Skateboard.Cruise:
+#        a gate above the floor a boarded deck rolls at would be a deck that boards
+#        and never moves.
 #        Default: 3.0, range: 0.0 - 40.0
 #
 Skateboard.Drive.MinSpeed = 3.0

@@ -79,8 +79,8 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Enable=1"
     "Skateboard.Deck=engravedwall"
     "Skateboard.Deck.Render=unit"
-    "Skateboard.Deck.Carrier=16386"
-    "Skateboard.Deck.FollowMs=100"
+    "Skateboard.Deck.Carrier=29443"
+    "Skateboard.Deck.FollowMs=40"
     "Skateboard.MaxSpeed=21.0"
     "Skateboard.Cruise=4.0"
     "Skateboard.PushImpulse=4.0"
@@ -91,8 +91,8 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Friction.Rolling=0.004"
     "Skateboard.SlopeGain=30.0"
     "Skateboard.Drive=1"
-    "Skateboard.Drive.Mode=1"
     "Skateboard.Drive.ImpulseMs=350"
+    "Skateboard.Drive.GroundMs=100"
     "Skateboard.Drive.MinSpeed=3.0"
     "Skateboard.Brake=6.0"
     "Skateboard.LandingBonus=2.0"
@@ -240,8 +240,9 @@ survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one t
 skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is one the module accepts
     # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s, PushImpulse
     # and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain 0-90, the
-    # hold-to-pump mode 0|1, its interval 100-2000 ms and cap 100-5000 ms, the carry mode 1-2,
-    # impulse 100-2000 ms, its floor 0-40 yd/s and the brake 0-50 yd/s^2, the visual kit
+    # hold-to-pump mode 0|1, its interval 100-2000 ms and cap 100-5000 ms, the carry
+    # impulse 100-2000 ms and its ground gap 0-1000 ms, its floor 0-40 yd/s and the brake
+    # 0-50 yd/s^2, the visual kit
     # 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000 ms and the ACK
     # timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is settled
     # before the numeric guard below can see it. The momentum keys carry decimals, so the
@@ -281,8 +282,8 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
         Skateboard.Friction.Static)  lo=0;  hi=20 ;;
         Skateboard.Friction.Rolling) lo=0;  hi=1 ;;
         Skateboard.SlopeGain)        lo=0;  hi=90 ;;
-        Skateboard.Drive.Mode)       lo=1;  hi=2 ;;
         Skateboard.Drive.ImpulseMs)  lo=100; hi=2000 ;;
+        Skateboard.Drive.GroundMs)   lo=0;  hi=1000 ;;
         Skateboard.Drive.MinSpeed)   lo=0;  hi=40 ;;
         Skateboard.Brake)            lo=0;  hi=50 ;;
         Skateboard.LandingBonus)     lo=0;  hi=20 ;;
@@ -588,20 +589,35 @@ wc_write_all() {
     fi
     if [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf" ]; then
         sb="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-skateboard)"
-        # The shipped .dist already holds these values, and Skateboard.Enable ships as 0: the board
-        # exists but nobody is on it until the player turns it on. Each key is still read back,
-        # because a key the module cannot use is silently replaced by its own fallback and a deck id
-        # the DBC does not carry falls back to the stock display. Only a value outside its range is
-        # rewritten - a deliberate Enable=0 is left alone.
+        # The shipped .dist already holds these values, and Skateboard.Enable ships as 1: the board
+        # is available from the first boot. Each key is still read back, because a key the module
+        # cannot use is silently replaced by its own fallback and a deck id the DBC does not carry
+        # falls back to the stock display. Only a value outside its range is rewritten - a
+        # deliberate Enable=0 is left alone.
         # The combat rule used to be Skateboard.OffInCombat, which nothing reads now: the start of a
         # fight leaves the deck alone and a hit takes it (OffOnHit). A leftover key would sit in the
         # live file looking like it still did something.
         sed -i -E '/^[[:space:]]*Skateboard\.OffInCombat[[:space:]]*=/d' "$sb"
+        # Drive.Mode went with the spline carrier: a spline on the player's own character makes the
+        # core drop their movement packets while it runs (VerifyMovementInfo), which is the opposite
+        # of what the carry needs. The key would sit in the live file looking like a choice.
+        sed -i -E '/^[[:space:]]*Skateboard\.Drive\.Mode[[:space:]]*=/d' "$sb"
+        # MountedPose was the mount render's "seat the rider" switch, folded into Render = mount: a
+        # conf that still sets it to 1 looks like it draws the sitting deck and does not.
+        sed -i -E '/^[[:space:]]*Skateboard\.MountedPose[[:space:]]*=/d' "$sb"
+        # 16386 was the shipped carrier until it turned out to carry ScriptName npc_necropolis_relay,
+        # whose constructor marks every summoned deck active. The module refuses a scripted row, so
+        # an upgraded conf that still names it is migrated - otherwise the deck stops appearing and
+        # only the log says why.
+        if [ "$(wc_get_conf "$sb" Skateboard.Deck.Carrier)" = 16386 ]; then
+            wc_warn "mod-skateboard.conf: Skateboard.Deck.Carrier 16386 is scripted (npc_necropolis_relay), using 29443"
+            wc_set_conf "$sb" Skateboard.Deck.Carrier 29443
+        fi
         conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
         # WC_SKATEBOARD is how a container or the Thor asks for the board on a given boot. The conf
         # is rendered from the .dist every start, and the container's /opt/acore/etc is part of the
         # image layer rather than a volume, so a hand edit there is gone at the next rebuild: the
-        # dial is what survives. Unset leaves the shipped default (off).
+        # dial is what survives. Unset leaves the shipped default (on).
         case "${WC_SKATEBOARD:-}" in
             0|1) wc_set_conf "$sb" Skateboard.Enable "$WC_SKATEBOARD" ;;
             '') ;;

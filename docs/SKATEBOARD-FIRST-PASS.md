@@ -17,7 +17,7 @@ Confidence: **[V]** verified here from source, artifact or API, **[R]** reported
 
 | Piece | Kind | First pass | Why |
 |---|---|---|---|
-| `modules/mod-skateboard` | C++ module | **yes** | every authoritative decision: the speed cap, the integrator, airtime, tricks, crash |
+| `modules/mod-skateboard` | C++ module | **yes** | every authoritative decision: the integrator, the carry impulse, airtime, tricks, crash |
 | `conf/mod-skateboard.conf.dist` | config | **yes** | all tuning; no SQL, nothing stored |
 | `scripts/client-patch/patch_client_dbc.py` | DBC + MPQ | **yes** | the two deck rows, in the same patch archive the realm already ships for `Item.dbc` |
 | launcher add-on (Lua) | client-side | **yes — activation, bar and HUD** | `SetBindingClick` puts a named action in the *stock* Key Bindings frame, and the bar and HUD are pure Lua; nothing else can do either (§2.9) |
@@ -90,14 +90,18 @@ move, so the deck also **carries** an idle rider (`Skateboard.Drive`): one horiz
 the facing every `Skateboard.Drive.ImpulseMs`, through the client's own knockback channel
 (`Unit::KnockbackFrom` → `SMSG_MOVE_KNOCK_BACK`).
 
-Two carriers exist because the second one's client behaviour cannot be checked offline:
-`Skateboard.Drive.Mode = 1` is the knockback, `2` is a short `SMSG_MONSTER_MOVE` spline the length of
-one impulse, taken by the core's own `UpdateSplineMovement` so the server position follows it. If a
-client ignores a spline addressed to its own character, nothing moves and mode 1 is the answer.
-
-That channel is the only one that moves a character the client still controls. A relocation is
+The knockback is the only channel that moves a character the client still controls. A relocation is
 undone by the next movement packet, and a server spline is obeyed only by a unit the client has
-stopped steering (`Unit::KnockbackFrom` states the rule for feared/confused units: the *client* is
+stopped steering - the core even drops a player's own movement while one runs (`VerifyMovementInfo`
+rejects packets while `!movespline->Finalized()`), which is why the spline carrier this module shipped
+first was removed rather than kept as a `Drive.Mode`.
+
+`KnockbackFrom(x, y, speedXY, speedZ)` takes the *source* of the knockback, not a direction: the core
+normalizes `thisPosition - source` in `Position::GetSinCos`, so a source one yard behind the rider is
+what makes the impulse run along the facing. The vertical half sizes the arc (`2 * speedZ / g`, so
+`Drive.ImpulseMs - Drive.GroundMs`), and the horizontal half covers the whole cycle inside it, which
+keeps the deck's average at its own `v` and leaves `Drive.GroundMs` of standing per cycle - the only
+window a jump can start in (`Unit::KnockbackFrom` states the rule for feared/confused units: the *client* is
 what moves a controlled unit, so the server either sends it a movement message or takes control
 away). The impulse keeps the character in control, so forward still pumps (the cap), backward still
 brakes, and the camera still steers between impulses. `zspeed = 0` keeps the impulse horizontal:
@@ -175,13 +179,15 @@ is ever boarded.
 | `Skateboard.Enable` | 1 | whole feature |
 | `Skateboard.Deck` | `engravedwall` | `engravedwall` (90001, the flat shield) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id |
 | `Skateboard.Deck.Render` | `unit` | §2.5: `unit` summons the deck under a standing rider, `mount` is the sitting fallback |
-| `Skateboard.Deck.Carrier` / `.FollowMs` | `16386` / `100` | the stock creature template the deck is summoned from (`unit` mode), and how often it is re-seated |
+| `Skateboard.Deck.Carrier` / `.FollowMs` | `29443` / `40` | the inert stock creature template the deck is summoned from (`unit` mode; a row with an `AIName` or a `ScriptName` is refused), and how often it is re-seated |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
+| `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
+| `Skateboard.Drive` / `.ImpulseMs` / `.GroundMs` / `.MinSpeed` / `.Brake` | 1 / 350 / 100 / 3.0 / 6.0 | the carry: one knockback impulse per cycle along the facing, the gap the rider stands in, the speed the carry opens at (capped by `Cruise`) and the backward-key brake |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Push.Mode` | 0 | 0 = one kick per press, 1 = hold to pump (`push down` / `push up` from the add-on), one kick every `Push.IntervalMs`, capped by `Push.MaxHoldMs` |
 | `Skateboard.Push.IntervalMs` / `.MaxHoldMs` | 500 / 2000 | the pump's rhythm and its lost-`up` backstop |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
-| `Skateboard.SlopeGain` | 9.0 | multiplier on the terrain gradient |
+| `Skateboard.SlopeGain` | 30.0 | multiplier on the terrain gradient, sampled 6 yd ahead |
 | `Skateboard.LandingBonus` | 2.0 | `v` added by a clean landing |
 | `Skateboard.Tricks` | 1 | auto tricks on take-off, and the bar's trick slots |
 | `Skateboard.Trick.VisualKit` | 5036 | default stock `SpellVisualKit` id for a list entry without its own, 0 = no flair |
@@ -344,11 +350,11 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | boot | worldserver with the module | `Skateboard: <enabled|disabled> (deck '<name>', resolved on the first board).`, conf read, zero ERROR lines |
 | deck | `.board on` | the deck renders under the player, standing rider (`Deck.Render = unit`) |
 | activation | bind a key to `Skateboard` in the stock Key Bindings frame, press it | boards, and a second press leaves; the same action appears in `/cp` for a pad button; `/say .board toggle` works with the add-on removed from the folder (a bare `/say .board` prints the subcommand list) |
-| momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts to a stop in ~8 s; `Debug` line shows `v`, slope and rate agreeing |
-| cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, rate within 0.01 of target between changes |
-| carry | push on flat ground, then release every key | the deck keeps rolling; `Drive.ImpulseMs` 250-500 matches the impulse's own duration without a stutter |
+| momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts down to `Cruise` in ~8 s and never below it; `Debug` line shows `v`, slope and rate agreeing |
+| cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, the rate never above the target the module holds (the cap only lowers) |
+| carry | board on flat ground and release every key | the rider travels along their own facing, in arcs of `Drive.ImpulseMs - Drive.GroundMs` with a standing gap between them; `Drive.ImpulseMs` 250-500 matches the impulse's own duration without a stutter |
 | brake | at 15+ yd/s, hold backward | `v` falls to 0 in a couple of seconds and the cap follows; no `Incorrect speed` kick from the backward walk |
-| tricks | jump while boarded | one clip per take-off, clean landing adds `v`, mistimed landing crashes once |
+| tricks | jump while boarded (the `Drive.GroundMs` gap is the window) | one clip per take-off, clean landing adds `v`, mistimed landing crashes once |
 | cleanup | logout, die, change map, `.board off` | no `UNIT_FIELD_MOUNTDISPLAYID` left, no state left in the map |
 | bar | click the add-on's board button, then its push button | boards and pushes the same as the bindings, and the first button becomes `Bail` while boarded; a trick slot the module has not advertised is hidden rather than failing |
 | HUD | ride boarded with `Debug` on | the readout's `cap` matches the `Debug` line's `v` (it comes from the status poll, so it lags a poll); its speed half is `GetUnitSpeed`, which reads 0 at a standstill, so the two numbers together say whether the deck is moving |
@@ -393,6 +399,6 @@ inside step 3's bar rather than a step of its own.
 The vehicle route is out of the plan, not deferred to a step: revisiting it means new `Spell.dbc`
 rows and a retarget of the physics (§2.9).
 
-Step 1 without step 4 is the whole experiment: if a stock log and a speed cap do not feel like
-skating, the decks do not matter, and step 4 is two DBC rows and a tool change away from being
+Step 1 without step 4 is the whole experiment: if a stock log under a carried rider does not feel
+like skating, the decks do not matter, and step 4 is two DBC rows and a tool change away from being
 irrelevant.

@@ -60,7 +60,7 @@ from the player's point of view.
 
 | Term | Rule | Why it reads right |
 |---|---|---|
-| Slope | sample `GetGridHeight` 2 yd ahead and behind along the last movement heading; `a = -g · (dz/ds)` | downhill keeps speed without input, uphill bleeds it — needs no input data |
+| Slope | sample `GetGridHeight` 6 yd ahead along the heading; `a = -SlopeGain · (dz / 6)` | downhill keeps speed without input, uphill bleeds it — needs no input data |
 | Rolling friction | `a -= c0 + c1·v²` with `c0 ≈ 1.5`, `c1 ≈ 0.004` | a long, believable coast to a stop; `v²` makes the loss felt only at speed |
 | Push | a command/spell impulse `+4 yd/s`, capped | one "kick" per second, not a hold-to-accelerate |
 | Airtime | while `MOVEMENTFLAG_FALLING` is set, no friction, no slope; `v` frozen | air keeps speed, so ramp landings carry it |
@@ -84,7 +84,8 @@ still yields tens of updates per second; over a WAN it would degrade to RTT cade
   (`VerifyMovementInfo` rejects movement while `!movespline->Finalized()`,
   `MovementHandler.cpp:543-547`) [V].
 - **No input magnitude.** The server sees positions and flags, never the stick. `v` is decayed by
-  friction, not by "the player let go", so the feel is a speed cap the player leans into.
+  friction, not by "the player let go"; what the rider feels is the carry (§3), one knockback arc
+  per `Drive.ImpulseMs`, not a cap they lean into.
 - **No wall collisions.** Collision is client-side; the server only samples terrain height.
 
 ## 4. The board itself
@@ -253,13 +254,16 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | Key | Default | Meaning |
 |---|---|---|
 | `Skateboard.Enable` | 1 | whole feature |
-| `Skateboard.Deck` | `log` | `log` is 26609, the stock `Log Ride (Log A)`; `engravedwall` and `coffinlid` are the two shield ids |
+| `Skateboard.Deck` | `engravedwall` | `engravedwall` (90001) and `coffinlid` (90002) are the two shield ids; `log` is 26609, the stock `Log Ride (Log A)` |
 | `Skateboard.BoardCastMs` | 2000 | boarding delay; nothing is written until it completes, and the add-on's bar is driven by the module's own `c` push rather than by the status poll |
 | `Skateboard.OffOnHit` | 1 | a hit from another unit takes the deck; the start of a fight does not, and neither does fall damage |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s ceiling |
+| `Skateboard.Deck.Render` / `.Carrier` / `.FollowMs` | `unit` / 29443 / 40 | the deck as a summoned unit under a standing rider; the carrier must be an inert template (no `AIName`, no `ScriptName`), and the re-seat interval sets how far the deck trails |
+| `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
+| `Skateboard.Drive` / `.ImpulseMs` / `.GroundMs` / `.MinSpeed` / `.Brake` | 1 / 350 / 100 / 3.0 / 6.0 | the carry: one knockback impulse along the facing per cycle, the standing gap in it, the speed the carry opens at (capped by `Cruise`) and the brake |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
-| `Skateboard.SlopeGain` | 9.0 | multiplier on the terrain gradient |
+| `Skateboard.SlopeGain` | 30.0 | multiplier on the terrain gradient, sampled 6 yd ahead |
 | `Skateboard.Crash.Enable` | 1 | mistimed landing costs health |
 | `Skateboard.HardcoreSafe` | 1 | a crash can never kill a Hardcore character (§9) |
 
@@ -286,7 +290,7 @@ moves the physics onto a vehicle creature. The cost table is in
 | **Hardcore character crashes** | `mod-hardcore` turns any death into permadeath; with `Skateboard.HardcoreSafe = 1` a crash damage tick cannot bring health below 1 |
 | Bots | playerbots are real `Player` objects; gate on a real session so no bot is ever "boarded" |
 | Aura refresh wipes the cap | re-assert on drift (§4) |
-| Player stands still at high `v` | friction still bleeds `v`; momentum is a cap, so nothing else is needed |
+| Player stands still at high `v` | friction still bleeds `v` down to `Skateboard.Cruise`, and the carry is what moves the character; `Drive = 0` goes back to a cap the rider leans into |
 
 ## 10. Verification plan
 

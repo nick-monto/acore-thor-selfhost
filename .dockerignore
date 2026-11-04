@@ -30,6 +30,15 @@ scripts/**
 *.zip
 *.tar
 *.sha256
+
+# Secrets that sit beside the tree when the docs are followed from here: -Root/--root stage, the
+# compose .env, and the credentials file both installers write. The daemon is often remote
+# (DOCKER_HOST), so anything left in the context leaves the machine.
+.env
+state.env
+credentials.txt
+.thor-state
+.win-state
 __pycache__/
 *.py[cod]
 .DS_Store

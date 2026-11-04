@@ -308,8 +308,8 @@ $SkateboardConfDefaults = @(
     'Skateboard.Enable=1'
     'Skateboard.Deck=engravedwall'
     'Skateboard.Deck.Render=unit'
-    'Skateboard.Deck.Carrier=16386'
-    'Skateboard.Deck.FollowMs=100'
+    'Skateboard.Deck.Carrier=29443'
+    'Skateboard.Deck.FollowMs=40'
     'Skateboard.MaxSpeed=21.0'
     'Skateboard.Cruise=4.0'
     'Skateboard.PushImpulse=4.0'
@@ -320,8 +320,8 @@ $SkateboardConfDefaults = @(
     'Skateboard.Friction.Rolling=0.004'
     'Skateboard.SlopeGain=30.0'
     'Skateboard.Drive=1'
-    'Skateboard.Drive.Mode=1'
     'Skateboard.Drive.ImpulseMs=350'
+    'Skateboard.Drive.GroundMs=100'
     'Skateboard.Drive.MinSpeed=3.0'
     'Skateboard.Brake=6.0'
     'Skateboard.LandingBonus=2.0'
@@ -1280,33 +1280,50 @@ function Test-SkateboardValueOk {
     # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s,
     # PushImpulse and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain
     # 0-90, the visual kit 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000
-    # ms and the ACK timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is
-    # settled before the numeric guard can see it; the momentum keys carry decimals, so the
+    # ms and the ACK timeout 50-5000 ms. Deck and Deck.Render are names, not ranges, so both are
+    # settled before the numeric guard can see them; the momentum keys carry decimals, so the
     # comparison is a double, not an int64.
     if ($Key -ceq 'Skateboard.Deck') {
         if ($Value -ceq 'log' -or $Value -ceq 'engravedwall' -or $Value -ceq 'coffinlid') { return $true }
-        if ($Value -notmatch '^[0-9]+$') { return $false }
+        if ($Value -notmatch '^[0-9]{1,12}$') { return $false }
         return ([int64]$Value -gt 0)
+    }
+    if ($Key -ceq 'Skateboard.Deck.Render') { return ($Value -ceq 'unit' -or $Value -ceq 'mount') }
+    if ($Key -ceq 'Skateboard.Trick.List') {
+        # A list, not a number: `name:emote[:kit]` entries separated by commas, settled here so the
+        # numeric guard below never sees it. The module drops an entry it cannot use, so anything
+        # with a colon is accepted - without this branch the shipped list was "unusable" and was
+        # rewritten on every -Repair.
+        return ($Value -cmatch ':')
     }
     # The switches are checked as text first: an integer-only guard would accept 1.0, which the
     # core's sConfigMgr does not read as a switch.
     if (@('Skateboard.Enable', 'Skateboard.Tricks', 'Skateboard.Crash.Enable',
-          'Skateboard.HardcoreSafe', 'Skateboard.OffOnHit', 'Skateboard.Debug') -ccontains $Key) {
+          'Skateboard.HardcoreSafe', 'Skateboard.OffOnHit', 'Skateboard.Debug',
+          'Skateboard.Drive') -ccontains $Key) {
         return ($Value -ceq '0' -or $Value -ceq '1')
     }
-    if ($Value -notmatch '^[0-9]+(\.[0-9]+)?$') { return $false }
+    # Bounded digits, so a value pasted out of a log cannot hand an unbounded string to Parse (and
+    # to the $ErrorActionPreference = 'Stop' abort that follows a throw).
+    if ($Value -notmatch '^[0-9]{1,12}(\.[0-9]{1,6})?$') { return $false }
     $n = [double]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture)
-    if ($Key -ceq 'Skateboard.Deck.Render') { return ($Value -ceq 'unit' -or $Value -ceq 'mount') }
     if ($Key -ceq 'Skateboard.Deck.Carrier') { return ($n -ge 1 -and $n -le 4294967295) }
+    if ($Key -ceq 'Skateboard.Push.Mode') { return ($n -eq 0 -or $n -eq 1) }
     switch -CaseSensitive ($Key) {
         'Skateboard.BoardCastMs' { return ($n -ge 0 -and $n -le 10000) }
         'Skateboard.MaxSpeed' { return ($n -ge 1 -and $n -le 40) }
         'Skateboard.Cruise' { return ($n -ge 0 -and $n -le 20) }
         'Skateboard.Deck.FollowMs' { return ($n -ge 20 -and $n -le 1000) }
         'Skateboard.PushImpulse' { return ($n -ge 0 -and $n -le 20) }
+        'Skateboard.Push.IntervalMs' { return ($n -ge 100 -and $n -le 2000) }
+        'Skateboard.Push.MaxHoldMs' { return ($n -ge 100 -and $n -le 5000) }
         'Skateboard.Friction.Static' { return ($n -ge 0 -and $n -le 20) }
         'Skateboard.Friction.Rolling' { return ($n -ge 0 -and $n -le 1) }
         'Skateboard.SlopeGain' { return ($n -ge 0 -and $n -le 90) }
+        'Skateboard.Drive.ImpulseMs' { return ($n -ge 100 -and $n -le 2000) }
+        'Skateboard.Drive.GroundMs' { return ($n -ge 0 -and $n -le 1000) }
+        'Skateboard.Drive.MinSpeed' { return ($n -ge 0 -and $n -le 40) }
+        'Skateboard.Brake' { return ($n -ge 0 -and $n -le 50) }
         'Skateboard.LandingBonus' { return ($n -ge 0 -and $n -le 20) }
         'Skateboard.Trick.VisualKit' { return ($n -ge 0 -and $n -le 100000) }
         'Skateboard.Crash.DamagePct' { return ($n -ge 0 -and $n -le 99) }
@@ -2190,6 +2207,16 @@ function Write-Configs {
         # it (Skateboard.OffOnHit). Nothing reads the old key, so it is deleted rather than left
         # looking live.
         Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.OffInCombat$'
+        Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.Drive\.Mode$'
+        # MountedPose was the mount render's seat switch, folded into Render = mount.
+        Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.MountedPose$'
+        # 16386 was the shipped carrier until it turned out to carry ScriptName npc_necropolis_relay,
+        # which marks every summoned deck active. The module refuses a scripted row, so an upgraded
+        # conf that still names it is migrated instead of boarding an invisible deck.
+        if ((Get-Conf $sb 'Skateboard.Deck.Carrier') -eq '16386') {
+            Warn 'mod-skateboard.conf: Skateboard.Deck.Carrier 16386 is scripted (npc_necropolis_relay), using 29443'
+            Set-Conf -File $sb -Key 'Skateboard.Deck.Carrier' -Value '29443'
+        }
         Set-ConfDefaults -File $sb -Check { param($k, $v) Test-SkateboardValueOk -Key $k -Value $v } `
             -Label 'mod-skateboard.conf' -Defaults $SkateboardConfDefaults
         Log ("mod-skateboard.conf: Enable={0} Deck={1} MaxSpeed={2} Crash.Enable={3}" -f `
@@ -3536,13 +3563,13 @@ function Invoke-Checks {
         # bad means it says something the module will not take.
         # Keys the module stopped reading: deleted by Write-Configs, reported here so an install
         # that is never reinstalled loses them on its first -Repair instead.
-        $sbRetired = @(Get-ConfKeysMatching -File $sb -KeyPattern '^Skateboard\.OffInCombat$')
+        $sbRetired = @(Get-ConfKeysMatching -File $sb -KeyPattern '^Skateboard\.(OffInCombat|Drive\.Mode|MountedPose)$')
         if ($sbRetired.Count -gt 0) {
-            Bad ("mod-skateboard.conf: retired key(s) still present: {0} (the hit rule replaced them)" -f ($sbRetired -join ', '))
+            Bad ("mod-skateboard.conf: retired key(s) still present: {0} (the hit rule and the spline carrier replaced them)" -f ($sbRetired -join ', '))
             if ($Fix) {
                 $script:Fixes = $script:Fixes + 1
-                Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.OffInCombat$'
-                Ok 'retired skateboard key removed'
+                Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.(OffInCombat|Drive\.Mode|MountedPose)$'
+                Ok 'retired skateboard key(s) removed'
             }
         }
         $sbAbsent = @()
