@@ -63,14 +63,25 @@ env:
   # The three dependency versions. They appear in a URL, in an install path and in the cache key;
   # the dependency step fails if BOOST_ROOT and BOOST_VERSION disagree rather than letting CMake
   # find an empty Boost.
-  BOOST_VERSION: 1.87.0
+  # Boost comes from the project's own GitHub release for this version - a tagged asset whose
+  # digest GitHub records at upload - and the libraries CMake links are built from it in the step
+  # below. The SourceForge installer this replaced was prebuilt, but it is a third-party mirror
+  # with no checksum of any kind, and an installer fetched from it is executed on the runner.
+  # pins.toml [artifact.win64.build_deps] is the source of truth for both hashes; these are copies,
+  # the same way CORE_COMMIT and PLAYERBOTS_COMMIT copy the commits there.
+  BOOST_VERSION: 1.89.0
   BOOST_MSVC: "14.3"
+  BOOST_SHA256: 5613e5fec10165940084ac85f3011bfffe56967231b08c29939c8b35817b005a
   # deps/boost/CMakeLists.txt:13-20 (WIN32) forces Boost_USE_STATIC_LIBS ON and reads Boost_ROOT
   # out of the environment. Environment lookups are case-insensitive on Windows, so BOOST_ROOT
-  # satisfies that ENV{Boost_ROOT} lookup; 1.87.0 is the version that block's minimum (1.78)
-  # accepts and the one upstream CI installs.
-  BOOST_ROOT: C:\local\boost_1_87_0
+  # satisfies that ENV{Boost_ROOT} lookup; 1.89.0 is above that block's minimum (1.78). Headers
+  # are at <root>\boost, libraries at <root>\stage\lib, which is one of the layouts FindBoost
+  # searches under Boost_ROOT.
+  BOOST_ROOT: C:\local\boost_1_89_0
   MYSQL_VERSION: 8.4.9
+  # The archive behind MYSQL_VERSION, hashed here and confirmed against the md5 Oracle publishes
+  # beside it. It is linked into worldserver.exe, so the bytes are checked, not assumed.
+  MYSQL_SHA256: 5795ba250e89290f7507ed3bcc6a655be373616abb58b877acdea71e1b8f4e8c
 
 jobs:
   build:
@@ -84,19 +95,19 @@ jobs:
       # patches/ and the custom SQL under sql/custom/; the core and mod-playerbots are fetched at
       # their pinned commits below.
       - name: Checkout this repository (module source)
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803   # v6
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      # Boost's installer is ~200 MB and the MySQL zip ~250 MB, both of which have to be
-      # downloaded and unpacked again on every run otherwise. The key carries both versions, so a
+      # The Boost source tree (99 MB, built once) and the MySQL zip (250 MB), both of which would
+      # otherwise be downloaded and built again on every run. The key carries both versions, so a
       # version bump in env: above misses the cache instead of restoring the wrong Boost.
       - name: Cache Boost and the MySQL client
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830   # v4
         with:
           path: |
-            C:\local\boost_1_87_0
+            C:\local\boost_1_89_0
             C:\tools\mysql\current
           key: win64-deps:boost-${{ env.BOOST_VERSION }}:mysql-${{ env.MYSQL_VERSION }}
 
@@ -107,45 +118,30 @@ jobs:
           function Fail([string]$message) { Write-Host "::error::$message"; exit 1 }
 
           # The runner image already carries CMake, Visual Studio 2022 (with MSVC and the Windows
-          # SDK) and OpenSSL, so the missing pieces are Boost's prebuilt binaries and the MySQL
-          # client library. Both are fetched directly instead of through chocolatey: upstream
-          # dropped that route because its pinned packages kept breaking CI, and the versions here
-          # have to match what CMake is told to link two steps below.
+          # SDK) and OpenSSL, so the missing pieces are Boost's libraries and the MySQL client
+          # library. Both are fetched directly instead of through chocolatey: upstream dropped that
+          # route because its pinned packages kept breaking CI, and the versions here have to match
+          # what CMake is told to link two steps below.
 
           # --- Boost <version> (msvc-<msvc>, 64-bit) -> $env:BOOST_ROOT ---
-          # downloads.sourceforge.net hands out an https mirror. master.dl redirects to plain http,
-          # which PowerShell 7.4+ refuses to follow - and an installer we then execute should not
-          # travel in the clear anyway. SourceForge also sniffs the user agent: anything starting
-          # with Mozilla gets the HTML download page instead of the file, so send a non-browser one.
-          # (The MySQL CDN below needs the opposite; see there.)
+          # The release asset is a source tree; deps/boost/CMakeLists.txt:42 needs filesystem,
+          # program_options, iostreams, regex and (with modules) thread, so those five are built
+          # with b2 and nothing else. runtime-link=shared matches Boost_USE_STATIC_RUNTIME OFF
+          # there: static libraries, /MD CRT. The whole tree is what actions/cache keeps, so this
+          # runs once per BOOST_VERSION.
           $boostTag = 'boost_' + ($env:BOOST_VERSION -replace '\.', '_')
           if ((Split-Path $env:BOOST_ROOT -Leaf) -ne $boostTag) {
             Fail "BOOST_ROOT ($env:BOOST_ROOT) does not match the Boost version ($boostTag); they have to move together"
           }
           $boostHeaders = Join-Path $env:BOOST_ROOT 'boost\version.hpp'
-          $boostLibs = Join-Path $env:BOOST_ROOT "lib64-msvc-$($env:BOOST_MSVC)"
+          $boostLibs = Join-Path $env:BOOST_ROOT 'stage\lib'
           if (-not ((Test-Path $boostHeaders) -and (Test-Path $boostLibs))) {
-            $boostExe = Join-Path $env:RUNNER_TEMP 'boost.exe'
-            $boostUrl = "https://downloads.sourceforge.net/project/boost/boost-binaries/$($env:BOOST_VERSION)/$boostTag-msvc-$($env:BOOST_MSVC)-64.exe"
-            # OperationTimeoutSeconds is the one that catches a mirror going quiet mid-transfer,
-            # which would otherwise hang the job until the runner limit. It is not a whole-transfer
-            # budget: a slow mirror can legitimately need 15+ minutes for 200 MB.
-            $boostRequest = @{
-              Uri                      = $boostUrl
-              OutFile                  = $boostExe
-              UserAgent                = 'acore-thor-selfhost-ci'
-              ConnectionTimeoutSeconds = 60
-              OperationTimeoutSeconds  = 60
-            }
+            $boostZip = Join-Path $env:RUNNER_TEMP 'boost-src.zip'
+            $boostUrl = "https://github.com/boostorg/boost/releases/download/boost-$($env:BOOST_VERSION)/boost-$($env:BOOST_VERSION)-b2-nodocs.zip"
             $boostAttempts = 3
             for ($boostAttempt = 1; $boostAttempt -le $boostAttempts; $boostAttempt++) {
               try {
-                Invoke-WebRequest @boostRequest
-                # A mirror can answer 200 with an error page, which does not throw. Size-check
-                # inside the loop so a bad payload retries onto a different mirror instead of
-                # failing the job on the first one.
-                $boostMb = (Get-Item $boostExe).Length / 1MB
-                if ($boostMb -lt 50) { throw "got $([int]$boostMb) MB, which is an error page, not the installer" }
+                Invoke-WebRequest -Uri $boostUrl -OutFile $boostZip -UserAgent 'acore-thor-selfhost-ci'
                 break
               } catch {
                 Write-Host "boost download attempt $boostAttempt failed: $($_.Exception.Message)"
@@ -153,17 +149,56 @@ jobs:
                 Start-Sleep -Seconds 15
               }
             }
-            Write-Host ("downloaded the Boost installer: {0:N1} MB" -f $boostMb)
-            # Splatted rather than continued with backticks: one trailing space after a backtick
-            # silently drops every argument that follows it.
-            $boostStart = @{
-              FilePath     = $boostExe
-              ArgumentList = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$($env:BOOST_ROOT)")
-              Wait         = $true
-              PassThru     = $true
+            $boostHash = (Get-FileHash -LiteralPath $boostZip -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($boostHash -ne $env:BOOST_SHA256) {
+              Fail "the Boost archive hashes to $boostHash, not the pinned $($env:BOOST_SHA256); refusing to build against it"
             }
-            $boostProc = Start-Process @boostStart
-            if ($boostProc.ExitCode -ne 0) { Fail "the Boost installer exited $($boostProc.ExitCode)" }
+            Write-Host ("boost: source archive sha256 {0} matches the pin" -f $boostHash)
+            # The archive's own top directory is not named the way this job names the tree (the
+            # release asset says 1.89.0, BOOST_ROOT says boost_1_89_0), so it is unpacked aside and
+            # moved into place rather than trusted to land where FindBoost looks.
+            $boostStage = Join-Path $env:RUNNER_TEMP 'boost-src'
+            Expand-Archive -Path $boostZip -DestinationPath $boostStage -Force
+            $boostTop = @(Get-ChildItem -LiteralPath $boostStage -Directory)
+            if ($boostTop.Count -ne 1) { Fail "the Boost archive should hold one top-level directory, found $($boostTop.Count)" }
+            New-Item -ItemType Directory -Force -Path (Split-Path $env:BOOST_ROOT -Parent) | Out-Null
+            Move-Item -LiteralPath $boostTop[0].FullName -Destination $env:BOOST_ROOT
+            if (-not (Test-Path $boostHeaders)) { Fail "the Boost archive did not unpack to $env:BOOST_ROOT" }
+            # bootstrap.bat builds b2 with the toolset this step already runs under; it is faster
+            # and far smaller than building every library. It and b2 both run from the tree root.
+            # Neither works without cl.exe on PATH, so the MSVC environment is entered here the way
+            # the DLL-bundling step locates the tools two steps down: through vswhere.
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (-not (Test-Path $vswhere)) { Fail 'vswhere.exe is missing; the MSVC tools cannot be located' }
+            $vsRoot = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+            if (-not $vsRoot) { Fail 'vswhere found no Visual Studio installation with the MSVC x64 tools' }
+            Import-Module (Join-Path $vsRoot 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+            Enter-VsDevShell -VsInstallPath $vsRoot -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+            Push-Location -LiteralPath $env:BOOST_ROOT
+            try {
+              & '.\bootstrap.bat'
+              if ($LASTEXITCODE -ne 0) { Fail "boost: bootstrap.bat exited $LASTEXITCODE" }
+              $b2Args = @(
+                "-j$($env:NUMBER_OF_PROCESSORS)"
+                "toolset=msvc-$($env:BOOST_MSVC)"
+                'address-model=64'
+                'architecture=x86'
+                'link=static'
+                'runtime-link=shared'
+                'threading=multi'
+                'variant=release'
+                '--with-filesystem'
+                '--with-program_options'
+                '--with-iostreams'
+                '--with-regex'
+                '--with-thread'
+                'stage'
+              )
+              & '.\b2.exe' @b2Args
+              if ($LASTEXITCODE -ne 0) { Fail "boost: b2 exited $LASTEXITCODE" }
+            } finally {
+              Pop-Location
+            }
           } else {
             Write-Host "boost: cache hit at $env:BOOST_ROOT"
           }
@@ -171,15 +206,15 @@ jobs:
           # and an installer can report success without laying down the tree. Both halves are
           # required - headers alone mean nothing to link, libraries alone make find_package fail.
           if (-not (Test-Path $boostHeaders)) { Fail "no Boost headers at $boostHeaders" }
-          if (-not (Test-Path $boostLibs)) { Fail "no prebuilt Boost libraries at $boostLibs" }
+          if (-not (Test-Path $boostLibs)) { Fail "no Boost libraries at $boostLibs" }
           $boostLibCount = @(Get-ChildItem -LiteralPath $boostLibs -File | Where-Object Name -like '*.lib').Count
+          if ($boostLibCount -eq 0) { Fail "no .lib files in $boostLibs; b2 left nothing to link" }
           Write-Host "boost: $env:BOOST_ROOT ($boostLibCount .lib files)"
 
           # --- MySQL <version> client -> C:\tools\mysql\current ---
           # The archives CDN is used on purpose: dev.mysql.com/get only serves the current GA, so a
           # pinned version would start 404ing as soon as MySQL releases. Oracle's CDN answers a
-          # non-browser user agent with an HTML error page, so this request *needs* Mozilla/5.0 -
-          # the opposite of the SourceForge rule above.
+          # non-browser user agent with an error page, so this request *needs* Mozilla/5.0.
           # lib\mysqlclient.lib is the static client library, which is what the app links
           # (FindMySQL.cmake:200-215 finds `libmysql` and the configure step passes the file
           # outright); bin\mysql.exe is kept as the proof that this is the full server package and
@@ -204,6 +239,8 @@ jobs:
                 Invoke-WebRequest @mysqlRequest
                 $mysqlMb = (Get-Item $mysqlZip).Length / 1MB
                 if ($mysqlMb -lt 50) { throw "got $([int]$mysqlMb) MB, which is an error page, not the archive" }
+                # The hash is checked after the loop; this only retries a CDN that answered 200
+                # with an error page instead of the archive.
                 break
               } catch {
                 Write-Host "mysql download attempt $mysqlAttempt failed: $($_.Exception.Message)"
@@ -212,6 +249,11 @@ jobs:
               }
             }
             Write-Host ("downloaded the MySQL zip: {0:N1} MB" -f $mysqlMb)
+            $mysqlHash = (Get-FileHash -LiteralPath $mysqlZip -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($mysqlHash -ne $env:MYSQL_SHA256) {
+              Fail "the MySQL zip hashes to $mysqlHash, not the pinned $($env:MYSQL_SHA256); refusing to link it"
+            }
+            Write-Host ("mysql: sha256 {0} matches the pin" -f $mysqlHash)
             New-Item -ItemType Directory -Force -Path 'C:\tools\mysql' | Out-Null
             Expand-Archive -Path $mysqlZip -DestinationPath 'C:\tools\mysql' -Force
             $mysqlExtracted = "C:\tools\mysql\mysql-$($env:MYSQL_VERSION)-winx64"
@@ -748,7 +790,7 @@ jobs:
           }
           Write-Host "the artifact unpacks to the flat layout the installer expects"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: acore-server-win64
           path: |

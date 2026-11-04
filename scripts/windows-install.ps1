@@ -128,7 +128,13 @@
 .PARAMETER MysqlUrl
     The portable MySQL zip. Default: MySQL 8.4.9 winx64 from the MySQL CDN archives. It is
     unpacked into <root>\mysql and never installed system-wide, so the host's own MySQL is
-    left alone.
+    left alone. The archive is verified against -MysqlSha256 before it is unpacked, and a URL
+    other than the default needs a hash given with it: the installer will not run a mysqld it
+    cannot name.
+
+.PARAMETER MysqlSha256
+    SHA-256 of the archive given by -MysqlUrl. Default: the hash of the default 8.4.9 winx64
+    zip. Required when -MysqlUrl names another archive.
 
 .PARAMETER Docker
     Install, inspect, repair and remove the realm as two containers (an image built from
@@ -193,6 +199,7 @@ param(
     [string]$ClientData = '',
     [int]$BootTimeout = 1800,
     [string]$MysqlUrl = 'https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.9-winx64.zip',
+    [string]$MysqlSha256 = '',
     [switch]$Docker,
     [string]$DockerDir = '',
     [string]$SelfRef = 'main',
@@ -215,6 +222,11 @@ $DataUrl = 'https://github.com/wowgaming/client-data/releases/download/v20.0/dat
 $DataSha256 = 'a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610'
 $MysqlUrlDefault = 'https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.9-winx64.zip'
 $MysqlVersion = '8.4.9'
+# The archive above, hashed here and confirmed against the md5 Oracle publishes beside it
+# (fe14853279d1704e0f0eb253ea8c8d33). What this installer unpacks and executes as mysqld is the file
+# the hash names, not whatever the CDN or a DNS answer hands back. pins.toml records the same value
+# and scripts/check-pins.py fails when the copies drift.
+$MysqlSha256Default = '5795ba250e89290f7507ed3bcc6a655be373616abb58b877acdea71e1b8f4e8c'
 $DbPort = 3306
 $AuthPort = 3724
 $WorldPort = 8085
@@ -359,6 +371,8 @@ $script:ClientData = $ClientData
 $script:PythonProblem = ''
 $script:BootTimeout = $BootTimeout
 $script:MysqlUrl = $MysqlUrl
+$script:MysqlSha256Given = [bool]$MysqlSha256
+$script:MysqlSha256 = if ($MysqlSha256) { $MysqlSha256.ToLowerInvariant() } else { $MysqlSha256Default }
 $script:Docker = [bool]$Docker
 $script:DockerDir = $DockerDir
 $script:HordeRatio = $HordeRatio
@@ -1909,11 +1923,19 @@ function Install-MySql {
             Note "unpack it into $script:MysqlDir, dropping the versioned top directory"
             return
         }
+        if ($script:MysqlUrl -ne $MysqlUrlDefault -and -not $script:MysqlSha256Given) {
+            Die ("-MysqlUrl names another archive, so -MysqlSha256 has to say which bytes are trusted: pass the SHA-256 of {0}, or leave -MysqlUrl alone to use the pinned {1}" -f $script:MysqlUrl, $MysqlVersion)
+        }
         $zip = Join-Path $env:TEMP 'mysql-winx64.zip'
         Log "downloading $script:MysqlUrl"
         if (-not (Get-RemoteFile -Uri $script:MysqlUrl -Destination $zip)) {
             Die "download failed: $script:MysqlUrl"
         }
+        $zipHash = Get-Sha256 -Path $zip
+        if ($zipHash -ne $script:MysqlSha256) {
+            Die ("the MySQL archive hashes to {0}, not the pinned {1} - refusing to unpack a binary this install cannot name ({2})" -f $zipHash, $script:MysqlSha256, $script:MysqlUrl)
+        }
+        Log ("sha256 {0} matches the pin" -f $zipHash)
         $stage = Join-Path $env:TEMP ('acore-mysql-' + [Guid]::NewGuid().ToString('N'))
         Expand-ZipFile -Zip $zip -Destination $stage
         # The zip carries one directory named after the version (mysql-8.4.9-winx64); the layout

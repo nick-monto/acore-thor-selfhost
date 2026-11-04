@@ -88,8 +88,26 @@ installer = "scripts/windows-install.ps1"
 # so a second latest release would silently break every Thor install.
 
 [artifact.win64.build_deps]
-boost = { version = "1.87.0", variants = "msvc-14.3, 64-bit" }
-mysql = { version = "8.4.9", package = "portable winx64 zip", use = "client library to build; server binaries to install" }
+# Both are fetched by server-win64.yml and by scripts/windows-install.ps1, and both are checked
+# against the sha256 here before anything is executed or linked: an installer or a .lib that a
+# mirror controls is a poisoned artifact for everyone who runs the installer.
+
+[artifact.win64.build_deps.boost]
+version = "1.89.0"
+url = "https://github.com/boostorg/boost/releases/download/boost-1.89.0/boost-1.89.0-b2-nodocs.zip"
+sha256 = "5613e5fec10165940084ac85f3011bfffe56967231b08c29939c8b35817b005a"
+digest = "GitHub's recorded digest for the release asset - the source archive, not a prebuilt installer"
+use = "source tree; server-win64.yml builds filesystem, program_options, iostreams, regex and thread with b2, runtime-link=shared to match Boost_USE_STATIC_RUNTIME OFF"
+were = "downloads.sourceforge.net boost-binaries 1.87.0 msvc-14.3 installer: a third-party mirror that publishes no checksum of any kind"
+
+[artifact.win64.build_deps.mysql]
+version = "8.4.9"
+url = "https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.9-winx64.zip"
+sha256 = "5795ba250e89290f7507ed3bcc6a655be373616abb58b877acdea71e1b8f4e8c"
+md5_published = "fe14853279d1704e0f0eb253ea8c8d33"
+sha256_source = "computed from a download whose md5 matched the sidecar Oracle publishes beside the zip"
+use = "client library to build; server binaries to install"
+
 # OpenSSL is not pinned: the windows-2022 runner image supplies it.
 
 [artifact.x86_64]
@@ -117,6 +135,7 @@ compose = "docker/docker-compose.yml"
 services = ["db", "acore"]                             # mysql:8.4 (healthcheck, no published port), the built image
 volumes = ["db", "data", "logs", "state"]              # mysql data; client data; logs; first-boot marker
 ports = [3724, 8085]                                   # auth, world; the database is compose-network only
+bind = "127.0.0.1 (BIND_HOST defaults to loopback; windows-install.ps1 sets 0.0.0.0 only for -LanIp)"
 payload = { amd64 = "acore-server-x86_64.tar.zst", arm64 = "acore-server-arm64.tar.zst", select = "TARGETARCH" }
 conf_writer = "scripts/write-confs.sh"                 # wc_write_all: the same writer thor-install.sh calls
 # A rebuild is a download, not a compile: the image unpacks the artifact at /opt/acore and checks

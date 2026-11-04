@@ -50,7 +50,7 @@ jobs:
       # This repository is checked out for the modules under modules/; the core and
       # mod-playerbots are still fetched at their pinned commits below.
       - name: Checkout this repository (module source)
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803   # v6
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -401,7 +401,7 @@ jobs:
       # v5 still runs on Node 20 by default; v6 and v7 are the node24 majors. v7 wants a runner
       # of at least 2.327.1, which only concerns self-hosted runners. name/path/retention-days
       # are unchanged; v7's new inputs (archive, overwrite) are opt-in.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7
         with:
           name: acore-server-arm64
           path: |

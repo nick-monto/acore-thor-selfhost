@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout this repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803   # v6
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -60,6 +60,12 @@ jobs:
           print(f"PB_REPO={pins['module']['playerbots']['repo']}")
           print(f"PB_COMMIT={pins['module']['playerbots']['commit']}")
           PY
+
+      - name: The build-dependency pins agree in all three places
+        # pins.toml records them, server-win64.yml checks them in CI, and windows-install.ps1 checks
+        # them on the user's machine before it unpacks the same archive. The comparison lives in
+        # scripts/check-pins.py so it can be run here without CI.
+        run: python3 scripts/check-pins.py
 
       - name: Dependency headers
         # Headers only. Nothing is compiled to an object file and nothing is linked, so
@@ -132,7 +138,7 @@ jobs:
 
     steps:
       - name: Checkout this repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803   # v6
         with:
           fetch-depth: 1
           persist-credentials: false
