@@ -22,11 +22,11 @@
 #
 # Two ways to draw the board (Skateboard.Deck.Render):
 #
-#   unit  - the deck is a creature summoned under the rider and re-seated at the
-#           feet every Skateboard.Deck.FollowMs. The rider stands on it, and
-#           every client draws a creature display. This is the default, because
-#           the client draws no mount model for a unit without UNIT_FLAG_MOUNT
-#           (playtested: the field alone shows nothing).
+#   unit  - the deck is a creature summoned under the rider and walked after them
+#           in Skateboard.Deck.FollowMs spline segments. The rider stands on it,
+#           and every client draws a creature display. This is the default,
+#           because the client draws no mount model for a unit without
+#           UNIT_FLAG_MOUNT (playtested: the field alone shows nothing).
 #   mount - the older path: Unit::Mount(). The deck is drawn for certain, but
 #           the client seats the rider on it and the mount flag makes the core's
 #           own UpdateSpeed take the mounted branch. The module re-asserts the
@@ -121,10 +121,19 @@ Skateboard.Deck.Carrier = 29443
 
 #
 #    Skateboard.Deck.FollowMs
-#        How often the deck unit is re-seated under the rider, in milliseconds.
-#        The deck trails the rider by up to FollowMs x v / 1000 yards: at the
-#        default 40 that is 0.84 yd at the 21 yd/s ceiling and 0.16 yd at cruise,
-#        and at 1000 it is a visible 21 yd. The lower bound is one server tick.
+#        Length of one deck-follow segment, in milliseconds. The deck is moved
+#        with a spline onto the rider's own path, one segment chained onto the
+#        last rather than relaunched over it, and each target is the rider's
+#        position projected one segment ahead - and, while the rider is moving,
+#        past the half second a client can go between movement packets, because
+#        until the next packet lands the server only knows where the rider was.
+#        The projection is the carry's own speed while the deck is what moves
+#        the rider, and the measured packet-to-packet speed when they are
+#        walking. A segment that is still running when the next probe comes
+#        round is left to finish: relaunching it mid-path is what made the deck
+#        jitter at the rider's heels. Lower costs more spline launches (a probe
+#        every quarter of this value), higher smooths the deck but makes it
+#        slower to follow a turn.
 #        Default: 40, range: 20 - 1000
 #
 Skateboard.Deck.FollowMs = 40
@@ -211,8 +220,10 @@ Skateboard.Friction.Rolling = 0.004
 #        Multiplier on the terrain gradient under the character's heading,
 #        sampled over 6 yd ahead, and the term that makes hills mean something:
 #        at 30.0 a 10% downhill adds 3 yd/s^2 and a 10% uphill takes the same
-#        away, so a long slope is felt within a second or two. 0 = flat ground
-#        everywhere. Only terrain, never vmaps.
+#        away, so a long slope is felt within a second or two. 0 = the deck does
+#        not accelerate from a slope - the carry's arc is still tilted by the
+#        gradient, because that is what keeps the rider on the surface rather
+#        than what makes the hill fast. Only terrain, never vmaps.
 #        Default: 30.0, range: 0.0 - 90.0
 #
 Skateboard.SlopeGain = 30.0
@@ -222,8 +233,8 @@ Skateboard.SlopeGain = 30.0
 #        The carry, which is what moves a boarded character. A player's movement
 #        belongs to the client, so the server cannot simply move a character
 #        that is still in control; the one channel the client obeys is its own
-#        knockback, so the deck is pushed one horizontal impulse along the
-#        facing every Drive.ImpulseMs at the deck's current speed. It runs
+#        knockback, so the deck is pushed one impulse along the facing every
+#        Drive.ImpulseMs at the deck's current speed. It runs
 #        whether or not a movement key is held: forward is not needed to travel
 #        (the client's own walk is only extra), backward brakes
 #        (Skateboard.Brake), and a rooted or stunned rider is not carried. 0
@@ -237,12 +248,17 @@ Skateboard.Drive = 1
 #        How the carry moves the rider.
 #          0 - knockback kicks: one SMSG_MOVE_KNOCK_BACK impulse per cycle. The
 #              rider keeps client control between impulses, so steering is
-#              instant, but the impulse is horizontal by construction: a deck
-#              under it runs straight through a downhill instead of down it, and
-#              each impulse restarts the client's arc.
+#              instant, and a jump can start in the gap GroundMs leaves. The arc
+#              is tilted by the terrain gradient along the heading, so it lands
+#              back on the surface after ArcMs on a hill as well as on the flat:
+#              without the tilt a rise cut the arc short (at speed it cut it to
+#              nothing - the rider stood still at 0 yd/s) and a drop let it sail.
+#              A slope the arc cannot follow, a steep descent at speed, hands the
+#              rider a longer flight, and that flight is what the trick window
+#              covers.
 #          1 - server spline: each segment is a polyline the server samples along
-#              the terrain, so the path follows the hill. The core drops the
-#              client's own movement while a player's spline is unfinalized
+#              the terrain, so the path follows the hill exactly. The core drops
+#              the client's own movement while a player's spline is unfinalized
 #              (VerifyMovementInfo), so the rider steers *between* segments -
 #              Drive.SplineMs is how often that chance comes - and no jump or
 #              trick can start during one.
@@ -257,10 +273,13 @@ Skateboard.Drive.Mode = 0
 #        milliseconds - the vertical half of Drive.Mode = 0. The arc is what makes
 #        the impulse carry at all (a zspeed of 0 is a nudge the client drops on
 #        the spot), and its height grows with the square of this value: 250 ms is
-#        about 0.3 yd, 120 ms about 0.06 yd. Shorter reads as a flatter glide and
-#        needs a shorter ImpulseMs to stay continuous. 0 derives it from
-#        Drive.ImpulseMs - Drive.GroundMs. Nothing inside the arc is a trick:
-#        that window is how the module tells the carry from a jump.
+#        about 0.3 yd, 120 ms about 0.06 yd. The arc is tilted by the gradient, so
+#        this is its length on a hill too; a descent too steep for the tilt to
+#        follow extends the flight, and the extended flight replaces the window.
+#        Shorter reads as a flatter glide and needs a shorter ImpulseMs to stay
+#        continuous. 0 derives it from Drive.ImpulseMs - Drive.GroundMs. Nothing
+#        inside the arc is a trick: that window is how the module tells the carry
+#        from a jump.
 #        Default: 0, range: 0 - Drive.ImpulseMs
 #
 Skateboard.Drive.ArcMs = 0

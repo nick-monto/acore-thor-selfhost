@@ -6,13 +6,16 @@
  * the one channel that moves a character the client still controls. The carry
  * runs every Drive.ImpulseMs whatever the client is doing, so a boarded
  * character needs no key at all: forward only adds the client's own walk on top,
- * and backward is the brake (Skateboard.Brake). With Drive = 0 the module
- * publishes a run-speed cap instead, which is the older path and needs the
- * forward key.
+ * and backward is the brake (Skateboard.Brake). The impulse's arc is tilted by
+ * the terrain gradient along the heading, because the client ends a knockback
+ * where the arc meets the ground: a level arc is cut to nothing by a rise (the
+ * rider stands still while the deck reports Cruise) and outlives the cycle on a
+ * drop. With Drive = 0 the module publishes a run-speed cap instead, which is
+ * the older path and needs the forward key.
  *
  *   - '.board on' puts a deck *under* the character. Skateboard.Deck.Render =
  *     unit (the default) summons a creature carrying the deck display and
- *     re-seats it under the rider's feet, because the client draws no mount
+ *     walks it under the rider's feet, because the client draws no mount
  *     model for a unit without UNIT_FLAG_MOUNT, and the flag would sit the
  *     rider. Render = mount is the older path: Unit::Mount(), a drawn deck and
  *     a sitting rider.
@@ -166,8 +169,16 @@ namespace Skateboard
         uint32 pushHeldSinceMs = 0;     // when the hold started, for Push.MaxHoldMs
         uint32 driveNextMs = 0;         // next carry impulse (Skateboard.Drive)
         uint32 impulseArcMs = 0;        // how long the last impulse keeps the rider off their feet
-        uint32 followNextMs = 0;        // next re-seat of the summoned deck
+        uint32 followNextMs = 0;        // next probe of the deck follow (FollowMs/4, or FollowMs after a failed summon)
         ObjectGuid deckUnit;            // the summoned deck (Skateboard.Deck.Render = unit)
+        float velX = 0.0f;              // the rider's measured ground velocity, yd/s
+        float velY = 0.0f;
+        float lastX = 0.0f;             // the position of the last measured change
+        float lastY = 0.0f;
+        uint32 sampleMs = 0;            // when the last measured position change happened
+        uint32 lastPacketMs = 0;        // when the client last told us where it is (Manager::OnMove)
+        bool havePos = false;           // lastX/lastY hold a sample worth differencing
+        float grade = 0.0f;             // terrain gradient along the heading, uphill positive
         uint32 lastImpulseMs = 0;       // the last carry impulse, to tell a glide's fall from a jump
         uint32 castDeadlineMs = 0;      // boarding cast in flight (0 = none, nothing written yet)
         float castX = 0.0f;             // where the cast started, to catch a step

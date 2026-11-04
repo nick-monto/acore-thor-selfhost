@@ -1368,6 +1368,9 @@ function Test-SkateboardValueOk {
         'Skateboard.Friction.Rolling' { return ($n -ge 0 -and $n -le 1) }
         'Skateboard.SlopeGain' { return ($n -ge 0 -and $n -le 90) }
         'Skateboard.Drive.ImpulseMs' { return ($n -ge 100 -and $n -le 2000) }
+        'Skateboard.Drive.Mode' { return ($n -eq 0 -or $n -eq 1) }
+        'Skateboard.Drive.ArcMs' { return ($n -ge 0 -and $n -le 2000) }
+        'Skateboard.Drive.SplineMs' { return ($n -ge 50 -and $n -le 1000) }
         'Skateboard.Drive.GroundMs' { return ($n -ge 0 -and $n -le 1000) }
         'Skateboard.Drive.MinSpeed' { return ($n -ge 0 -and $n -le 40) }
         'Skateboard.Brake' { return ($n -ge 0 -and $n -le 50) }
@@ -2262,7 +2265,6 @@ function Write-Configs {
         # it (Skateboard.OffOnHit). Nothing reads the old key, so it is deleted rather than left
         # looking live.
         Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.OffInCombat$'
-        Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.Drive\.Mode$'
         # MountedPose was the mount render's seat switch, folded into Render = mount.
         Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.MountedPose$'
         # 16386 was the shipped carrier until it turned out to carry ScriptName npc_necropolis_relay,
@@ -3633,12 +3635,12 @@ function Invoke-Checks {
         # bad means it says something the module will not take.
         # Keys the module stopped reading: deleted by Write-Configs, reported here so an install
         # that is never reinstalled loses them on its first -Repair instead.
-        $sbRetired = @(Get-ConfKeysMatching -File $sb -KeyPattern '^Skateboard\.(OffInCombat|Drive\.Mode|MountedPose)$')
+        $sbRetired = @(Get-ConfKeysMatching -File $sb -KeyPattern '^Skateboard\.(OffInCombat|MountedPose)$')
         if ($sbRetired.Count -gt 0) {
-            Bad ("mod-skateboard.conf: retired key(s) still present: {0} (the hit rule and the spline carrier replaced them)" -f ($sbRetired -join ', '))
+            Bad ("mod-skateboard.conf: retired key(s) still present: {0} (the hit rule and the mount render replaced them)" -f ($sbRetired -join ', '))
             if ($Fix) {
                 $script:Fixes = $script:Fixes + 1
-                Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.(OffInCombat|Drive\.Mode|MountedPose)$'
+                Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.(OffInCombat|MountedPose)$'
                 Ok 'retired skateboard key(s) removed'
             }
         }

@@ -6,8 +6,9 @@
  * either bookkeeping around that one number (`Deck::v`) or safety around the
  * one dangerous operation (publishing it as a run speed rate). The deck does
  * carry an idle rider, but through the client's own knockback channel - one
- * horizontal impulse along the facing per Skateboard.Drive.ImpulseMs - never
- * by relocating or spline-moving a character that the client still controls.
+ * impulse along the facing per Skateboard.Drive.ImpulseMs, its arc tilted by the
+ * terrain gradient so it lands back on the slope it left - never by relocating
+ * or spline-moving a character that the client still controls.
  *
  *   - '.board on' refuses a long list of situations first (dead, already
  *     boarded, in combat, mounted, on a vehicle, flying, in water, a
@@ -17,8 +18,9 @@
  *     teleport drops the request instead of having something to take back. The
  *     bar is the add-on's, fed by an unsolicited 'c' push. Boarding puts the
  *     deck under the rider as a summoned creature (Skateboard.Deck.Render =
- *     unit), re-seated at the feet every Deck.FollowMs: the client draws no
- *     mount model for a unit without UNIT_FLAG_MOUNT, and the flag would sit
+ *     unit), followed with Deck.FollowMs-long spline segments aimed a segment
+ *     ahead of the rider: the client draws no mount model for a unit without
+ *     UNIT_FLAG_MOUNT, and the flag would sit
  *     the rider, so the deck is an object of its own and the rider stands on
  *     it. Render = mount keeps the older Unit::Mount() path.
  *   - Every PlayerScript update integrates the deck: terrain gradient under the
@@ -72,6 +74,7 @@
 #include "SharedDefines.h"
 #include "TemporarySummon.h"
 #include "Unit.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
@@ -336,6 +339,14 @@ namespace
 
         deck.deckUnit = unit->GetGUID();
         deck.followNextMs = NowMs() + cfg.FollowMs;
+
+        // A deck that has just appeared is under the rider: no packet has described them yet, and
+        // the follow must not project a stale position it has never been told.
+        deck.lastPacketMs = NowMs();
+        deck.sampleMs = NowMs();
+        deck.havePos = false;
+        deck.velX = 0.0f;
+        deck.velY = 0.0f;
     }
 
     // The mount render: the deck as UNIT_FIELD_MOUNTDISPLAYID, written through Player::Mount so the
@@ -373,12 +384,89 @@ namespace
         return unit && unit->GetDisplayId() != cfg.DeckDisplayId;
     }
 
-    // The deck rides under the rider: every FollowMs the unit is put back at the feet it is
-    // under. A spline rather than a relocate: NearTeleportTo sends an uninterpolated teleport, so at
-    // 25 object updates a second the client snapped the deck from point to point and it read as the
-    // deck chasing the rider. A segment whose velocity covers FollowMs is interpolated by the
-    // client instead, so the two move together. The window is armed before the summon, so a carrier
-    // that cannot be summoned retries once per FollowMs rather than once per player update.
+    // The rider's own ground velocity, measured from *position changes*, not from the tick. The
+    // server's copy of a client-driven player only steps when a movement packet lands
+    // (MovementHandler.cpp:434), so one tick can carry half a second of travel: dividing by the
+    // 10 ms tick would report fifty times the real speed, and a guard that rejected that would
+    // never accept a sample at all. Each delta is therefore divided by the time since the last
+    // change, and the follow projects off the result.
+    void MeasureRider(Player* player, Deck& deck, uint32 now)
+    {
+        float const x = player->GetPositionX();
+        float const y = player->GetPositionY();
+
+        // Standing still is a fact the client states with a stop opcode, not something to infer from
+        // a timeout: a walking rider's position only steps on packets too. The last speed is bled
+        // off rather than zeroed, so the carry's own standing gap between impulses (100 ms by
+        // default) does not wipe the estimate it is about to need again, while a parked rider's
+        // deck stops being led forward. The clock for both is the packet clock, because the sample
+        // clock below is re-armed on every tick here, and the next sample has to be measured from
+        // the start rather than from the last packet before the stop.
+        if (!player->isMoving())
+        {
+            if (uint32 const still = now - deck.lastPacketMs; still > 100)
+            {
+                deck.velX *= 0.5f;
+                deck.velY *= 0.5f;
+            }
+
+            deck.lastX = x;
+            deck.lastY = y;
+            deck.sampleMs = now;
+            deck.havePos = true;
+            return;
+        }
+
+        if (deck.havePos && x == deck.lastX && y == deck.lastY)
+            return;
+
+        if (deck.havePos)
+        {
+            float const dx = x - deck.lastX;
+            float const dy = y - deck.lastY;
+            uint32 const elapsed = now - deck.sampleMs;
+
+            if (elapsed > 0)
+            {
+                float const dt = float(elapsed) / 1000.0f;
+
+                // A packet interval is already an average of the rider's travel, so the newest
+                // delta is the best estimate available; smoothing it again would cost a second and
+                // a half of convergence, and the follow is a projection off this number.
+                if (std::sqrt(dx * dx + dy * dy) / dt < 40.0f)
+                {
+                    deck.velX = dx / dt;
+                    deck.velY = dy / dt;
+                }
+                else
+                {
+                    deck.velX = 0.0f;
+                    deck.velY = 0.0f;
+                }
+            }
+        }
+
+        deck.lastX = x;
+        deck.lastY = y;
+        deck.sampleMs = now;
+        deck.havePos = true;
+    }
+
+    // The deck rides under the rider. A spline rather than a relocate: NearTeleportTo sends an
+    // uninterpolated teleport, so at 25 object updates a second the client snapped the deck from
+    // point to point and it read as the deck chasing the rider.
+    //
+    // A segment is chained onto the end of the last one, never launched over it. Relaunching every
+    // FollowMs regardless of whether the previous segment had finished is what "the board catches
+    // up" was: each launch restarted the client's interpolation from an intermediate point, 25
+    // times a second, so the deck could never finish a path and jittered at the rider's heels
+    // instead of travelling with them.
+    //
+    // The target is the rider's position projected a segment ahead - the segment's own travel time
+    // plus however stale the last movement packet is - so the deck arrives under the feet at any
+    // speed. Aimed at where the rider is, it arrives where the rider was, which is the trailing
+    // board the playtest saw. The velocity it projects with is the carry's own v while the deck is
+    // what moves the rider, and the packet-to-packet measurement otherwise.
     void Reseat(Player* player, Deck& deck, uint32 now)
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
@@ -386,11 +474,17 @@ namespace
         if (!Reached(now, deck.followNextMs))
             return;
 
-        deck.followNextMs = now + cfg.FollowMs;
+        // Probed every FollowMs/4, not every FollowMs: a segment's cadence is how long the spline
+        // takes, and the gate below decides that. FollowMs is the *length* of a segment.
+        deck.followNextMs = now + std::max<uint32>(cfg.FollowMs / 4, 1);
 
         if (deck.deckUnit.IsEmpty())
         {
             SummonDeck(player, deck);
+
+            // A carrier that cannot be summoned fails with a log line, and retrying that every
+            // probe would be a line per tick: a missing carrier retries once per FollowMs.
+            deck.followNextMs = now + cfg.FollowMs;
             return;
         }
 
@@ -401,24 +495,102 @@ namespace
         {
             deck.deckUnit.Clear();
             SummonDeck(player, deck);
+            deck.followNextMs = now + cfg.FollowMs;
             return;
         }
 
-        float const x = player->GetPositionX();
-        float const y = player->GetPositionY();
-        float const z = GroundUnder(player);
-
-        // Standing still: nothing to interpolate, and a zero-length spline is a teleport anyway.
-        if (unit->GetExactDist2dSq(x, y) < 0.0025f)
+        // A segment that is still running owns the deck: look again next tick rather than replacing
+        // it. One creature lookup per tick, and only for a boarded player.
+        if (!unit->movespline->Finalized())
         {
-            unit->NearTeleportTo(x, y, z, player->GetOrientation());
+            deck.followNextMs = now + std::max<uint32>(cfg.FollowMs / 4, 1);
+            return;
+        }
+
+        float const seconds = float(cfg.FollowMs) / 1000.0f;
+        // The server advances a spline once per map tick, so a segment sized to exactly FollowMs
+        // finishes a tick after the next probe and the deck creeps behind by one tick of its own
+        // speed every segment. Cover the path a tick early instead; the next segment then starts
+        // from under the rider rather than from behind them. The tick is the world's own
+        // MapUpdateInterval (worldserver.conf.dist, reloadable), not a constant.
+        float const tick = std::clamp(float(sWorld->getIntConfig(CONFIG_INTERVAL_MAPUPDATE)) / 1000.0f, 0.001f, 0.5f);
+        float const travel = std::max(seconds - tick, seconds * 0.5f);
+
+        // What the rider's velocity is, and how stale the server's copy of them is.
+        //
+        // The server's position for a moving player is the last *reported* one: the client sends a
+        // movement opcode when it starts and a heartbeat every half second after it, which is
+        // exactly why the core's own follower predicts a player half a second ahead
+        // (TargetedMovementGenerator.cpp:522). Aimed at the reported position, the deck would sit
+        // where the rider was up to half a second ago - ten yards at MaxSpeed - and then lunge
+        // after each packet, so the target is a projection.
+        //
+        // While the carry is what moves the rider, the module already knows the velocity without
+        // measuring: it is v along the facing, its own model of the impulse. That covers the
+        // heartbeat gap and the carry's standing gap, where a measured delta is either absent or
+        // about to be replaced. A rider walking on their own is measured from the packets
+        // (MeasureRider), and a rider standing still projects nothing.
+        float const o = player->GetOrientation();
+        bool const carryLive = cfg.Drive && deck.v >= cfg.DriveMinSpeed && !deck.airborne;
+        float vx = deck.velX;
+        float vy = deck.velY;
+
+        if (carryLive)
+        {
+            vx = std::cos(o) * deck.v;
+            vy = std::sin(o) * deck.v;
+        }
+
+        // A rider who has not sent a packet since they boarded has no staleness to project over -
+        // lastPacketMs is 0 until the first one arrives, and a sixty-second projection would park
+        // the deck in front of the player it just appeared under.
+        float const sincePacket = deck.lastPacketMs ? float(now - deck.lastPacketMs) / 1000.0f : 0.0f;
+        float const stale = (carryLive || player->isMoving()) ? std::min(sincePacket, 0.6f) : 0.0f;
+        float const lead = travel + stale;
+        float const riderSpeed = std::sqrt(vx * vx + vy * vy);
+        float const x = player->GetPositionX() + vx * lead;
+        float const y = player->GetPositionY() + vy * lead;
+        float const height = player->GetMap()->GetHeight(x, y, player->GetPositionZ());
+        float const z = height > INVALID_HEIGHT + 1.0f ? height : GroundUnder(player);
+
+        float const drift2d = unit->GetExactDist2d(x, y);
+
+        // Already there: nothing to interpolate, and a fresh spline every FollowMs would be the
+        // same teleport-per-tick jitter this avoids. The band has to be far smaller than the step a
+        // slow rider takes in one segment (0.16 yd at Cruise), or the deck would stand still for a
+        // segment and then jump a quarter yard - a stutter at exactly the speeds the follow is for.
+        // Facing is still worth keeping current.
+        if (drift2d < 0.05f && std::fabs(unit->GetPositionZ() - z) < 0.5f)
+        {
+            if (std::fabs(unit->GetOrientation() - o) > 0.1f)
+                unit->SetFacingTo(o);
+
+            return;
+        }
+
+        // A jump wider than a segment can walk - and wider than the rider could have travelled in
+        // one - is a teleport, a blink or a summon, not a ride: snap rather than walk the deck
+        // across the map at spline speed.
+        if (drift2d > std::max(15.0f, riderSpeed * travel * 1.5f + 5.0f))
+        {
+            unit->NearTeleportTo(x, y, z, o);
             return;
         }
 
         Movement::MoveSplineInit init(unit);
         init.MoveTo(x, y, z, false);
-        init.SetVelocity(std::max(unit->GetExactDist2d(x, y) / (float(cfg.FollowMs) / 1000.0f), 1.0f));
-        init.SetFacing(player->GetOrientation());
+
+        // The path is 3D, so its own length is what the speed has to cover. A segment that cannot
+        // close the distance inside one FollowMs - a deck left behind by a projection, a climb, a
+        // rider who accelerated - runs faster than the rider until it is back under the feet. That
+        // is a proportional controller with a ceiling: close the gap in one segment if it can, at
+        // most 12 yd/s faster than the rider otherwise, never a teleport and never an unbounded
+        // lunge (the core clamps a spline to max(28, 4 x run) anyway, MoveSplineInit.cpp:106).
+        float const dist = unit->GetExactDist(x, y, z);
+        float const speed = std::clamp(dist / travel, 1.0f, std::max(riderSpeed + 12.0f, 12.0f));
+
+        init.SetVelocity(speed);
+        init.SetFacing(o);
         init.Launch();
     }
 
@@ -460,14 +632,27 @@ namespace
     // source is placed one yard behind the rider.
     //
     // The vertical half is what makes it carry at all: the client's knockback is an arc that lasts
-    // 2 * zspeed / g, and a zspeed of 0 is a horizontal nudge it drops on the spot. The arc is
+    // 2 * (zspeed - grade * speedXY) / g, and a zspeed of 0 is a horizontal nudge it drops on the
+    // spot. The arc is
     // sized to Drive.ArcMs, or to Drive.ImpulseMs - Drive.GroundMs when that key is 0, and the
     // horizontal speed covers the whole cycle inside that arc, so the deck averages exactly its own
     // v and the rider stands on the ground for Drive.GroundMs between impulses - the only window a
     // jump can start in.
     //
+    // The arc is tilted by the ground it is launched from, and that tilt is the whole of "uphill
+    // goes nowhere, downhill flies". The client ends a knockback where the arc meets the surface,
+    // so a level arc on a rise is cut short - at speed, zspeed falls below grade * speedXY and the
+    // arc ends before it starts, which is a rider stuck at 0 yd/s with a deck that says 4 - and on
+    // a drop it outlives the cycle and sails. Adding the gradient times the horizontal speed to
+    // zspeed puts the landing back on the surface after exactly Drive.ArcMs, whatever the hill.
+    //
+    // The horizontal half is a *surface* speed: v is yards along the ground, so a climb takes less
+    // horizontal speed than a level run for the same v.
+    //
     // The arc is also what OnMove() has to *not* read as a jump: the client reports FALLING for the
     // knockback, with a positive zspeed on the way up, so the record carries the window it opened.
+    // A drop the arc cannot follow outlives it, and that flight is what the record carries instead
+    // - otherwise a landing far down a hill was queued as a trick.
     void CarryImpulse(Player* player, Deck& deck, uint32 now)
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
@@ -480,25 +665,50 @@ namespace
         uint32 const arcMs = cfg.DriveArcMs ? std::min(cfg.DriveArcMs, cycleMs) : derivedMs;
         float const arc = float(arcMs) / 1000.0f;
 
-        float const zspeed = std::max(0.5f, 0.5f * Skateboard::CLIENT_GRAVITY * arc);
-        float const speed = deck.v * float(cycleMs) / float(arcMs);
+        // Uphill positive, clamped to 45 degrees: a grid seam reads as a wall, and one impulse
+        // must not become a launch off a data artefact.
+        float const grade = std::clamp(deck.grade, -1.0f, 1.0f);
+        float speedXY = deck.v * float(cycleMs) / float(arcMs) / std::sqrt(1.0f + grade * grade);
+
+        // A drop steeper than the arc can follow drives this below zero. The client drops a
+        // knocked-back rider with no vertical speed on the spot, so the floor is the smallest hop,
+        // and the carriage is then the longer flight the falling ground hands it.
+        float const lift = 0.5f * Skateboard::CLIENT_GRAVITY * arc;
+        float zspeed = lift + grade * speedXY;
+
+        // The ceiling has to take the horizontal speed with it. A zspeed clamped below the ground's
+        // own rise rate puts the arc back where it started - cut short on the rise, which is the
+        // "goes nowhere" this fixes - so a very steep climb slows the rider instead of losing them.
+        if (zspeed > 40.0f && grade > 0.0f)
+        {
+            zspeed = 40.0f;
+            speedXY = std::min(speedXY, (zspeed - lift) / grade);
+        }
+
+        zspeed = std::max(zspeed, 0.5f);
 
         float const o = player->GetOrientation();
         player->KnockbackFrom(player->GetPositionX() - std::cos(o), player->GetPositionY() - std::sin(o),
-            speed, zspeed);
+            speedXY, zspeed);
 
-        deck.driveNextMs = now + cycleMs;
+        // How long the rider is actually off their feet: the tilted arc lands after Drive.ArcMs, a
+        // clamped one after 2 * (zspeed - grade * speedXY) / g. Both the trick window and the next
+        // impulse use the flight, so a descent is one glide and not a glide plus a false take-off.
+        float const flight = std::max(arc, 2.0f * (zspeed - grade * speedXY) / Skateboard::CLIENT_GRAVITY);
+        uint32 const flightMs = uint32(flight * 1000.0f);
+
+        deck.driveNextMs = now + std::max(cycleMs, flightMs);
         deck.lastImpulseMs = now;
-        deck.impulseArcMs = arcMs;
+        deck.impulseArcMs = std::max(arcMs, flightMs);
     }
 
     // The spline carrier (Skateboard.Drive.Mode = 1). The server moves the rider itself, along a
-    // polyline it samples, so the path follows the hill - the knockback it replaces is horizontal by
-    // construction, which is why a deck under the kick carrier runs straight through a downhill
-    // instead of down it. While a player's spline is unfinalized the core drops the client's own
-    // movement (VerifyMovementInfo), so the rider has no steering *during* a segment: each new one
-    // is aimed along the freshest heading the client managed to report, and Drive.SplineMs is how
-    // often that chance comes. The client still animates the spline, so the ride itself is smooth.
+    // polyline it samples, so the path follows the hill - the knockback is a parabola, and no
+    // parabola hugs a slope the way a sampled path does. While a player's spline is unfinalized the
+    // core drops the client's own movement (VerifyMovementInfo), so the rider has no steering
+    // *during* a segment, and no jump either: each new one is aimed along the freshest heading the
+    // client managed to report, and Drive.SplineMs is how often that chance comes. That is why the
+    // knockback carrier is the default and this one is the option.
     //
     // Nothing here is authoritative beyond the path: the height comes from the map, one sample per
     // sub-segment, and an unloaded grid keeps the previous height rather than inventing a floor.
@@ -519,7 +729,14 @@ namespace
         Movement::MoveSplineInit init(player);
         Movement::PointsArray& path = init.Path();
 
-        constexpr uint32 Samples = 4;
+        // Eight samples inside one segment: at MaxSpeed a segment is just over three yards, so this
+        // is a sample every half yard - fine enough to follow a hill instead of cutting the crest.
+        constexpr uint32 Samples = 8;
+        // 60 degrees. A steeper step between two samples is a grid seam or a wall, not a hill, and
+        // following it would throw the rider up or drop them through the floor.
+        constexpr float MaxStep = 1.7320508f;
+
+        float const step = distance / float(Samples);
         float lastZ = player->GetPositionZ();
 
         // The start vertex is ours to provide: MoveTo() adds it, a hand-built path does not, and a
@@ -537,15 +754,26 @@ namespace
             if (height <= INVALID_HEIGHT + 1.0f)
                 height = lastZ;
 
-            lastZ = height;
-            path.push_back(G3D::Vector3(px, py, height));
+            lastZ = std::clamp(height, lastZ - step * MaxStep, lastZ + step * MaxStep);
+            path.push_back(G3D::Vector3(px, py, lastZ));
         }
 
-        init.SetVelocity(std::max(deck.v, 1.0f));
+        // The path is 3D, so v (a ground speed) is not the speed that walks it: uphill the segment
+        // is longer than v * SplineMs and would overrun, leaving a gap before the next one can
+        // start. Cover the path that was actually built in the time the deck's own speed says it
+        // should take: the 1 yd floor above is a geometry floor, not a speed, and timing it by
+        // SplineMs would carry a cruiser at SplineMs/1 yd/s instead of at v.
+        float length = 0.0f;
+        for (size_t i = 1; i < path.size(); ++i)
+            length += (path[i] - path[i - 1]).magnitude();
+
+        float const walkTime = std::max(seconds, length / std::max(deck.v, 1.0f));
+
+        init.SetVelocity(length / walkTime);
         init.SetFacing(o);
         init.Launch();
 
-        deck.driveNextMs = now + segmentMs;
+        deck.driveNextMs = now + uint32(walkTime * 1000.0f);
         deck.lastImpulseMs = 0;
         deck.impulseArcMs = 0;
     }
@@ -1286,7 +1514,7 @@ namespace Skateboard
                 LOG_WARN("module", "Skateboard: {} sent no run speed ACK within {} ms, gate reopened.", player->GetName(), cfg.AckTimeoutMs);
         }
 
-        // The deck under the rider: re-seated every FollowMs, first thing, so a freshly boarded
+        // The deck under the rider: followed from the first thing this tick, so a freshly boarded
         // deck exists before anything can move it. A '.reload config' that switched the render or
         // landed on a different deck id left the live visual describing the old config, so it is
         // rebuilt here - the ride continues, only the drawing changes.
@@ -1320,10 +1548,15 @@ namespace Skateboard
                 WriteMount(player, deck);
         }
 
+        float const dt = std::min(float(diff) / 1000.0f, 0.25f);
+
+        // Measured before the follow runs, whichever way the deck is drawn: the follow leads with
+        // it, and the debug line reports it, so mount mode wants the number too.
+        MeasureRider(player, deck, now);
+
         if (cfg.RenderUnit)
             Reseat(player, deck, now);
 
-        float const dt = std::min(float(diff) / 1000.0f, 0.25f);
         float slope = 0.0f;
         bool const braking = player->HasUnitMovementFlag(MOVEMENTFLAG_BACKWARD);
 
@@ -1341,7 +1574,14 @@ namespace Skateboard
             // invented acceleration. The gradient is a rise over the lookahead, so a downhill
             // reads as a positive pull along the heading and an uphill as a drag.
             if (h0 > INVALID_HEIGHT + 1.0f && h2 > INVALID_HEIGHT + 1.0f)
-                slope = -cfg.SlopeGain * (h2 - h0) / Skateboard::SLOPE_LOOKAHEAD;
+            {
+                deck.grade = (h2 - h0) / Skateboard::SLOPE_LOOKAHEAD;
+                slope = -cfg.SlopeGain * deck.grade;
+            }
+            else
+            {
+                deck.grade = 0.0f;
+            }
 
             float acceleration = slope;
             acceleration -= cfg.FrictionStatic + cfg.FrictionRolling * deck.v * deck.v;
@@ -1417,9 +1657,10 @@ namespace Skateboard
         if (cfg.Debug && Reached(now, deck.debugNextMs))
         {
             deck.debugNextMs = now + DebugIntervalMs;
-            LOG_INFO("module", "Skateboard: {} v={:.2f} rate={:.2f} published={:.2f} pending={} slope={:.2f} airborne={}",
+            LOG_INFO("module", "Skateboard: {} v={:.2f} rate={:.2f} published={:.2f} pending={} slope={:.2f} grade={:.2f} ground={:.2f} airborne={}",
                 player->GetName(), deck.v, player->GetSpeedRate(MOVE_RUN), deck.publishedRate,
-                uint32(deck.pendingAcks), slope, deck.airborne ? 1 : 0);
+                uint32(deck.pendingAcks), slope, deck.grade, std::sqrt(deck.velX * deck.velX + deck.velY * deck.velY),
+                deck.airborne ? 1 : 0);
         }
     }
 
@@ -1428,6 +1669,12 @@ namespace Skateboard
         Deck* deck = FindDeck(player);
         if (!deck || deck->displayId == 0)
             return;
+
+        // Every movement opcode carries the client's own position, so this is the moment the
+        // server's copy of the rider was last true. The deck follow projects forward from here:
+        // the gap to the next packet (a heartbeat, up to half a second) is exactly the distance the
+        // rider has travelled that the server cannot see yet.
+        deck->lastPacketMs = NowMs();
 
         if (deck->castDeadlineMs)
         {

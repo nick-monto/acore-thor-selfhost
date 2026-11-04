@@ -89,9 +89,10 @@ the movement packets through `MovementHandlerScript::OnPlayerMove` (`MovementHan
 
 The player is the mover (`MovementHandler.cpp:434`), so `v` is published as a **cap**:
 `SetSpeed(MOVE_RUN, v / 7.0f, true)`. A cap alone means a rider who is not holding a key does not
-move, so the deck also **carries** an idle rider (`Skateboard.Drive`): one horizontal impulse along
+move, so the deck also **carries** an idle rider (`Skateboard.Drive`): one impulse along
 the facing every `Skateboard.Drive.ImpulseMs`, through the client's own knockback channel
-(`Unit::KnockbackFrom` → `SMSG_MOVE_KNOCK_BACK`).
+(`Unit::KnockbackFrom` → `SMSG_MOVE_KNOCK_BACK`), its arc tilted by the terrain gradient so it
+lands back on the slope it left.
 
 The knockback is the only channel that moves a character the client still controls. A relocation is
 undone by the next movement packet, and a server spline is obeyed only by a unit the client has
@@ -100,18 +101,30 @@ rejects packets while `!movespline->Finalized()`).
 
 | `Drive.Mode` | Carrier | Follows the hill | Steering | Playtest |
 |---|---|---|---|---|
-| `0` (default) | `SMSG_MOVE_KNOCK_BACK`, one arc per `Drive.ImpulseMs` | **no** - the impulse is horizontal by construction, so a deck runs *through* a downhill rather than down it | instant: the client keeps control between impulses | shipped; reported as flat-running on a slope |
-| `1` | a player spline per `Drive.SplineMs`, path sampled along the terrain | **yes** - the server builds the path, `Map::GetHeight` gives each point its height | only *between* segments, because the client's own packets are dropped while one runs | new; unverified on a device |
+| `0` (default) | `SMSG_MOVE_KNOCK_BACK`, one arc per `Drive.ImpulseMs` | **mostly** - the arc is tilted by the terrain gradient, so it lands back on the surface after `Drive.ArcMs` on a rise as well as on the flat; a descent too steep for the tilt to follow hands the rider a longer flight instead | instant: the client keeps control between impulses, and a jump can start in the `GroundMs` gap | shipped; "uphill goes nowhere, downhill flies" was the untilted arc, fixed |
+| `1` | a player spline per `Drive.SplineMs`, path sampled along the terrain | **yes** - the server builds the path, `Map::GetHeight` gives each point its height | only *between* segments, because the client's own packets are dropped while one runs - so no jump and no trick either | new; unverified on a device |
+
+A level arc is why the knockback carrier read as "uphill goes nowhere, downhill adds velocity but the
+plane does not follow the slope". The client ends a knockback where the arc meets the surface, so at
+`Drive.ArcMs` 250 a rise takes the flight from 250 ms to 134 ms at 20%, to **zero** at 10% once `v` is
+at `MaxSpeed` (`speedZ` below `grade × speedXY` - the rider stands still at 0 yd/s while the deck
+still reports `Cruise`), and a 30% drop stretches it to 424 ms at cruise and 1164 ms at the ceiling.
+Adding `grade × speedXY` to `speedZ` puts the landing back on the surface after exactly `ArcMs`, and
+the module now carries the flight it actually got: a drop that outlives the arc is one glide, both
+for the next impulse and for the trick window.
 
 `KnockbackFrom(x, y, speedXY, speedZ)` takes the *source* of the knockback, not a direction: the core
 normalizes `thisPosition - source` in `Position::GetSinCos`, so a source one yard behind the rider is
-what makes the impulse run along the facing. The vertical half sizes the arc (`2 * speedZ / g`, so
-`Drive.ImpulseMs - Drive.GroundMs`), and the horizontal half covers the whole cycle inside it, which
-keeps the deck's average at its own `v` and leaves `Drive.GroundMs` of standing per cycle - the only
+what makes the impulse run along the facing. The vertical half sizes the arc (`2 * (speedZ - grade *
+speedXY) / g`, which the tilt makes exactly `Drive.ImpulseMs - Drive.GroundMs` on any hill the arc can
+follow), and the horizontal half - divided by `sqrt(1 + grade²)`, because `v` is a surface speed -
+covers the whole cycle inside it, which keeps the deck's average at its own `v` and leaves
+`Drive.GroundMs` of standing per cycle - the only
 window a jump can start in (`Unit::KnockbackFrom` states the rule for feared/confused units: the *client* is
 what moves a controlled unit, so the server either sends it a movement message or takes control
 away). The impulse keeps the character in control, so forward still pumps (the cap), backward still
-brakes, and the camera still steers between impulses.
+brakes, and the camera still steers between impulses. Because `v` is a *surface* speed, a climb takes
+less horizontal speed than a level run (`speedXY / sqrt(1 + grade²)`).
 
 **The arc is not a jump, and telling the two apart is the part that broke.** The client reports
 `MOVEMENTFLAG_FALLING` for the carry's own knockback, and it reports a *positive* `zspeed` while the
@@ -149,7 +162,7 @@ nothing, so the deck has to be an object of its own.
 
 | `Skateboard.Deck.Render` | What the module does | What it looks like |
 |---|---|---|
-| `unit` (default) | summons a creature with the deck's display and re-seats it under the rider every `Deck.FollowMs` (`Creature::SetDisplayId`, `TempSummon`) | the deck under a **standing** player — the pose a skateboard wants, and a display every client draws |
+| `unit` (default) | summons a creature with the deck's display and walks it under the rider in `Deck.FollowMs` segments (`Creature::SetDisplayId`, `TempSummon`) | the deck under a **standing** player — the pose a skateboard wants, and a display every client draws |
 | `mount` | `Unit::Mount(id)` (`Unit.cpp:10262`), which writes the field *and* sets `UNIT_FLAG_MOUNT` | the deck for certain, but under a **sitting** rider, and `UpdateSpeed` takes the mounted branch |
 
 `mount` remains because it is the only path the core itself exercises; it costs the standing pose.
@@ -213,7 +226,7 @@ is ever boarded.
 | `Skateboard.Enable` | 1 | whole feature |
 | `Skateboard.Deck` | `plank` | `plank` (90001, the Redridge boardwalk) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id. `engravedwall` is the old name for 90001 and still resolves |
 | `Skateboard.Deck.Render` | `unit` | §2.5: `unit` summons the deck under a standing rider, `mount` is the sitting fallback |
-| `Skateboard.Deck.Carrier` / `.FollowMs` | `29443` / `40` | the inert stock creature template the deck is summoned from (`unit` mode; a row with an `AIName` or a `ScriptName` is refused), and how often it is re-seated |
+| `Skateboard.Deck.Carrier` / `.FollowMs` | `29443` / `40` | the inert stock creature template the deck is summoned from (`unit` mode; a row with an `AIName` or a `ScriptName` is refused), and the length of one follow segment - chained onto the last, aimed at the rider projected a segment ahead and past the staleness of their last movement packet |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
 | `Skateboard.Drive` / `.ImpulseMs` / `.GroundMs` / `.MinSpeed` / `.Brake` | 1 / 350 / 100 / 3.0 / 6.0 | the carry: one knockback impulse per cycle along the facing, the gap the rider stands in, the speed the carry opens at (capped by `Cruise`) and the backward-key brake |
@@ -232,7 +245,7 @@ is ever boarded.
 | `Skateboard.OffOnHit` | 1 | a 21 yd/s cap is a free disengage; a hit takes the deck, the start of a fight does not |
 | `Skateboard.BoardCastMs` | 2000 | boarding takes this long, and a step, a hit or a fight stops it; the client's bar is driven by the module's `c` push |
 | `Skateboard.AckTimeoutMs` | 500 | §2.4 |
-| `Skateboard.Debug` | 0 | one log line per 5 s: `v`, slope, rate, `pendingAcks` |
+| `Skateboard.Debug` | 0 | one log line per 5 s: `v`, slope, rate, `pendingAcks`, `grade` (the gradient the arc is tilted by) and `ground` (the rider's measured ground speed, which is what the deck follow leads with) |
 
 Commands, `CommandScript` (`Acore::ChatCommands`, so both the chat line and the add-on channel can
 reach them): `.board on`, `.board off`, `.board toggle`, `.board status`, `.board speed`,
@@ -392,7 +405,10 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 | momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts down to `Cruise` in ~8 s and never below it; `Debug` line shows `v`, slope and rate agreeing |
 | cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, the rate never above the target the module holds (the cap only lowers) |
 | carry | board on flat ground and release every key | the rider travels along their own facing, in arcs of `Drive.ImpulseMs - Drive.GroundMs` with a standing gap between them; `Drive.ImpulseMs` 250-500 matches the impulse's own duration without a stutter; the deck stays under the feet instead of catching up, and no trick animation or `LandingBonus` fires during the glide |
-| carry on a hill | ride the same slope with `Drive.Mode = 0`, then `1` | `0`: `v` climbs downhill and the *path* still runs level - the arc is horizontal. `1`: the path drops with the hill, the rider turns between segments (not during them), and no jump or trick starts while a segment runs |
+| carry on a hill | ride a rise, then the same slope downhill, with `Drive.Mode = 0` | the rider holds `v` up the rise instead of standing at 0 yd/s, the arc lands back on the slope, `Debug` shows `grade` following the ground, and a descent steeper than the arc can follow is one glide with no take-off or `LandingBonus` |
+| deck follow | ride at `MaxSpeed`, then stop dead, then start again | the deck sits under the feet at speed instead of trailing (within a yard at `MaxSpeed`, and it holds through the carry's own standing gap), no segment is relaunched before the last one finished (that was the stutter), it stops without walking on ahead of a parked rider, and after a standing start it closes the half-second it cannot see in under a second rather than snapping |
+| deck follow, debug | the same, with `Skateboard.Debug = 1` | `ground` tracks `v` during a carry and drops to 0 when the rider stands, and no `NearTeleportTo` fires while riding (a snap every segment means the projection is wrong, not the packet rate) |
+| carry on a hill, spline | the same slope with `Drive.Mode = 1` | the path follows the hill and each segment lasts `Drive.SplineMs` rather than overrunning on a climb; the rider turns between segments (not during them), and no jump or trick starts while a segment runs |
 | brake | at 15+ yd/s, hold backward | `v` falls to 0 in a couple of seconds and the cap follows; no `Incorrect speed` kick from the backward walk |
 | tricks | jump while boarded (the `Drive.GroundMs` gap is the window) | one clip per take-off, clean landing adds `v`, mistimed landing crashes once |
 | cleanup | logout, die, change map, `.board off` | no `UNIT_FIELD_MOUNTDISPLAYID` left, no state left in the map |

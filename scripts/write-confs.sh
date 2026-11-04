@@ -286,6 +286,9 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
         Skateboard.Friction.Rolling) lo=0;  hi=1 ;;
         Skateboard.SlopeGain)        lo=0;  hi=90 ;;
         Skateboard.Drive.ImpulseMs)  lo=100; hi=2000 ;;
+        Skateboard.Drive.Mode)       lo=0;  hi=1 ;;
+        Skateboard.Drive.ArcMs)      lo=0;  hi=2000 ;;
+        Skateboard.Drive.SplineMs)   lo=50; hi=1000 ;;
         Skateboard.Drive.GroundMs)   lo=0;  hi=1000 ;;
         Skateboard.Drive.MinSpeed)   lo=0;  hi=40 ;;
         Skateboard.Brake)            lo=0;  hi=50 ;;
@@ -601,10 +604,6 @@ wc_write_all() {
         # fight leaves the deck alone and a hit takes it (OffOnHit). A leftover key would sit in the
         # live file looking like it still did something.
         sed -i -E '/^[[:space:]]*Skateboard\.OffInCombat[[:space:]]*=/d' "$sb"
-        # Drive.Mode went with the spline carrier: a spline on the player's own character makes the
-        # core drop their movement packets while it runs (VerifyMovementInfo), which is the opposite
-        # of what the carry needs. The key would sit in the live file looking like a choice.
-        sed -i -E '/^[[:space:]]*Skateboard\.Drive\.Mode[[:space:]]*=/d' "$sb"
         # MountedPose was the mount render's "seat the rider" switch, folded into Render = mount: a
         # conf that still sets it to 1 looks like it draws the sitting deck and does not.
         sed -i -E '/^[[:space:]]*Skateboard\.MountedPose[[:space:]]*=/d' "$sb"
