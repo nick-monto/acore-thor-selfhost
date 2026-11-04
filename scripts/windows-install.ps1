@@ -2165,6 +2165,10 @@ function Write-Configs {
         # because a key the module cannot use is silently replaced by its own fallback and a deck
         # id the DBC does not carry falls back to the stock display. Only a value outside its range
         # is rewritten - a deliberate Enable=0 is left alone.
+        # Skateboard.OffInCombat is gone: the start of a fight leaves the deck alone and a hit takes
+        # it (Skateboard.OffOnHit). Nothing reads the old key, so it is deleted rather than left
+        # looking live.
+        Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.OffInCombat$'
         Set-ConfDefaults -File $sb -Check { param($k, $v) Test-SkateboardValueOk -Key $k -Value $v } `
             -Label 'mod-skateboard.conf' -Defaults $SkateboardConfDefaults
         Log ("mod-skateboard.conf: Enable={0} Deck={1} MaxSpeed={2} Crash.Enable={3}" -f `
@@ -3416,6 +3420,17 @@ function Invoke-Checks {
         # the same way, so a config that still starts the server can be wrong here without saying
         # so. The two are reported apart: absent means the live conf is older than the artifact,
         # bad means it says something the module will not take.
+        # Keys the module stopped reading: deleted by Write-Configs, reported here so an install
+        # that is never reinstalled loses them on its first -Repair instead.
+        $sbRetired = @(Get-ConfKeysMatching -File $sb -KeyPattern '^Skateboard\.OffInCombat$')
+        if ($sbRetired.Count -gt 0) {
+            Bad ("mod-skateboard.conf: retired key(s) still present: {0} (the hit rule replaced them)" -f ($sbRetired -join ', '))
+            if ($Fix) {
+                $script:Fixes = $script:Fixes + 1
+                Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.OffInCombat$'
+                Ok 'retired skateboard key removed'
+            }
+        }
         $sbAbsent = @()
         $sbBad = @()
         foreach ($default in $SkateboardConfDefaults) {

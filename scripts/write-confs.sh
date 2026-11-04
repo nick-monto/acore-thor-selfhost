@@ -558,6 +558,10 @@ wc_write_all() {
         # because a key the module cannot use is silently replaced by its own fallback and a deck id
         # the DBC does not carry falls back to the stock display. Only a value outside its range is
         # rewritten - a deliberate Enable=0 is left alone.
+        # The combat rule used to be Skateboard.OffInCombat, which nothing reads now: the start of a
+        # fight leaves the deck alone and a hit takes it (OffOnHit). A leftover key would sit in the
+        # live file looking like it still did something.
+        sed -i -E '/^[[:space:]]*Skateboard\.OffInCombat[[:space:]]*=/d' "$sb"
         conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
         wc_log "mod-skateboard.conf: Enable=$(wc_get_conf "$sb" Skateboard.Enable) Deck=$(wc_get_conf "$sb" Skateboard.Deck) MaxSpeed=$(wc_get_conf "$sb" Skateboard.MaxSpeed) BoardCastMs=$(wc_get_conf "$sb" Skateboard.BoardCastMs) OffOnHit=$(wc_get_conf "$sb" Skateboard.OffOnHit) Crash.Enable=$(wc_get_conf "$sb" Skateboard.Crash.Enable)"
     else
