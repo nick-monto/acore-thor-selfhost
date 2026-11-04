@@ -252,7 +252,7 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Skateboard.Enable` | 0 | whole feature |
+| `Skateboard.Enable` | 1 | whole feature |
 | `Skateboard.Deck` | `log` | `log` is 26609, the stock `Log Ride (Log A)`; `engravedwall` and `coffinlid` are the two shield ids |
 | `Skateboard.BoardCastMs` | 2000 | boarding delay; nothing is written until it completes, and the add-on's bar is driven by the module's own `c` push rather than by the status poll |
 | `Skateboard.OffOnHit` | 1 | a hit from another unit takes the deck; the start of a fight does not, and neither does fall damage |

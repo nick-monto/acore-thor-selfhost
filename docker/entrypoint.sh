@@ -76,7 +76,7 @@ case "$BOT_TICK_MS" in ''|*[!0-9]*) die "BOT_TICK_MS must be a number of millise
 case "$HORDE_RATIO" in ''|*[!0-9]*) die "HORDE_RATIO must be a number, got '$HORDE_RATIO'" ;; esac
 # The skateboard is off unless this is 1. It is a dial rather than a conf edit because /opt/acore/etc
 # lives in the image layer: a hand edit there does not survive a rebuild.
-case "${SKATEBOARD_ENABLE:-0}" in 0|1) ;; *) die "SKATEBOARD_ENABLE must be 0 or 1, got '$SKATEBOARD_ENABLE'" ;; esac
+case "${SKATEBOARD_ENABLE:-1}" in 0|1) ;; *) die "SKATEBOARD_ENABLE must be 0 or 1, got '$SKATEBOARD_ENABLE'" ;; esac
 # 10# so a leading zero stays decimal: write-confs.sh subtracts from this to get the Alliance side,
 # where 010 would be ten in the conf and eight to the arithmetic, and 08 would abort the render
 # outright. The length bound comes first so a long digit string cannot wrap into range.
@@ -254,7 +254,7 @@ write_confs() {
     WC_DB_PORT="$DB_PORT"
     WC_DB_USER="$DB_USER"
     WC_DB_PASS="$DB_PASS"
-    WC_SKATEBOARD="${SKATEBOARD_ENABLE:-0}"
+    WC_SKATEBOARD="${SKATEBOARD_ENABLE:-1}"
     WC_BOTS="$BOTS"
     WC_BOT_TICK_MS="$BOT_TICK_MS"
     WC_HORDE_RATIO="$HORDE_RATIO"

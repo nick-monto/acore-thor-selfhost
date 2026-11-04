@@ -96,10 +96,11 @@ services:
       # Root is used once, by the entrypoint, to create the schemas and DB_USER.
       DB_ROOT_PASS: ${DB_ROOT_PASS:-acore}
       BOTS: ${BOTS:-50}
-      # 1 boards on this realm, 0 leaves mod-skateboard loaded but switched off. Rendered into
-      # mod-skateboard.conf on every start: /opt/acore/etc is in the image layer, not a volume, so
-      # a hand edit to that file is lost at the next rebuild and this is the knob that survives.
-      SKATEBOARD_ENABLE: ${SKATEBOARD_ENABLE:-0}
+      # 1 boards on this realm (the shipped default), 0 leaves mod-skateboard loaded but switched
+      # off. Rendered into mod-skateboard.conf on every start: /opt/acore/etc is in the image
+      # layer, not a volume, so a hand edit to that file is lost at the next rebuild and this is
+      # the knob that survives.
+      SKATEBOARD_ENABLE: ${SKATEBOARD_ENABLE:-1}
       # Milliseconds between random-bot manager passes, rendered into playerbots.conf on every
       # start. The whole population is walked each pass, so this is the knob that decides what
       # BOTS costs: 500 bots at the stock 20 ms was measured at one core at 100%. The manager walks

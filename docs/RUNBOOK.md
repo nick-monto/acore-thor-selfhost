@@ -473,13 +473,13 @@ world-server restart.
 
 ## Part 5d — The skateboard
 
-`mod-skateboard` ships **off**. The installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` and leaves `Skateboard.Enable = 0`; nothing else in the realm depends on it, so leaving it at 0 costs nothing.
+`mod-skateboard` ships **on**: the installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` with `Skateboard.Enable = 1`. That makes the board *available*; nobody is boarded until a player presses `.board on` or the add-on's Board button, so it costs a realm nothing to leave on.
 
-On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start:
+On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start and defaults to on:
 
 ```bash
-# C:\acore\docker-src\docker\.env, beside the compose file
-SKATEBOARD_ENABLE=1
+# C:\acore\docker-src\docker\.env, beside the compose file - only to turn the board OFF
+SKATEBOARD_ENABLE=0
 ```
 
 ```bash
@@ -487,8 +487,8 @@ docker compose -f docker/docker-compose.yml up -d acore
 ```
 
 ```bash
-# turn it on, then apply it without a restart
-sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/' /opt/acore/etc/modules/mod-skateboard.conf
+# turn it off, then apply it without a restart
+sed -i 's/^Skateboard\.Enable = 1$/Skateboard.Enable = 0/' /opt/acore/etc/modules/mod-skateboard.conf
 # in the worldserver console:
 .reload config
 ```
@@ -503,7 +503,7 @@ grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
 
 | Key | Default | What it does |
 |---|---|---|
-| `Skateboard.Enable` | `0` | the whole feature; 0 refuses `.board on` and boards nobody |
+| `Skateboard.Enable` | `1` | the whole feature; 0 refuses `.board on` and boards nobody |
 | `Skateboard.Deck` | `engravedwall` | the flat `Engraved Wall` shield (display 90001); `coffinlid` (90002) is the second shield; `log` is the stock `Log Ride` display id 26609 and needs no client patch. The shields only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
 | `Skateboard.MountedPose` | `0` | 0 writes `UNIT_FIELD_MOUNTDISPLAYID` alone (deck under a standing player), 1 mounts properly (deck under a sitting rider) |
 | `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |

@@ -79,7 +79,7 @@ namespace Skateboard
     // one-writer/startup assumption the core's own config accessors make.
     struct Config
     {
-        bool Enable                = false;    // Skateboard.Enable
+        bool Enable                = true;     // Skateboard.Enable
         std::string DeckName       = "engravedwall";    // Skateboard.Deck, as configured
         uint32 DeckDisplayId       = 90001;    // Skateboard.Deck, resolved
         uint32 MountedPose         = 0;        // Skateboard.MountedPose

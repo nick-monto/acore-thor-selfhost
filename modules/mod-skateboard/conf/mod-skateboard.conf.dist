@@ -39,15 +39,17 @@
 
 #
 #    Skateboard.Enable
-#        Master on/off switch. 0 = the module loads, '.board' still exists but
-#        every refusal says the skateboard is disabled, and nothing updates.
+#        Master on/off switch. 1 = the board is available: '.board on', the bar
+#        and the bindings work, and nobody is boarded until a player asks. 0 =
+#        the module loads, '.board' still exists but every refusal says the
+#        skateboard is disabled, and nothing updates.
 #        The container renderer (scripts/write-confs.sh) overrides this key
 #        from SKATEBOARD_ENABLE on every boot, because a container's
 #        /opt/acore/etc is part of the image layer and a hand edit is lost at
 #        the next rebuild.
-#        Default: 0, range: 0/1
+#        Default: 1, range: 0/1
 #
-Skateboard.Enable = 0
+Skateboard.Enable = 1
 
 #
 #    Skateboard.BoardCastMs

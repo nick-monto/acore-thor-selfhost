@@ -370,7 +370,7 @@ namespace Skateboard
     {
         Config& cfg = ConfigMut();
 
-        cfg.Enable = sConfigMgr->GetOption<bool>("Skateboard.Enable", false);
+        cfg.Enable = sConfigMgr->GetOption<bool>("Skateboard.Enable", true);
         cfg.DeckName = sConfigMgr->GetOption<std::string>("Skateboard.Deck", "engravedwall");
         cfg.MountedPose = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.MountedPose", 0), 1);
         cfg.MaxSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.MaxSpeed", 21.0f), 1.0f, 40.0f);

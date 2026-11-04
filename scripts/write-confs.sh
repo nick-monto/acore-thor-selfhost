@@ -76,7 +76,7 @@ MERCENARY_CONF_DEFAULTS=(
 # survivor list: a key absent from the file or outside its range is silently replaced by the
 # module's own fallback, so wc_write_all() and the installer's run_checks() restore it from here.
 SKATEBOARD_CONF_DEFAULTS=(
-    "Skateboard.Enable=0"
+    "Skateboard.Enable=1"
     "Skateboard.Deck=engravedwall"
     "Skateboard.MountedPose=0"
     "Skateboard.MaxSpeed=21.0"

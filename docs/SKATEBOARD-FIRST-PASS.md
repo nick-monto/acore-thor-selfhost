@@ -173,7 +173,7 @@ is ever boarded.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Skateboard.Enable` | 0 | whole feature |
+| `Skateboard.Enable` | 1 | whole feature |
 | `Skateboard.Deck` | `engravedwall` | `engravedwall` (90001, the flat shield) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id |
 | `Skateboard.MountedPose` | 0 | §2.5 |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |

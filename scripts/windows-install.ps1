@@ -303,9 +303,9 @@ $MercenaryConfDefaults = @(
 # mod-skateboard's conf keys with the values its shipped .dist carries. Same contract as the
 # survivor list: a key absent from the file or outside its range is silently replaced by the
 # module's own fallback, so Write-Configs() and Invoke-Checks() restore it from here. These are the
-# module's whole conf - nineteen scalars, no lists - and Skateboard.Enable ships as 0.
+# module's whole conf - nineteen scalars, no lists - and Skateboard.Enable ships as 1.
 $SkateboardConfDefaults = @(
-    'Skateboard.Enable=0'
+    'Skateboard.Enable=1'
     'Skateboard.Deck=engravedwall'
     'Skateboard.MountedPose=0'
     'Skateboard.MaxSpeed=21.0'
@@ -2174,8 +2174,8 @@ function Write-Configs {
     if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-skateboard.conf.dist')) -or
         (Test-Path -LiteralPath (Join-Path $moduleConf 'mod-skateboard.conf'))) {
         $sb = Get-ConfPair 'modules\mod-skateboard'
-        # The shipped .dist already holds these values, and Skateboard.Enable ships as 0: the board
-        # exists but nobody is on it until the player turns it on. Each key is still read back,
+        # The shipped .dist already holds these values, and Skateboard.Enable ships as 1: the board
+        # is available, and nobody is on it until the player boards. Each key is still read back,
         # because a key the module cannot use is silently replaced by its own fallback and a deck
         # id the DBC does not carry falls back to the stock display. Only a value outside its range
         # is rewritten - a deliberate Enable=0 is left alone.
