@@ -287,6 +287,16 @@ resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and 
     return 0
 }
 
+refresh_self_ref() {   # refresh_self_ref - drop a recorded pin and resolve SELF_REF again
+    # A recorded pin is content-addressed, not immortal: a file that a newer artifact ships (for
+    # example scripts/lib/dbc_mpq.py, which came after the deck tool that imports it) does not exist
+    # at the commit an older install pinned. The pin is then stale rather than the network, and the
+    # newest fetchable set is what this realm should be running.
+    FETCH_REF=""
+    SELF_REF_SHA=""
+    resolve_self_ref
+}
+
 curl_gh() {   # curl_gh ARGS... - adds the token when one is set, i.e. for a private repository
     if [ -n "$GH_TOKEN_OPT" ]; then
         curl -H "Authorization: Bearer $GH_TOKEN_OPT" -H "Accept: application/octet-stream" "$@"
@@ -983,7 +993,7 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
 }
 
 fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files the DBC patches need
-    local base="$1" rel dest
+    local base="$1" rel dest rc pass stale
     resolve_self_ref
     # The list is the tools plus what they load by path: the bag generator, and scripts/lib's DBC
     # container both tools import. A missing lib breaks patch_item_dbc too, so it is fetched here
@@ -1001,17 +1011,37 @@ fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files
     # Two raw files rather than the repository tarball: small enough to fetch on every run, which is
     # the point. Keeping a copy just because one exists is how a fixed tool never reaches a device
     # that was installed before the fix - a --repair then rewrote the same broken archive.
-    for rel in $files; do
-        dest="$base/${rel#scripts/}"
-        mkdir -p "$(dirname "$dest")"
-        if ! curl_gh -fsSL --retry 3 -o "$dest.tmp" "https://raw.githubusercontent.com/$SELF_REPO/$FETCH_REF/$rel"; then
-            rm -f "$dest.tmp"
-            warn "cannot fetch $rel from $SELF_REPO@$SELF_REF (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
-            # Offline or a wrong ref: an older copy still beats not running the step at all.
-            [ -f "$dest" ] || return 1
-            continue
-        fi
-        mv "$dest.tmp" "$dest"
+    #
+    # Two passes at most. A recorded pin is content-addressed, not immortal: scripts/lib/dbc_mpq.py
+    # shipped after scripts/skateboard/patch_deck_dbc.py, so a realm installed before the lib existed
+    # pins a commit that cannot serve it - a 404, which used to be reported as a network problem. The
+    # pin is dropped and the ref resolved again, then the whole list is fetched from the new commit,
+    # because the files fetched before the failure came from the stale one too.
+    for pass in 1 2; do
+        stale=""
+        for rel in $files; do
+            dest="$base/${rel#scripts/}"
+            mkdir -p "$(dirname "$dest")"
+            rc=0
+            curl_gh -fsSL --retry 3 -o "$dest.tmp" "https://raw.githubusercontent.com/$SELF_REPO/$FETCH_REF/$rel" || rc=$?
+            if [ "$rc" != 0 ]; then
+                rm -f "$dest.tmp"
+                # 22 is HTTP 4xx/5xx from -f; a connection failure is 6/7/28 and keeps the warn path.
+                if [ "$rc" = 22 ] && [ "$pass" = 1 ] && [ "$SELF_REF_GIVEN" = 0 ] &&
+                    is_commit "$SELF_REF_SHA" && [ "$FETCH_REF" = "$SELF_REF_SHA" ]; then
+                    stale="$rel"
+                    break
+                fi
+                warn "cannot fetch $rel from $SELF_REPO@$SELF_REF (private? pass --github-token TOKEN or set THOR_GH_TOKEN)"
+                # Offline or a wrong ref: an older copy still beats not running the step at all.
+                [ -f "$dest" ] || return 1
+                continue
+            fi
+            mv "$dest.tmp" "$dest"
+        done
+        [ -z "$stale" ] && break
+        warn "$stale is not in commit $(short_commit "$SELF_REF_SHA") - the pin predates it, resolving $SELF_REF again"
+        refresh_self_ref
     done
     [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ] &&
         [ -f "$base/lib/dbc_mpq.py" ]

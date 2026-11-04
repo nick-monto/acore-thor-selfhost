@@ -590,6 +590,17 @@ function Resolve-SelfRef {
     Warn '  pass -SelfRef <40-character commit> to pin them'
 }
 
+function Reset-SelfRefPin {
+    <# Reset-SelfRefPin - forget a recorded pin and resolve -SelfRef again. #>
+    # A recorded pin is content-addressed, not immortal: a file a newer artifact ships (for example
+    # scripts/lib/dbc_mpq.py, which came after the deck tool that imports it) does not exist at the
+    # commit an older install pinned. Dropping both the pin and the state copy is what stops
+    # Save-State from writing the stale commit back.
+    $script:SelfRefSha = ''
+    $script:RecordedSelfRefSha = ''
+    Resolve-SelfRef
+}
+
 function Get-RemoteFile {
     <# Get-RemoteFile URI DESTINATION - download with retries. #>
     param(
@@ -3033,12 +3044,25 @@ function Get-ItemDbcTool {
         }
         return $tool
     }
-    foreach ($entry in $missing) {
-        [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $entry.Path))
-        $uri = $DockerRepoBase + (Get-FetchRef) + '/' + $entry.Rel
-        if (-not (Get-RemoteFile -Uri $uri -Destination $entry.Path)) { return '' }
+    # Two passes at most, like Install-DockerAssets: a recorded pin that predates scripts/lib/dbc_mpq.py
+    # cannot serve it, and a 404 there used to skip the DBC patch with "could not be fetched".
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $failed = ''
+        foreach ($entry in $missing) {
+            [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $entry.Path))
+            $uri = $DockerRepoBase + (Get-FetchRef) + '/' + $entry.Rel
+            if (-not (Get-RemoteFile -Uri $uri -Destination $entry.Path)) { $failed = $entry.Rel; break }
+        }
+        if (-not $failed) { return $tool }
+
+        $refreshable = ($attempt -eq 1) -and (-not $script:Bound.ContainsKey('SelfRef')) -and $script:SelfRefSha
+        if (-not $refreshable) { return '' }
+        Warn ("{0} is not in commit {1} - the pin this realm recorded predates it, resolving -SelfRef '{2}' again" -f `
+            $failed, (Get-FetchRef), $script:SelfRef)
+        Reset-SelfRefPin
+        Save-State
     }
-    return $tool
+    return ''
 }
 
 function Get-ServerDbcDir {
@@ -4336,21 +4360,39 @@ function Test-DockerPrerequisites {
 function Install-DockerAssets {
     <# Install-DockerAssets - fetch the container files into <root>\docker-src at -SelfRef. #>
     Step 'Container files'
-    $base = $DockerRepoBase + (Get-FetchRef) + '/'
     if ($script:DryRun) {
+        $base = $DockerRepoBase + (Get-FetchRef) + '/'
         foreach ($rel in $DockerFiles) {
             Note ("download {0}{1} to {2}" -f $base, $rel, (Join-Path $script:DockerDir ($rel.Replace('/', '\'))))
         }
         return
     }
-    foreach ($rel in $DockerFiles) {
-        $dest = Join-Path $script:DockerDir ($rel.Replace('/', '\'))
-        $dir = [System.IO.Path]::GetDirectoryName($dest)
-        if ($dir) { [void][System.IO.Directory]::CreateDirectory($dir) }
-        Log ("fetching {0}{1}" -f $base, $rel)
-        if (-not (Get-RemoteFile -Uri ($base + $rel) -Destination $dest)) {
-            Die ("could not fetch {0}{1}: check -SelfRef (currently '{2}') and the network" -f $base, $rel, (Get-FetchRef))
+
+    # The whole list is fetched twice at most. A recorded pin cannot serve a file that shipped after
+    # it (the deck tool predates scripts/lib/dbc_mpq.py, so a realm installed before the lib existed
+    # 404s on it), and the first attempt's answer to that used to be "check the network". The second
+    # attempt resolves the ref again and starts over, because the files fetched before the failure
+    # came from the stale commit too.
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $base = $DockerRepoBase + (Get-FetchRef) + '/'
+        $failed = ''
+        foreach ($rel in $DockerFiles) {
+            $dest = Join-Path $script:DockerDir ($rel.Replace('/', '\'))
+            $dir = [System.IO.Path]::GetDirectoryName($dest)
+            if ($dir) { [void][System.IO.Directory]::CreateDirectory($dir) }
+            Log ("fetching {0}{1}" -f $base, $rel)
+            if (-not (Get-RemoteFile -Uri ($base + $rel) -Destination $dest)) { $failed = $rel; break }
         }
+        if (-not $failed) { break }
+
+        $refreshable = ($attempt -eq 1) -and (-not $script:Bound.ContainsKey('SelfRef')) -and $script:SelfRefSha
+        if (-not $refreshable) {
+            Die ("could not fetch {0}{1}: check -SelfRef (currently '{2}') and the network" -f $base, $failed, (Get-FetchRef))
+        }
+        Warn ("{0} is not in commit {1} - the pin this realm recorded predates it, resolving -SelfRef '{2}' again" -f `
+            $failed, (Get-FetchRef), $script:SelfRef)
+        Reset-SelfRefPin
+        Save-State
     }
     # A 404 from raw.githubusercontent.com lands as a file with the error text in it on some
     # proxies, and a compose file of four bytes fails much later with a message that says nothing
