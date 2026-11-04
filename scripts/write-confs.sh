@@ -81,6 +81,9 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.MountedPose=0"
     "Skateboard.MaxSpeed=21.0"
     "Skateboard.PushImpulse=4.0"
+    "Skateboard.Push.Mode=0"
+    "Skateboard.Push.IntervalMs=500"
+    "Skateboard.Push.MaxHoldMs=2000"
     "Skateboard.Friction.Static=1.5"
     "Skateboard.Friction.Rolling=0.004"
     "Skateboard.SlopeGain=9.0"
@@ -92,6 +95,7 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.LandingBonus=2.0"
     "Skateboard.Tricks=1"
     "Skateboard.Trick.VisualKit=5036"
+    "Skateboard.Trick.List=kickflip:399:5036, ollie:394:5036, grind:388:5036"
     "Skateboard.Crash.Enable=1"
     "Skateboard.Crash.DamagePct=8"
     "Skateboard.Crash.StaggerMs=1500"
@@ -233,12 +237,19 @@ survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one t
 skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is one the module accepts
     # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s, PushImpulse
     # and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain 0-90, the
-    # carry mode 1-2, impulse 100-2000 ms, its floor 0-40 yd/s and the brake 0-50 yd/s^2, the visual kit
+    # hold-to-pump mode 0|1, its interval 100-2000 ms and cap 100-5000 ms, the carry mode 1-2,
+    # impulse 100-2000 ms, its floor 0-40 yd/s and the brake 0-50 yd/s^2, the visual kit
     # 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000 ms and the ACK
     # timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is settled
     # before the numeric guard below can see it. The momentum keys carry decimals, so the
     # comparison is awk's rather than a shell integer test.
     local key="$1" val="$2" lo hi
+    if [ "$key" = Skateboard.Trick.List ]; then
+        # A list, not a number: `name:emote[:kit]` entries separated by commas. Settled here so
+        # the numeric guard below never sees it; an entry the module cannot use is dropped by the
+        # module itself, which is why anything with a colon is accepted.
+        case "$val" in ?*:*) return 0 ;; *) return 1 ;; esac
+    fi
     if [ "$key" = Skateboard.Deck ]; then
         case "$val" in
             log|engravedwall|coffinlid) return 0 ;;
@@ -253,6 +264,9 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
         Skateboard.BoardCastMs)      lo=0;  hi=10000 ;;
         Skateboard.MaxSpeed)         lo=1;  hi=40 ;;
         Skateboard.PushImpulse)      lo=0;  hi=20 ;;
+        Skateboard.Push.Mode)        lo=0;  hi=1 ;;
+        Skateboard.Push.IntervalMs)  lo=100; hi=2000 ;;
+        Skateboard.Push.MaxHoldMs)   lo=100; hi=5000 ;;
         Skateboard.Friction.Static)  lo=0;  hi=20 ;;
         Skateboard.Friction.Rolling) lo=0;  hi=1 ;;
         Skateboard.SlopeGain)        lo=0;  hi=90 ;;

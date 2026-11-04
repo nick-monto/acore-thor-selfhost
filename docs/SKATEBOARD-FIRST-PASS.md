@@ -175,24 +175,29 @@ is ever boarded.
 | `Skateboard.MountedPose` | 0 | §2.5 |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.PushImpulse` | 4.0 | yd/s per kick |
+| `Skateboard.Push.Mode` | 0 | 0 = one kick per press, 1 = hold to pump (`push down` / `push up` from the add-on), one kick every `Push.IntervalMs`, capped by `Push.MaxHoldMs` |
+| `Skateboard.Push.IntervalMs` / `.MaxHoldMs` | 500 / 2000 | the pump's rhythm and its lost-`up` backstop |
 | `Skateboard.Friction.Static` / `.Rolling` | 1.5 / 0.004 | the `c0` / `c1` terms |
 | `Skateboard.SlopeGain` | 9.0 | multiplier on the terrain gradient |
 | `Skateboard.LandingBonus` | 2.0 | `v` added by a clean landing |
 | `Skateboard.Tricks` | 1 | auto tricks on take-off, and the bar's trick slots |
-| `Skateboard.Trick.VisualKit` | 5036 | stock `SpellVisualKit` id sent with each clip, 0 = no flair |
+| `Skateboard.Trick.VisualKit` | 5036 | default stock `SpellVisualKit` id for a list entry without its own, 0 = no flair |
+| `Skateboard.Trick.List` | `kickflip:399:5036, ollie:394:5036, grind:388:5036` | the trick list: `name:emote[:kit]` per comma-separated entry, position = speed band, up to 8 |
 | `Skateboard.Crash.Enable` / `.DamagePct` / `.StaggerMs` | 1 / 8 / 1500 | the wipeout |
 | `Skateboard.HardcoreSafe` | 1 | a crash can never kill |
 | `Skateboard.OffOnHit` | 1 | a 21 yd/s cap is a free disengage; a hit takes the deck, the start of a fight does not |
-| `Skateboard.BoardCastMs` | 2000 | boarding takes this long, and a step, a hit or a fight stops it |
-| `Skateboard.BoardCastMs` | 2000 | boarding delay; the client's bar is driven by the module's `c` push |
+| `Skateboard.BoardCastMs` | 2000 | boarding takes this long, and a step, a hit or a fight stops it; the client's bar is driven by the module's `c` push |
 | `Skateboard.AckTimeoutMs` | 500 | §2.4 |
 | `Skateboard.Debug` | 0 | one log line per 5 s: `v`, slope, rate, `pendingAcks` |
 
 Commands, `CommandScript` (`Acore::ChatCommands`, so both the chat line and the add-on channel can
 reach them): `.board on`, `.board off`, `.board toggle`, `.board status`, `.board speed`,
-`.board push`, `.board trick <1|2|3>`. `.board on` starts `Skateboard.BoardCastMs` of boarding (0 boards instantly) and pushes `AzerothCore\tcbegin=<ms>` / `cdone` / `ccancel=<reason>` on the add-on channel, which is what draws and stops the add-on's bar. `.board status` answers one parseable line,
-`boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId> speed=<yd/s>`, which is what the add-on builds its slots
-from, and `.board speed` answers `v=<yd/s> rate=<rate> pending=<n>`. Config is read in
+`.board push [down|up]`, `.board trick <name|index>`, `.board tricks`. `.board on` starts `Skateboard.BoardCastMs` of boarding (0 boards instantly) and pushes `AzerothCore\tcbegin=<ms>` / `cdone` / `ccancel=<reason>` on the add-on channel, which is what draws and stops the add-on's bar. `.board status` answers one parseable line,
+`boarded=<0|1> tricks=<n> push=<0|1> deck=<displayId> speed=<yd/s> drive=<0|1> mode=<n> impulse=<ms> brake=<yd/s^2>`,
+which is what the add-on builds its slots from - the carry fields ride after the ones it parses, so
+the add-on ignores them and `.board status` in chat shows them. `.board tricks` answers
+`tricks=<n>` followed by `1 kickflip 399` per entry, which is the add-on's menu; `.board speed`
+answers `v=<yd/s> rate=<rate> pending=<n>`. Config is read in
 `WorldScript::OnAfterConfigLoad`, so `.reload config` applies it without a restart.
 
 ## 2.9 Activation, and how the binds take over
@@ -213,11 +218,13 @@ button itself. `EInteract.lua:203-233` is the working precedent.
 | Binding | Action |
 |---|---|
 | `Skateboard` | board / leave (`.board toggle`) |
-| `Skateboard: push` | `.board push` |
-| `Skateboard: trick 1`, `Skateboard: trick 2` | `.board trick 1`, `.board trick 2` |
+| `Skateboard: push` | `.board push down` / `.board push up` (one kick each when `Push.Mode = 0`) |
+| `Skateboard: selected trick` | `.board trick <name>`, whatever the menu last selected |
+| `Skateboard: tricks menu` | `.board tricks`, then the picker |
 | `Skateboard: bail` | `.board off`, whatever the state |
 
-Five bindings is the whole activation surface — the bar offers the same actions plus trick 3. None of
+Five bindings is the whole activation surface — the bar offers the same actions plus one button per
+entry of `Skateboard.Trick.List`, and the menu is the list itself. None of
 them needs a client DBC, an item or a spell, and all of them are reachable from the launcher's
 external pad, which emits key presses.
 

@@ -254,7 +254,8 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | `Skateboard.HardcoreSafe` | 1 | a crash can never kill a Hardcore character (§9) |
 
 Commands: `.board on`, `.board off`, `.board toggle`, `.board status`, `.board speed` (print `v`),
-`.board push`, `.board trick <1|2|3>`.
+`.board push [down|up]`, `.board trick <name|index>`, `.board tricks` (the list the add-on's menu is
+built from).
 
 Activation is a click binding in the launcher's add-on, not a console command: `SetBindingClick`
 lists it in the stock Key Bindings frame, so a keyboard player binds a key there and a pad player

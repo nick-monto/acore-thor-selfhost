@@ -98,6 +98,37 @@ Skateboard.MaxSpeed = 21.0
 Skateboard.PushImpulse = 4.0
 
 #
+#    Skateboard.Push.Mode
+#        0 = one kick per press, the original contract: '.board push' adds
+#        PushImpulse once. 1 = hold to pump: the add-on sends '.board push down'
+#        on press and '.board push up' on release, and the deck adds one kick
+#        every Push.IntervalMs for as long as the hold lasts, so a player can
+#        build speed by leaning on the button instead of tapping it.
+#        A plain '.board push' still adds exactly one kick in either mode, and
+#        Skateboard.Push.MaxHoldMs ends a hold whatever the client does.
+#        Default: 0, range: 0|1
+#
+Skateboard.Push.Mode = 0
+
+#
+#    Skateboard.Push.IntervalMs
+#        Milliseconds between kicks while a hold is in effect. At the default
+#        PushImpulse of 4.0, 500 ms is 8 yd/s^2 of push.
+#        Default: 500, range: 100 - 2000
+#
+Skateboard.Push.IntervalMs = 500
+
+#
+#    Skateboard.Push.MaxHoldMs
+#        The longest a hold can pump, measured from the down edge. A lost up
+#        edge - a logout, a desync, an add-on that stopped running - cannot
+#        leave a deck pumping forever. Also what a keyboard or pad press pumps
+#        for when the client cannot see the release.
+#        Default: 2000, range: 100 - 5000
+#
+Skateboard.Push.MaxHoldMs = 2000
+
+#
 #    Skateboard.Friction.Static
 #        Constant deceleration in yd/s^2, applied whether the deck is moving or
 #        not. With the default rolling term this stops a full-speed deck in
@@ -203,6 +234,22 @@ Skateboard.Tricks = 1
 #        Default: 5036, range: 0 - 100000
 #
 Skateboard.Trick.VisualKit = 5036
+
+#
+#    Skateboard.Trick.List
+#        The trick list: `name:emote` entries separated by commas, each with an
+#        optional third field for a stock SpellVisualKit id. The name is what
+#        the add-on menu shows and what '.board trick <name>' takes; the emote
+#        is an Emote.dbc id played on the take-off or on the command.
+#        Position is the speed band: entry 1 is the clip queued at slow speed
+#        (short), 2 at medium, 3 and beyond at high (long) - so the take-off
+#        picks by band, and '.board trick' picks by name.
+#        A name is lower-cased and cut to [a-z0-9_-]; an entry with no usable
+#        emote is dropped; a list that yields nothing falls back to the shipped
+#        three. Up to 8 entries.
+#        Default: kickflip:399:5036, ollie:394:5036, grind:388:5036
+#
+Skateboard.Trick.List = kickflip:399:5036, ollie:394:5036, grind:388:5036
 
 #
 #    Skateboard.Crash.Enable

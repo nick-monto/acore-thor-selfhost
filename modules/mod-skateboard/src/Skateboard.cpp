@@ -47,6 +47,7 @@
  */
 
 #include "Chat.h"
+#include "ChatCommand.h"
 #include "Config.h"
 #include "DBCStores.h"
 #include "GameTime.h"
@@ -126,6 +127,86 @@ namespace
         return it == Decks().end() ? nullptr : &it->second;
     }
 
+    // One entry of the trick list by the band its clip belongs to: entry 1 is the slow clip, 2 the
+    // medium one, 3 and beyond the long one. A list shorter than three reuses its last entry.
+    Skateboard::Trick const* TrickForBand(Skateboard::Config const& cfg, uint32 clip)
+    {
+        if (cfg.TrickEntries.empty())
+            return nullptr;
+
+        size_t index = clip == Skateboard::CLIP_SHORT_MS ? 0 : (clip == Skateboard::CLIP_MEDIUM_MS ? 1 : 2);
+        return &cfg.TrickEntries[std::min(index, cfg.TrickEntries.size() - 1)];
+    }
+
+    // The clip a list position queues: 1 = short, 2 = medium, everything after = long.
+    uint32 ClipForIndex(size_t index)
+    {
+        if (index == 0)
+            return Skateboard::CLIP_SHORT_MS;
+        if (index == 1)
+            return Skateboard::CLIP_MEDIUM_MS;
+        return Skateboard::CLIP_LONG_MS;
+    }
+
+    // 'name:emote[:visualkit], name:emote, ...' - the menu's list. A name is lower-cased and cut
+    // to [a-z0-9_-]; an entry that has no usable emote is dropped, and a list that yields nothing
+    // falls back to the shipped three so tricks never disappear on a typo.
+    void ParseTricks(std::string const& raw, uint32 defaultKit, std::vector<Skateboard::Trick>& out)
+    {
+        out.clear();
+
+        size_t start = 0;
+        while (start <= raw.size() && out.size() < 8)
+        {
+            size_t const comma = raw.find(',', start);
+            std::string const entry = raw.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            start = comma == std::string::npos ? raw.size() + 1 : comma + 1;
+
+            std::vector<std::string> parts;
+            size_t pos = 0;
+            while (pos <= entry.size() && parts.size() < 3)
+            {
+                size_t const colon = entry.find(':', pos);
+                parts.push_back(entry.substr(pos, colon == std::string::npos ? std::string::npos : colon - pos));
+                pos = colon == std::string::npos ? entry.size() + 1 : colon + 1;
+            }
+
+            if (parts.size() < 2)
+                continue;
+
+            std::string name;
+            for (char ch : parts[0])
+            {
+                if (name.size() >= 12)
+                    break;
+                unsigned char const u = static_cast<unsigned char>(ch);
+                if (u == ' ')
+                    continue;
+                name += char(std::tolower(u));
+            }
+
+            if (name.empty())
+                continue;
+
+            unsigned long emote = std::strtoul(parts[1].c_str(), nullptr, 10);
+            if (emote == 0 || emote > 1000)
+                continue;
+
+            uint32 kit = defaultKit;
+            if (parts.size() >= 3 && !parts[2].empty())
+                kit = uint32(std::min<unsigned long>(std::strtoul(parts[2].c_str(), nullptr, 10), 100000));
+
+            out.push_back(Skateboard::Trick{ name, uint32(emote), kit });
+        }
+
+        if (out.empty())
+        {
+            out.push_back(Skateboard::Trick{ "kickflip", EMOTE_ONESHOT_JUMPSTART, defaultKit });
+            out.push_back(Skateboard::Trick{ "ollie", EMOTE_ONESHOT_JUMPLANDRUN, defaultKit });
+            out.push_back(Skateboard::Trick{ "grind", EMOTE_ONESHOT_STOMP, defaultKit });
+        }
+    }
+
     // The stock clip for the speed band the take-off happened in.
     uint32 ClipForSpeed(float v, float maxSpeed)
     {
@@ -135,15 +216,6 @@ namespace
         if (v < span * 2.0f / 3.0f)
             return Skateboard::CLIP_MEDIUM_MS;
         return Skateboard::CLIP_LONG_MS;
-    }
-
-    uint32 EmoteForClip(uint32 clip)
-    {
-        if (clip == Skateboard::CLIP_SHORT_MS)
-            return EMOTE_ONESHOT_JUMPSTART;   // 399
-        if (clip == Skateboard::CLIP_MEDIUM_MS)
-            return EMOTE_ONESHOT_JUMPLANDRUN; // 394
-        return EMOTE_ONESHOT_STOMP;           // 388
     }
 
     // Clears the mount display field and the flags around it. Mode 0 never set
@@ -310,6 +382,9 @@ namespace Skateboard
         cfg.DriveMode = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.Mode", 1), 1, 2);
         cfg.LandingBonus = std::clamp(sConfigMgr->GetOption<float>("Skateboard.LandingBonus", 2.0f), 0.0f, 20.0f);
         cfg.Tricks = sConfigMgr->GetOption<bool>("Skateboard.Tricks", true);
+        cfg.PushHold = sConfigMgr->GetOption<uint32>("Skateboard.Push.Mode", 0) != 0;
+        cfg.PushIntervalMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Push.IntervalMs", 500), 100, 2000);
+        cfg.PushMaxHoldMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Push.MaxHoldMs", 2000), 100, 5000);
         cfg.TrickVisualKit = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Trick.VisualKit", 5036), 100000);
         cfg.CrashEnable = sConfigMgr->GetOption<bool>("Skateboard.Crash.Enable", true);
         cfg.CrashDamagePct = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Crash.DamagePct", 8), 99);
@@ -319,6 +394,8 @@ namespace Skateboard
         cfg.BoardCastMs = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.BoardCastMs", 2000), 10000);
         cfg.AckTimeoutMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.AckTimeoutMs", 500), 50, 5000);
         cfg.Debug = sConfigMgr->GetOption<bool>("Skateboard.Debug", false);
+        cfg.TrickList = sConfigMgr->GetOption<std::string>("Skateboard.Trick.List", "kickflip:399:5036, ollie:394:5036, grind:388:5036");
+        ParseTricks(cfg.TrickList, cfg.TrickVisualKit, cfg.TrickEntries);
 
         // The deck is only named here. Resolving it needs CreatureDisplayInfo.dbc, and
         // OnAfterConfigLoad runs before LoadDBCStores (World.cpp:323 against :385), so a lookup
@@ -670,13 +747,92 @@ namespace Skateboard
         deck->v = std::min(deck->v + cfg.PushImpulse, cfg.MaxSpeed);
     }
 
-    void Manager::PlayTrick(Player* player, uint32 clip, ChatHandler* handler)
+    void Manager::PushDown(Player* player, ChatHandler* handler)
     {
-        if (!player || clip < 1 || clip > 3)
+        Deck* deck = FindDeck(player);
+        if (!deck || deck->displayId == 0)
         {
             if (handler)
             {
-                handler->SendSysMessage("Trick clips are 1 (short), 2 (medium) and 3 (long).");
+                handler->SendSysMessage("You are not on a skateboard.");
+                handler->SetSentErrorMessage(true);
+            }
+            return;
+        }
+
+        Config const& cfg = GetConfig();
+
+        // Press mode is the older contract: a down edge is one kick and an up edge is nothing, so
+        // an add-on can send both without knowing which mode the realm runs.
+        if (!cfg.PushHold)
+        {
+            deck->v = std::min(deck->v + cfg.PushImpulse, cfg.MaxSpeed);
+            return;
+        }
+
+        if (!deck->pushHeld)
+        {
+            deck->pushHeld = true;
+            deck->pushHeldSinceMs = NowMs();
+            deck->pushNextMs = NowMs();
+        }
+    }
+
+    void Manager::PushUp(Player* player)
+    {
+        if (Deck* deck = FindDeck(player))
+        {
+            deck->pushHeld = false;
+            deck->pushNextMs = 0;
+        }
+    }
+
+    void Manager::PlayTrick(Player* player, std::string const& which, ChatHandler* handler)
+    {
+        Config const& cfg = GetConfig();
+
+        // A name or a 1-based position. Names are lower-cased here, so '.board trick Kickflip'
+        // works without the add-on knowing the case the conf was written in.
+        std::string wanted;
+        for (char ch : which)
+        {
+            unsigned char const u = static_cast<unsigned char>(ch);
+            if (u != ' ')
+                wanted += char(std::tolower(u));
+        }
+
+        size_t index = cfg.TrickEntries.size();
+        for (size_t i = 0; i < cfg.TrickEntries.size(); ++i)
+        {
+            if (cfg.TrickEntries[i].Name == wanted)
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index == cfg.TrickEntries.size())
+        {
+            unsigned long const number = std::strtoul(wanted.c_str(), nullptr, 10);
+            if (number >= 1 && number <= cfg.TrickEntries.size())
+                index = size_t(number - 1);
+        }
+
+        if (index == cfg.TrickEntries.size())
+        {
+            if (handler)
+            {
+                handler->SendSysMessage("No such trick. '.board tricks' lists them.");
+                handler->SetSentErrorMessage(true);
+            }
+            return;
+        }
+
+        if (!cfg.Tricks)
+        {
+            if (handler)
+            {
+                handler->SendSysMessage("Skateboard.Tricks is off: no trick list.");
                 handler->SetSentErrorMessage(true);
             }
             return;
@@ -693,15 +849,31 @@ namespace Skateboard
             return;
         }
 
-        Config const& cfg = GetConfig();
+        Trick const& trick = cfg.TrickEntries[index];
         uint32 const now = NowMs();
 
-        deck->activeClip = clip == 1 ? CLIP_SHORT_MS : (clip == 2 ? CLIP_MEDIUM_MS : CLIP_LONG_MS);
+        deck->activeClip = ClipForIndex(index);
         deck->trickEndMs = now + deck->activeClip;
 
-        player->HandleEmoteCommand(EmoteForClip(deck->activeClip));
-        if (cfg.TrickVisualKit)
-            player->SendPlaySpellVisual(cfg.TrickVisualKit);
+        player->HandleEmoteCommand(trick.Emote);
+        if (trick.VisualKit)
+            player->SendPlaySpellVisual(trick.VisualKit);
+    }
+
+    void Manager::ListTricks(ChatHandler* handler) const
+    {
+        Config const& cfg = GetConfig();
+
+        if (!cfg.Tricks)
+        {
+            handler->SendSysMessage("Skateboard.Tricks is off: no trick list.");
+            handler->SetSentErrorMessage(true);
+            return;
+        }
+
+        handler->PSendSysMessage("tricks={}", uint32(cfg.TrickEntries.size()));
+        for (size_t i = 0; i < cfg.TrickEntries.size(); ++i)
+            handler->PSendSysMessage("{} {} {}", uint32(i) + 1, cfg.TrickEntries[i].Name, cfg.TrickEntries[i].Emote);
     }
 
     bool Manager::IsBoarded(Player const* player) const
@@ -854,6 +1026,23 @@ namespace Skateboard
             deck.v = std::clamp(deck.v, 0.0f, cfg.MaxSpeed);
         }
 
+        // .board push down: one kick per Push.IntervalMs while the hold lasts. Push.MaxHoldMs ends
+        // it whatever the client does, so a lost up edge - a logout, a desync, an add-on that
+        // stopped running - cannot leave a deck pumping forever.
+        if (deck.pushHeld)
+        {
+            if (Reached(now, deck.pushHeldSinceMs + cfg.PushMaxHoldMs))
+            {
+                deck.pushHeld = false;
+                deck.pushNextMs = 0;
+            }
+            else if (Reached(now, deck.pushNextMs))
+            {
+                deck.v = std::min(deck.v + cfg.PushImpulse, cfg.MaxSpeed);
+                deck.pushNextMs = now + cfg.PushIntervalMs;
+            }
+        }
+
         // The carry: legs off the keys, the deck keeps going. Forward cancels it (the run-speed
         // cap is what makes a pumping rider fast) and backward is the brake above, so the client
         // is never fighting the server for the same yard. A rooted or stunned rider is not
@@ -926,11 +1115,11 @@ namespace Skateboard
             deck->activeClip = ClipForSpeed(deck->v, cfg.MaxSpeed);
             deck->trickEndMs = cfg.Tricks ? now + deck->activeClip : 0;
 
-            if (cfg.Tricks)
+            if (Trick const* trick = cfg.Tricks ? TrickForBand(cfg, deck->activeClip) : nullptr)
             {
-                player->HandleEmoteCommand(EmoteForClip(deck->activeClip));
-                if (cfg.TrickVisualKit)
-                    player->SendPlaySpellVisual(cfg.TrickVisualKit);
+                player->HandleEmoteCommand(trick->Emote);
+                if (trick->VisualKit)
+                    player->SendPlaySpellVisual(trick->VisualKit);
             }
             return;
         }
@@ -1114,6 +1303,7 @@ public:
             { "speed",  HandleBoardSpeedCommand,  SEC_PLAYER, Console::No },
             { "push",   HandleBoardPushCommand,   SEC_PLAYER, Console::No },
             { "trick",  HandleBoardTrickCommand,  SEC_PLAYER, Console::No },
+            { "tricks", HandleBoardTricksCommand, SEC_PLAYER, Console::No },
         };
 
         static ChatCommandTable commandTable =
@@ -1202,7 +1392,7 @@ public:
         Skateboard::Manager& manager = Skateboard::GetManager();
 
         uint32 const boarded = manager.IsBoarded(player) ? 1 : 0;
-        uint32 const tricks = cfg.Tricks ? 3 : 0;
+        uint32 const tricks = cfg.Tricks ? uint32(cfg.TrickEntries.size()) : 0;
         uint32 const push = cfg.PushImpulse > 0.0f ? 1 : 0;
 
         // The carry's knobs ride at the end, after the fields the add-on parses: tuning
@@ -1226,23 +1416,46 @@ public:
         return true;
     }
 
-    static bool HandleBoardPushCommand(ChatHandler* handler)
+    // '.board push' is one kick; '.board push down' and '.board push up' are the edges an add-on
+    // sends when Skateboard.Push.Mode = 1, so the same binding works in either mode.
+    static bool HandleBoardPushCommand(ChatHandler* handler, Optional<std::string> which)
     {
         Player* player = handler->GetPlayer();
         if (!player)
             return false;
 
-        Skateboard::GetManager().Push(player, handler);
+        Skateboard::Manager& manager = Skateboard::GetManager();
+        std::string edge = which ? *which : "";
+
+        if (edge == "down")
+            manager.PushDown(player, handler);
+        else if (edge == "up")
+            manager.PushUp(player);
+        else if (!edge.empty())
+        {
+            handler->SendSysMessage("'.board push' is one kick; 'push down' and 'push up' are the hold.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        else
+            manager.Push(player, handler);
+
         return true;
     }
 
-    static bool HandleBoardTrickCommand(ChatHandler* handler, uint32 clip)
+    static bool HandleBoardTrickCommand(ChatHandler* handler, std::string which)
     {
         Player* player = handler->GetPlayer();
         if (!player)
             return false;
 
-        Skateboard::GetManager().PlayTrick(player, clip, handler);
+        Skateboard::GetManager().PlayTrick(player, which, handler);
+        return true;
+    }
+
+    static bool HandleBoardTricksCommand(ChatHandler* handler)
+    {
+        Skateboard::GetManager().ListTricks(handler);
         return true;
     }
 };

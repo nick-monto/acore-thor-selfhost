@@ -42,6 +42,7 @@
 #include "Define.h"
 
 #include <string>
+#include <vector>
 
 class ChatHandler;
 class Player;
@@ -62,6 +63,17 @@ namespace Skateboard
     constexpr uint32 CLIP_MEDIUM_MS = 900;
     constexpr uint32 CLIP_LONG_MS   = 1400;
 
+    // One entry of Skateboard.Trick.List: the name the add-on's menu shows, the emote it plays and
+    // the stock SpellVisualKit sent with it (0 = no flair). The list's order is the speed band:
+    // entry 1 is the slow clip, 2 the medium one, 3 and beyond the long one, and a manual
+    // '.board trick <name>' plays any of them by hand.
+    struct Trick
+    {
+        std::string Name;
+        uint32 Emote = 0;
+        uint32 VisualKit = 0;
+    };
+
     // Cached config. Written only by LoadConfig() (world thread, at startup and
     // on '.reload config'); read from any thread after that - the same
     // one-writer/startup assumption the core's own config accessors make.
@@ -76,11 +88,16 @@ namespace Skateboard
         float FrictionStatic       = 1.5f;     // Skateboard.Friction.Static
         float FrictionRolling      = 0.004f;   // Skateboard.Friction.Rolling
         float SlopeGain            = 9.0f;     // Skateboard.SlopeGain
+        bool PushHold              = false;    // Skateboard.Push.Mode (1 = hold to pump)
+        uint32 PushIntervalMs      = 500;      // Skateboard.Push.IntervalMs
+        uint32 PushMaxHoldMs       = 2000;     // Skateboard.Push.MaxHoldMs
         bool Drive                 = true;     // Skateboard.Drive
         uint32 DriveImpulseMs      = 350;      // Skateboard.Drive.ImpulseMs
         float DriveMinSpeed        = 3.0f;     // Skateboard.Drive.MinSpeed
         float Brake                = 6.0f;     // Skateboard.Brake
         uint32 DriveMode           = 1;        // Skateboard.Drive.Mode (1 = impulse, 2 = spline)
+        std::string TrickList;                 // Skateboard.Trick.List, as configured
+        std::vector<Trick> TrickEntries;       // Skateboard.Trick.List, parsed (never empty)
         float LandingBonus         = 2.0f;     // Skateboard.LandingBonus
         bool Tricks                = true;     // Skateboard.Tricks
         uint32 TrickVisualKit      = 5036;     // Skateboard.Trick.VisualKit
@@ -125,6 +142,9 @@ namespace Skateboard
         uint32 displayId = 0;           // what was written to the mount field
         uint32 mapId = 0;               // map the deck was boarded on
         uint32 debugNextMs = 0;         // next '.board' debug log line
+        bool pushHeld = false;          // '.board push down' is in effect (Skateboard.Push.Mode = 1)
+        uint32 pushNextMs = 0;          // next kick while held
+        uint32 pushHeldSinceMs = 0;     // when the hold started, for Push.MaxHoldMs
         uint32 driveNextMs = 0;         // next carry impulse (Skateboard.Drive)
         uint32 lastImpulseMs = 0;       // the last carry impulse, to tell a glide's fall from a jump
         uint32 castDeadlineMs = 0;      // boarding cast in flight (0 = none, nothing written yet)
@@ -169,9 +189,18 @@ namespace Skateboard
         // '.board push': one impulse, clamped to MaxSpeed.
         void Push(Player* player, ChatHandler* handler);
 
-        // '.board trick <1|2|3>': plays clip 1, 2 or 3 by hand. A landing
-        // before it ends crashes, exactly like a mistimed jump.
-        void PlayTrick(Player* player, uint32 clip, ChatHandler* handler);
+        // '.board push down' / '.board push up': with Skateboard.Push.Mode = 1 the deck pumps one
+        // impulse every Push.IntervalMs while the hold is in effect, for at most Push.MaxHoldMs.
+        void PushDown(Player* player, ChatHandler* handler);
+        void PushUp(Player* player);
+
+        // '.board trick <name|index>': plays one entry of Skateboard.Trick.List by hand. A landing
+        // before its clip ends crashes, exactly like a mistimed jump.
+        void PlayTrick(Player* player, std::string const& which, ChatHandler* handler);
+
+        // '.board tricks': one line per entry, `1 kickflip 399`, which is what the add-on's menu
+        // and its bar slots are built from.
+        void ListTricks(ChatHandler* handler) const;
 
         // True while the deck record exists and the mount field is written.
         bool IsBoarded(Player const* player) const;
