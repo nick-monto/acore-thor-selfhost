@@ -76,7 +76,7 @@ MERCENARY_CONF_DEFAULTS=(
 # survivor list: a key absent from the file or outside its range is silently replaced by the
 # module's own fallback, so wc_write_all() and the installer's run_checks() restore it from here.
 SKATEBOARD_CONF_DEFAULTS=(
-    "Skateboard.Enable=1"
+    "Skateboard.Enable=0"
     "Skateboard.Deck=plank"
     "Skateboard.Deck.Render=unit"
     "Skateboard.Deck.Carrier=29443"
@@ -272,7 +272,8 @@ skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is o
     fi
     case "$key" in
         Skateboard.Enable|Skateboard.Tricks|Skateboard.Crash.Enable|\
-        Skateboard.HardcoreSafe|Skateboard.OffOnHit|Skateboard.Debug|Skateboard.Drive)
+        Skateboard.HardcoreSafe|Skateboard.OffOnHit|Skateboard.Debug|Skateboard.Drive|\
+        Skateboard.Vehicle.Probe)
             case "$val" in 0|1) return 0 ;; *) return 1 ;; esac ;;
         Skateboard.BoardCastMs)      lo=0;  hi=10000 ;;
         Skateboard.MaxSpeed)         lo=1;  hi=40 ;;
@@ -596,11 +597,12 @@ wc_write_all() {
     fi
     if [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf" ]; then
         sb="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-skateboard)"
-        # The shipped .dist already holds these values, and Skateboard.Enable ships as 1: the board
-        # is available from the first boot. Each key is still read back, because a key the module
+        # The shipped .dist already holds these values, and Skateboard.Enable ships as 0: the deck's
+        # development is paused, so the board is off from the first boot and a realm opts in with
+        # the key (or WC_SKATEBOARD) below. Each key is still read back, because a key the module
         # cannot use is silently replaced by its own fallback and a deck id the DBC does not carry
         # falls back to the stock display. Only a value outside its range is rewritten - a
-        # deliberate Enable=0 is left alone.
+        # deliberate Enable=1 is left alone.
         # The combat rule used to be Skateboard.OffInCombat, which nothing reads now: the start of a
         # fight leaves the deck alone and a hit takes it (OffOnHit). A leftover key would sit in the
         # live file looking like it still did something.
@@ -620,7 +622,7 @@ wc_write_all() {
         # WC_SKATEBOARD is how a container or the Thor asks for the board on a given boot. The conf
         # is rendered from the .dist every start, and the container's /opt/acore/etc is part of the
         # image layer rather than a volume, so a hand edit there is gone at the next rebuild: the
-        # dial is what survives. Unset leaves the shipped default (on).
+        # dial is what survives. Unset leaves the shipped default (off - development is paused).
         case "${WC_SKATEBOARD:-}" in
             0|1) wc_set_conf "$sb" Skateboard.Enable "$WC_SKATEBOARD" ;;
             '') ;;

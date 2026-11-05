@@ -317,7 +317,7 @@ $MercenaryConfDefaults = @(
 # module's own fallback, so Write-Configs() and Invoke-Checks() restore it from here. These are the
 # module's whole conf - nineteen scalars, no lists - and Skateboard.Enable ships as 1.
 $SkateboardConfDefaults = @(
-    'Skateboard.Enable=1'
+    'Skateboard.Enable=0'
     'Skateboard.Deck=plank'
     'Skateboard.Deck.Render=unit'
     'Skateboard.Deck.Carrier=29443'

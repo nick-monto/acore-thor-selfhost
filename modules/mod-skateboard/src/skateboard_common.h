@@ -95,7 +95,7 @@ namespace Skateboard
     // one-writer/startup assumption the core's own config accessors make.
     struct Config
     {
-        bool Enable                = true;     // Skateboard.Enable
+        bool Enable                = false;    // Skateboard.Enable (shipped off: development paused)
         std::string DeckName       = "plank";          // Skateboard.Deck, as configured
         uint32 DeckDisplayId       = 90001;    // Skateboard.Deck, resolved
         bool RenderUnit            = true;     // Skateboard.Deck.Render (unit, not mount)

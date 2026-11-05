@@ -1,5 +1,11 @@
 # Skateboarding: a board you ride, with momentum and tricks
 
+> **Development paused.** The deck is shipped disabled (`Skateboard.Enable = 0`, off by default).
+> The module, the add-on and the deck's DBC rows stay in the tree and in the build, and
+> `Skateboard.Enable = 1` (or `SKATEBOARD_ENABLE=1` on the Windows container) turns it back on
+> with no server rebuild, though the launcher no longer ships the client add-on; the playtests
+> named below are what a resumption starts from.
+
 Companion to [`SERVER-STACK.md`](SERVER-STACK.md). The question: can this stack carry a
 momentum-based board mode — rolling, accelerating downhill, popping off ramps, landing tricks —
 using assets the client already has? Feasibility answer first, design second.
@@ -262,7 +268,7 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Skateboard.Enable` | 1 | whole feature |
+| `Skateboard.Enable` | 0 | whole feature (shipped off: development paused) |
 | `Skateboard.Deck` | `plank` | `plank` (90001) and `coffinlid` (90002) are the two doodad rows; `log` is 26609, the stock `Log Ride (Log A)`; `engravedwall` is the old name for 90001 |
 | `Skateboard.BoardCastMs` | 2000 | boarding delay; nothing is written until it completes, and the add-on's bar is driven by the module's own `c` push rather than by the status poll |
 | `Skateboard.OffOnHit` | 1 | a hit from another unit takes the deck; the start of a fight does not, and neither does fall damage |

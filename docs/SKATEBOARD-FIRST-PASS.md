@@ -1,5 +1,11 @@
 # Skateboard: the first pass
 
+> **Development paused.** The deck is shipped disabled (`Skateboard.Enable = 0`, off by default).
+> The module, the add-on and the deck's DBC rows stay in the tree and in the build, and
+> `Skateboard.Enable = 1` (or `SKATEBOARD_ENABLE=1` on the Windows container) turns it back on
+> with no server rebuild, though the launcher no longer ships the client add-on; the playtests
+> named below are what a resumption starts from.
+
 Companion to [`SKATEBOARDING-DESIGN.md`](SKATEBOARDING-DESIGN.md), which establishes what is
 feasible and why. This document is the build plan for the first shippable slice: the module, the two
 deck rows, the packaging, and the acceptance check for each step.
@@ -233,7 +239,7 @@ is ever boarded.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Skateboard.Enable` | 1 | whole feature |
+| `Skateboard.Enable` | 0 | whole feature (shipped off: development paused) |
 | `Skateboard.Deck` | `plank` | `plank` (90001, the Redridge boardwalk) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id. `engravedwall` is the old name for 90001 and still resolves |
 | `Skateboard.Deck.Render` | `unit` | §2.5: `unit` summons the deck under a standing rider (and under `Drive.Mode = 1` walks it on the rider's own path); `mount` draws it at the rider's position but seats them |
 | `Skateboard.Drive.Mode` / `.SplineMs` / `.GroundMs` | `1` / `400` / `100` | the spline carrier: a 300 ms segment walked along the terrain, a 100 ms window in which the client may turn or jump at all (`VerifyMovementInfo` drops every movement packet while the spline runs), and a 10° deadband so a client's wobble does not re-aim the path |

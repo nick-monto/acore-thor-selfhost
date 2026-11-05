@@ -4,6 +4,15 @@
 # mod-skateboard configuration
 ########################################
 #
+# DEVELOPMENT PAUSED. The deck is disabled by default (Skateboard.Enable = 0):
+# the module still loads and the keys below still validate, but nobody can board
+# and nothing updates until a realm sets Enable back to 1. The module and the deck
+# rows in patch-8.MPQ stay in place, so turning the key back on needs no rebuild
+# (the module reads its config in OnAfterConfigLoad, so '.reload config' is
+# enough). The launcher no longer installs the client add-on - it was retired with
+# the pause - so a resumed realm boards with the '.board' chat commands, or gets
+# the add-on back first.
+#
 # A skateboard, not a mount: the character keeps walking, and the module gives it
 # a deck to ride. The deck itself is drawn as a mount display (Deck.Render), but
 # no mount speed and no mount aura are involved - it is a drawing choice.
@@ -81,13 +90,15 @@
 #        and the bindings work, and nobody is boarded until a player asks. 0 =
 #        the module loads, '.board' still exists but every refusal says the
 #        skateboard is disabled, and nothing updates.
+#        Shipped as 0: development is paused, so a realm that wants the board
+#        opts in by setting this to 1.
 #        The container renderer (scripts/write-confs.sh) overrides this key
 #        from SKATEBOARD_ENABLE on every boot, because a container's
 #        /opt/acore/etc is part of the image layer and a hand edit is lost at
 #        the next rebuild.
-#        Default: 1, range: 0/1
+#        Default: 0, range: 0/1
 #
-Skateboard.Enable = 1
+Skateboard.Enable = 0
 
 #
 #    Skateboard.BoardCastMs

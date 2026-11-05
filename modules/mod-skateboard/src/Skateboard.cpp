@@ -892,7 +892,7 @@ namespace Skateboard
     {
         Config& cfg = ConfigMut();
 
-        cfg.Enable = sConfigMgr->GetOption<bool>("Skateboard.Enable", true);
+        cfg.Enable = sConfigMgr->GetOption<bool>("Skateboard.Enable", false);   // shipped off: development paused
         cfg.DeckName = sConfigMgr->GetOption<std::string>("Skateboard.Deck", "plank");
         cfg.MaxSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.MaxSpeed", 21.0f), 1.0f, 40.0f);
         cfg.Cruise = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Cruise", 4.0f), 0.0f, 20.0f);

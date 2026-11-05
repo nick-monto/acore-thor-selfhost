@@ -1,5 +1,11 @@
 # A deck that is a vehicle
 
+> **Development paused.** The deck is shipped disabled (`Skateboard.Enable = 0`, off by default).
+> The module, the add-on and the deck's DBC rows stay in the tree and in the build, and
+> `Skateboard.Enable = 1` (or `SKATEBOARD_ENABLE=1` on the Windows container) turns it back on
+> with no server rebuild, though the launcher no longer ships the client add-on; the playtests
+> named below are what a resumption starts from.
+
 ## Why
 
 Three carriers have now been played, and each one loses the same thing the others gain:

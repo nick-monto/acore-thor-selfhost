@@ -474,17 +474,17 @@ world-server restart.
 
 ## Part 5d — The skateboard
 
-`mod-skateboard` ships **on**: the installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` with `Skateboard.Enable = 1`. That makes the board *available*; nobody is boarded until a player presses `.board on` or the add-on's Board button, so it costs a realm nothing to leave on.
+`mod-skateboard` ships **off**: development of the deck is paused, so the installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` with `Skateboard.Enable = 0`. The module is still compiled in and `.board` still exists, but every refusal says the skateboard is disabled and nothing updates. The launcher no longer installs the client add-on (it went to the retired list with the pause and is deleted on the next launch of a client that carried it), so a player boards with the `.board` chat commands once the key is back on, and gets the add-on back only when it is shipped again. Turning it back on is one key, and needs no rebuild: `sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/'` on that conf, then `.reload config` (or `SKATEBOARD_ENABLE=1` on the Windows container). With `Skateboard.Enable = 1` the board is *available*; nobody is boarded until a player presses `.board on` or the add-on's Board button.
 
 A conf is written once, from the `.dist` of the artifact that was installed, but it is not frozen: on every container start `scripts/write-confs.sh` appends every key the live file is missing with the shipped default, validates each existing value, and refuses an out-of-range one - so a newer artifact's new keys (`Skateboard.Cruise`, `Skateboard.Drive.GroundMs`, ...) appear in the live conf on the next boot without deleting anything. Deleting the conf is only for starting over from the shipped values, and it throws away hand-set dials. Retired keys (the ones the module no longer reads - `Skateboard.OffInCombat`, `Skateboard.MountedPose`) are deleted from the live file on the same pass, and `Skateboard.Deck.Carrier = 16386` is migrated to `29443`: the old default turned out to carry a script, which the module now refuses, so an upgraded realm would otherwise board an invisible deck.
 
 The deck draws as a creature summoned under the rider (`Skateboard.Deck.Render = unit`, the shipped default), so the two deck rows still have to be in the **client's** DBC pair - Part 5e's `patch-8.MPQ` - or the summon shows the carrier template's own model (the module falls back to the stock `Log Ride` 26609, which needs no patch).
 
-On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start and defaults to on:
+On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start and defaults to off:
 
 ```bash
-# C:\acore\docker-src\docker\.env, beside the compose file - only to turn the board OFF
-SKATEBOARD_ENABLE=0
+# C:\acore\docker-src\docker\.env, beside the compose file - only to turn the board ON
+SKATEBOARD_ENABLE=1
 ```
 
 ```bash
@@ -492,8 +492,8 @@ docker compose -f docker/docker-compose.yml up -d acore
 ```
 
 ```bash
-# turn it off, then apply it without a restart
-sed -i 's/^Skateboard\.Enable = 1$/Skateboard.Enable = 0/' /opt/acore/etc/modules/mod-skateboard.conf
+# turn it on, then apply it without a restart
+sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/' /opt/acore/etc/modules/mod-skateboard.conf
 # in the worldserver console:
 .reload config
 ```
@@ -508,7 +508,7 @@ grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
 
 | Key | Default | What it does |
 |---|---|---|
-| `Skateboard.Enable` | `1` | the whole feature; 0 refuses `.board on` and boards nobody |
+| `Skateboard.Enable` | `0` | the whole feature; 0 (the shipped default, development paused) refuses `.board on` and boards nobody |
 | `Skateboard.Deck` | `plank` | the Redridge boardwalk plank (display 90001); `coffinlid` (90002) is the Duskwood coffin lid; `log` is the stock `Log Ride` display id 26609 and needs no client patch. Both decks are self-textured *doodad* models, not shields - an item model draws white as a creature (Part 5e). They only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
 | `Skateboard.Deck.Render` | `unit` | how the deck is drawn (a `.reload config` switches it under a live rider): `unit` summons a creature carrying the display, so the rider stands on it (`Deck.Carrier` 29443; under `Drive.Mode = 1` it is launched on the rider's own path, under `Mode = 0` it is followed in `Deck.FollowMs` segments); `mount` is `Unit::Mount()`, drawn at the rider's position but **seating** them - and a doodad deck display (the planks) draws untextured with no rider in that mode |
 | `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |

@@ -223,7 +223,7 @@ jobs:
           # And for the skateboard module: the conf is installed and its master switch is at the
           # shipped value (on), so a build that dropped the module is caught here rather than in game.
           test -f "$PREFIX/etc/modules/mod-skateboard.conf.dist"
-          grep -q '^Skateboard.Enable = 1$' "$PREFIX/etc/modules/mod-skateboard.conf.dist"
+          grep -q '^Skateboard.Enable = 0$' "$PREFIX/etc/modules/mod-skateboard.conf.dist"
 
       - name: Bundle the libraries whose soname is tied to this release
         run: |
@@ -466,7 +466,7 @@ jobs:
           notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
             "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/x86_64, with client data v20.0 and the SQL sources." \
             "Artifact sha256: $(awk '{print $1}' acore-server-x86_64.tar.zst.sha256). It is published beside the asset so a host can say which build a running container was unpacked from." \
-            "Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), and mod-skateboard (a board that carries a rider along its facing, on by default (Skateboard.Enable = 1)), plus the loot-bag patch and the player-centric bot patch." \
+            "Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), and mod-skateboard (a board that carries a rider along its facing, off by default (Skateboard.Enable = 0; development paused)), plus the loot-bag patch and the player-centric bot patch." \
             "This asset is the payload of the Docker image: unpack it at /opt/acore. It carries bin/, etc/, lib/ and src/, not the client data - fetch data v20.0 the way the image does, the same bytes scripts/thor-install.sh verifies on the arm64 side.")"
           gh release view server-build-x86_64 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create server-build-x86_64 -R "$GITHUB_REPOSITORY" --latest=false \
@@ -482,7 +482,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           notes="$(printf '%s\n\n%s\n' \
-            "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/x86_64, with client data v20.0 and the SQL sources. Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), and mod-skateboard (a board that carries a rider along its facing, on by default (Skateboard.Enable = 1)), plus the loot-bag patch and the player-centric bot patch. This asset is the payload of the Docker image: unpack it at /opt/acore; it carries bin/, etc/, lib/ and src/, not the client data." \
+            "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/x86_64, with client data v20.0 and the SQL sources. Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), and mod-skateboard (a board that carries a rider along its facing, off by default (Skateboard.Enable = 0; development paused)), plus the loot-bag patch and the player-centric bot patch. This asset is the payload of the Docker image: unpack it at /opt/acore; it carries bin/, etc/, lib/ and src/, not the client data." \
             "Artifact sha256: $(awk '{print $1}' acore-server-x86_64.tar.zst.sha256), published beside the asset.")"
           # The arm64 and win64 workflows publish their own assets to the same server-v* tag, so this
           # step views before creating - that run may have created the release already, with its own
