@@ -111,10 +111,10 @@ namespace Skateboard
         uint32 PushIntervalMs      = 500;      // Skateboard.Push.IntervalMs
         uint32 PushMaxHoldMs       = 2000;     // Skateboard.Push.MaxHoldMs
         bool Drive                 = true;     // Skateboard.Drive
-        uint32 DriveMode           = 0;        // Skateboard.Drive.Mode (0 = knockback kicks, 1 = server spline)
+        uint32 DriveMode           = 1;        // Skateboard.Drive.Mode (0 = knockback kicks, 1 = server spline)
         uint32 DriveImpulseMs      = 350;      // Skateboard.Drive.ImpulseMs
         uint32 DriveArcMs          = 0;        // Skateboard.Drive.ArcMs (0 = derive it from the cycle)
-        uint32 DriveSplineMs       = 150;      // Skateboard.Drive.SplineMs (one spline segment)
+        uint32 DriveSplineMs       = 400;      // Skateboard.Drive.SplineMs (one spline segment)
         float DriveMinSpeed        = 3.0f;     // Skateboard.Drive.MinSpeed
         float Brake                = 6.0f;     // Skateboard.Brake
         uint32 DriveGroundMs       = 100;      // Skateboard.Drive.GroundMs (the gap between impulses)
@@ -180,6 +180,8 @@ namespace Skateboard
         bool havePos = false;           // lastX/lastY hold a sample worth differencing
         float grade = 0.0f;             // terrain gradient along the heading, uphill positive
         uint32 lastImpulseMs = 0;       // the last carry impulse, to tell a glide's fall from a jump
+        float splineHeading = 0.0f;     // the heading the last spline segment walked (Drive.Mode = 1)
+        bool haveHeading = false;       // splineHeading holds a value worth holding to
         uint32 castDeadlineMs = 0;      // boarding cast in flight (0 = none, nothing written yet)
         float castX = 0.0f;             // where the cast started, to catch a step
         float castY = 0.0f;

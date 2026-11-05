@@ -287,18 +287,21 @@ Skateboard.Drive = 1
 #              sail. A slope the arc cannot follow, a steep descent at speed,
 #              hands the rider a longer flight, and that flight is what the trick
 #              window covers.
-#          1 - server spline: each segment is a polyline the server samples along
-#              the terrain, so the path follows the hill exactly, and the client
-#              interpolates it - no bounce. A unit deck is launched on the same
-#              path in the same tick, so it stays under the feet too. The core
-#              drops the client's own movement while a player's spline is
-#              unfinalized (VerifyMovementInfo), so the rider steers *between*
-#              segments - Drive.SplineMs is how often that chance comes - and no
-#              jump or trick can start during one.
+#          1 - server spline, the default: each segment is a polyline the server
+#              samples along the terrain, so the path follows the hill exactly and
+#              the client interpolates it - no bounce. A unit deck is launched on
+#              the same path in the same tick, so it stays under the feet too. The
+#              core drops every movement packet while a player's spline is
+#              unfinalized (VerifyMovementInfo), so a segment takes both the
+#              steering and the facing with it: the cycle is Drive.SplineMs, of
+#              which Drive.GroundMs is the window where a turn or a jump is
+#              accepted at all, and the segment walks the rest. A heading within
+#              10 degrees of the last one is the client's wobble rather than a
+#              steer and is ignored, so the path does not bend every segment.
 #        Force-restores Skateboard.Drive to 1: the spline is the carrier itself.
-#        Default: 0, range: 0|1
+#        Default: 1, range: 0|1
 #
-Skateboard.Drive.Mode = 0
+Skateboard.Drive.Mode = 1
 
 #
 #    Skateboard.Drive.ArcMs
@@ -328,9 +331,9 @@ Skateboard.Drive.ArcMs = 0
 #        interpolating and a turn worth making. Note the playtest: the client
 #        does not blend a player's spline segments, so each new one starts from
 #        wherever the last ended - jitter is the carrier's, not the deck's.
-#        Default: 150, range: 50 - 1000
+#        Default: 400, range: 50 - 1000
 #
-Skateboard.Drive.SplineMs = 150
+Skateboard.Drive.SplineMs = 400
 
 #
 #    Skateboard.Drive.GroundMs

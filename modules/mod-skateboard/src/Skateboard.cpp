@@ -739,9 +739,23 @@ namespace
         uint32 const segmentMs = std::max<uint32>(cycleMs > cfg.DriveGroundMs ? cycleMs - cfg.DriveGroundMs : cycleMs, 20);
         float const seconds = float(segmentMs) / 1000.0f;
         float const distance = std::max(1.0f, deck.v * seconds);
+        // A turn smaller than this (10 degrees) is the client's heading wobble, not a steer.
+        constexpr float HeadingDeadband = 0.17453292f;
+
         // A client-controlled player's orientation is the client's: HandleMoverRelocation writes the
-        // packet's position *and* facing, so this is the heading the rider last steered to.
-        float const o = player->GetOrientation();
+        // packet's position *and* facing, so this is the heading the rider last steered to. While a
+        // segment walks, though, the core drops every movement packet that would carry a new one
+        // (VerifyMovementInfo), so the heading only changes in the steering window - and a heading a
+        // few degrees off the last one is the client's own wobble, not a turn. Re-aiming the path
+        // for that is what a ride reads as jitter, so below the deadband the last heading is kept
+        // and the segment walks straight.
+        float o = player->GetOrientation();
+
+        if (deck.haveHeading && std::fabs(std::remainder(o - deck.splineHeading, 2.0f * float(M_PI))) < HeadingDeadband)
+            o = deck.splineHeading;
+
+        deck.splineHeading = o;
+        deck.haveHeading = true;
         float const x = player->GetPositionX();
         float const y = player->GetPositionY();
         Map* map = player->GetMap();
@@ -898,10 +912,10 @@ namespace Skateboard
         cfg.FrictionRolling = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Friction.Rolling", 0.004f), 0.0f, 1.0f);
         cfg.SlopeGain = std::clamp(sConfigMgr->GetOption<float>("Skateboard.SlopeGain", 30.0f), 0.0f, 90.0f);
         cfg.Drive = sConfigMgr->GetOption<bool>("Skateboard.Drive", true);
-        cfg.DriveMode = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.Mode", 0), 1);
+        cfg.DriveMode = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.Mode", 1), 1);
         cfg.DriveImpulseMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.ImpulseMs", 350), 100, 2000);
         cfg.DriveArcMs = std::min<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.ArcMs", 0), cfg.DriveImpulseMs);
-        cfg.DriveSplineMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.SplineMs", 150), 50, 1000);
+        cfg.DriveSplineMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.SplineMs", 400), 50, 1000);
         cfg.DriveGroundMs = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("Skateboard.Drive.GroundMs", 100), 0, 1000);
         cfg.DriveMinSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Drive.MinSpeed", 3.0f), 0.0f, 40.0f);
         cfg.Brake = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Brake", 6.0f), 0.0f, 50.0f);

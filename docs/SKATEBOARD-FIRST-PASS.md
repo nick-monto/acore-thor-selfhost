@@ -236,6 +236,7 @@ is ever boarded.
 | `Skateboard.Enable` | 1 | whole feature |
 | `Skateboard.Deck` | `plank` | `plank` (90001, the Redridge boardwalk) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id. `engravedwall` is the old name for 90001 and still resolves |
 | `Skateboard.Deck.Render` | `unit` | §2.5: `unit` summons the deck under a standing rider (and under `Drive.Mode = 1` walks it on the rider's own path); `mount` draws it at the rider's position but seats them |
+| `Skateboard.Drive.Mode` / `.SplineMs` / `.GroundMs` | `1` / `400` / `100` | the spline carrier: a 300 ms segment walked along the terrain, a 100 ms window in which the client may turn or jump at all (`VerifyMovementInfo` drops every movement packet while the spline runs), and a 10° deadband so a client's wobble does not re-aim the path |
 | `Skateboard.Deck.Carrier` / `.FollowMs` | `29443` / `40` | the inert stock creature template the deck is summoned from (`unit` mode; a row with an `AIName` or a `ScriptName` is refused), and the length of one follow segment - chained onto the last, aimed at the rider projected a segment ahead and past the staleness of their last movement packet |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
