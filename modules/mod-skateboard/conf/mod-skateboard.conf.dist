@@ -181,6 +181,13 @@ Skateboard.MaxSpeed = 21.0
 #        deck to here and no further, so a board that is on is always moving.
 #        The backward key (the brake) is the only way to stand still on a deck,
 #        and '.board off' is the way off it.
+#
+#        This is also the speed a flat stretch settles at, so with Drive = 0 it
+#        is the number the rider sees all the time: below the 7 yd/s a character
+#        runs at, v / 7 is under 1.0, the cap is clamped to a walk and nothing is
+#        published - a board that reads as inert. 4.0 is a *carry* speed (the
+#        carriers move the rider themselves), 9.0 is a cap speed: 1.29x a run on
+#        the flat, and the hills add to it from there.
 #        Default: 4.0, range: 0.0 - 20.0
 #
 Skateboard.Cruise = 4.0
