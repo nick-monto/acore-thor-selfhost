@@ -16,6 +16,21 @@
 # server spline, which follows the hill but only lets the rider steer between
 # segments.
 #
+# Three ways the character can be moved, and the client leaves the steering to only one
+# of them:
+#   Drive = 0          the module publishes a run-speed cap and the client walks,
+#                      steers and jumps with its own input - Skateboard v (slope,
+#                      friction, push) is only how fast that walk may be. The only
+#                      carrier that steers.
+#   Drive = 1, Mode 0  knockback arcs. The rider is carried and steers instantly
+#                      between impulses, but an impulse is a jump: 2.86 a second at
+#                      the shipped cycle, which reads as a hop.
+#   Drive = 1, Mode 1  server splines. The path follows the terrain, but the client
+#                      drops its own movement while a segment runs (steering happens
+#                      only in the GroundMs window) and it does not blend one
+#                      segment into the next - playtested: jitter, and one walk
+#                      through the map.
+#
 # Nothing here needs a client patch: the stock deck is the "Log Ride" display
 # 26609 that every 3.3.5a client already has. The two plank decks (90001, 90002)
 # are world doodad models registered as creature displays, so they only look right
@@ -304,26 +319,32 @@ Skateboard.Drive.ArcMs = 0
 
 #
 #    Skateboard.Drive.SplineMs
-#        Length of one carry segment with Drive.Mode = 1, in milliseconds - also
-#        how often the rider gets steering back, because the client's own movement
-#        is dropped while a segment runs. 150 is roughly one client movement
-#        packet; below 100 the segment restarts faster than the client can report
-#        a heading, above 300 a turn arrives late enough to feel like a rail.
+#        One carry cycle with Drive.Mode = 1, in milliseconds. The client's own
+#        movement is dropped while a spline segment runs, so the steering window
+#        (Drive.GroundMs) is taken out of this cycle rather than added after it:
+#        the segment walks for SplineMs - GroundMs and the rider steers for
+#        GroundMs, every SplineMs. 150 with the shipped 100 ms window is a 50 ms
+#        segment, which is barely a step; 300-500 gives the rider a walk worth
+#        interpolating and a turn worth making. Note the playtest: the client
+#        does not blend a player's spline segments, so each new one starts from
+#        wherever the last ended - jitter is the carrier's, not the deck's.
 #        Default: 150, range: 50 - 1000
 #
 Skateboard.Drive.SplineMs = 150
 
 #
 #    Skateboard.Drive.GroundMs
-#        How much of each Drive.ImpulseMs cycle the rider spends standing on the
-#        ground, in milliseconds. The impulse is an arc: it takes the rider off
-#        their feet for its own duration, and a jump cannot start in mid-air, so
-#        without this gap the jump button would do nothing on a deck that is
-#        always being carried. The arc keeps its length and covers the whole cycle
-#        (so the deck still averages its own speed), which makes the impulse
-#        ImpulseMs / (ImpulseMs - GroundMs) times faster than the deck: 1.4x at
-#        the defaults. 0 = one continuous glide, and no tricks from a cruising
-#        deck.
+#        The part of each carry cycle the rider spends standing on the ground, in
+#        milliseconds - in both carriers, and it is the same window either way:
+#        with Drive.Mode = 0 the impulse is a jump arc, so nothing can start in
+#        mid-air and a jump needs a gap; with Drive.Mode = 1 the client's own
+#        movement is dropped while a spline segment runs, so this is the only
+#        stretch in which a turn or a jump is accepted at all. The cycle keeps
+#        its length, so with Mode = 0 the arc covers the whole cycle and the
+#        impulse is ImpulseMs / (ImpulseMs - GroundMs) times the deck speed (1.4x
+#        at the defaults), while with Mode = 1 the segment is shortened by this
+#        much instead. 0 = one continuous glide with no tricks and, under Mode =
+#        1, no steering at all.
 #        Default: 100, range: 0 - 1000
 #
 Skateboard.Drive.GroundMs = 100

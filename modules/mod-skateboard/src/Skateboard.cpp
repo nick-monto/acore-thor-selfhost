@@ -510,7 +510,7 @@ namespace
         // (CarrySpline), so there is nothing here to steer. The projection below in particular is
         // for a client-moved rider, whose position the server only samples: a server-driven one is
         // not stale, and projecting it would put the deck half a second ahead of its own rider.
-        if (cfg.DriveMode == 1)
+        if (cfg.Drive && cfg.DriveMode == 1)
             return;
 
         // A segment that is still running owns the deck: look again next tick rather than replacing
@@ -730,7 +730,13 @@ namespace
     {
         Skateboard::Config const& cfg = Skateboard::GetConfig();
 
-        uint32 const segmentMs = std::max<uint32>(cfg.DriveSplineMs, 50);
+        // The carrier owns the rider for the length of a segment: the core drops the client's own
+        // movement while a player's spline is unfinalized (VerifyMovementInfo), so a segment that
+        // starts the moment the last one ends is a rider who cannot turn at all. The steering
+        // window is taken OUT of the segment rather than added after it, so the cycle keeps its
+        // length and the average speed its v.
+        uint32 const cycleMs = std::max<uint32>(cfg.DriveSplineMs, 50);
+        uint32 const segmentMs = std::max<uint32>(cycleMs > cfg.DriveGroundMs ? cycleMs - cfg.DriveGroundMs : cycleMs, 20);
         float const seconds = float(segmentMs) / 1000.0f;
         float const distance = std::max(1.0f, deck.v * seconds);
         // A client-controlled player's orientation is the client's: HandleMoverRelocation writes the
@@ -750,9 +756,11 @@ namespace
         // Eight samples inside one segment: at MaxSpeed a segment is just over three yards, so this
         // is a sample every half yard - fine enough to follow a hill instead of cutting the crest.
         constexpr uint32 Samples = 8;
-        // 60 degrees. A steeper step between two samples is a grid seam or a wall, not a hill, and
-        // following it would throw the rider up or drop them through the floor.
-        constexpr float MaxStep = 1.7320508f;
+        // 26 degrees. A steeper step between two samples is a grid seam, a wall, or the ground under
+        // a bridge the rider is standing on - and following it dives through the surface, which a
+        // playtest saw ("sent through the map"). A ledge then walks off flat and drops the last
+        // yard, which is a far smaller wrong than a dive.
+        constexpr float MaxStep = 0.5f;
 
         float const step = distance / float(Samples);
         float lastZ = player->GetPositionZ();
@@ -803,6 +811,8 @@ namespace
             if (Creature* unit = player->GetMap()->GetCreature(deck.deckUnit))
                 launch(unit);
 
+        // walkTime, not the cycle: a hill makes the segment walk longer than it was timed for, and
+        // the next one must not start before this one has finished walking it.
         deck.driveNextMs = now + uint32(walkTime * 1000.0f);
         deck.lastImpulseMs = 0;
         deck.impulseArcMs = 0;
