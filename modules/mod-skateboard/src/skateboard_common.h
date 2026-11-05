@@ -147,6 +147,11 @@ namespace Skateboard
     // LoadConfig() because the DBC stores do not exist when OnAfterConfigLoad runs.
     std::uint32_t ResolveDeck();
 
+    // Skateboard.Vehicle.Probe: world start only. Lists every Vehicle.dbc row that has a seat flagged
+    // VEHICLE_SEAT_FLAG_CAN_CONTROL, with the seat's attachment offset, its ride animation and a
+    // creature the world DB spawns for it - the candidates a vehicle-directed deck would borrow.
+    void LogVehicleProbe();
+
     // One boarded character. A record also outlives the boarding while a crash
     // stagger is being served: then displayId is 0 (the deck is gone) and
     // staggerDeadlineMs is the moment the root is released.

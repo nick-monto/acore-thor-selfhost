@@ -109,6 +109,7 @@ SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.OffOnHit=1"
     "Skateboard.BoardCastMs=2000"
     "Skateboard.AckTimeoutMs=500"
+    "Skateboard.Vehicle.Probe=0"
     "Skateboard.Debug=0"
 )
 

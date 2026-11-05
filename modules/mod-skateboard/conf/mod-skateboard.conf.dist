@@ -476,6 +476,17 @@ Skateboard.OffOnHit = 1
 Skateboard.AckTimeoutMs = 500
 
 #
+#    Skateboard.Vehicle.Probe
+#        World start only. Logs every Vehicle.dbc row that has a seat flagged
+#        VEHICLE_SEAT_FLAG_CAN_CONTROL - the id, the seat's attachment offset, its ride
+#        animation, and one creature the world DB spawns for it - so a vehicle-directed
+#        deck can be tried with a stock vehicle before any row is authored for the decks
+#        (docs/SKATEBOARD-VEHICLE-DESIGN.md). Spawn the creature, spell-click it, drive:
+#        the client steers a vehicle itself, which is the whole point of the direction.
+#        Default: 0 (off)
+#
+Skateboard.Vehicle.Probe = 0
+
 #    Skateboard.Debug
 #        1 = one log line per boarded player every five seconds with the real
 #        numbers (v, rate, pending acks, slope), plus the ACK-timeout message at

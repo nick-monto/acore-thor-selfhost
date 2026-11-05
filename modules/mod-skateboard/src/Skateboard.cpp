@@ -1864,7 +1864,70 @@ public:
         if (reload)
             LOG_INFO("module", "Skateboard: configuration reloaded.");
     }
+
+    void OnStartup() override
+    {
+        // OnAfterConfigLoad runs before LoadDBCStores, so the probe has to wait for world start.
+        Skateboard::LogVehicleProbe();
+    }
 };
+
+// =====================================================================
+//  Vehicle probe: the ids a vehicle-directed deck could borrow
+// =====================================================================
+// A deck that is a vehicle is driven by the client (Vehicle::AddPassenger charms the base
+// to the controlling passenger), so the rider steers with their own keys, there is no
+// spline to jitter and no teleport to snap onto the board - see
+// docs/SKATEBOARD-VEHICLE-DESIGN.md. It needs a Vehicle.dbc row with a seat flagged
+// VEHICLE_SEAT_FLAG_CAN_CONTROL, and the seat's attachment offset decides where on the
+// vehicle the rider stands. Until a row is authored for the decks, this lists the rows the
+// client already ships that could be borrowed for a test drive: the operator spawns the
+// creature beside it, spell-clicks it and drives - no module change, no data patch.
+void Skateboard::LogVehicleProbe()
+{
+    if (!sConfigMgr->GetOption<bool>("Skateboard.Vehicle.Probe", false))
+        return;
+
+    // The creature to spawn for each vehicle id (the first one the world DB uses), so a
+    // line here is something to type.
+    std::unordered_map<uint32, std::pair<uint32, std::string>> example;
+    for (auto const& [entry, cInfo] : *sObjectMgr->GetCreatureTemplates())
+        if (cInfo.VehicleId && !example.count(cInfo.VehicleId))
+            example[cInfo.VehicleId] = { entry, cInfo.Name };
+
+    uint32 listed = 0;
+    for (uint32 id = 1; id < sVehicleStore.GetNumRows(); ++id)
+    {
+        VehicleEntry const* veh = sVehicleStore.LookupEntry(id);
+        if (!veh)
+            continue;
+
+        uint32 seatId = 0;
+        for (uint8 i = 0; i < MAX_VEHICLE_SEATS; ++i)
+        {
+            VehicleSeatEntry const* seat = veh->m_seatID[i] ? sVehicleSeatStore.LookupEntry(veh->m_seatID[i]) : nullptr;
+            if (seat && seat->CanControl())
+            {
+                seatId = veh->m_seatID[i];
+                break;
+            }
+        }
+
+        if (!seatId)
+            continue;
+
+        VehicleSeatEntry const* seat = sVehicleSeatStore.LookupEntry(seatId);
+        auto const it = example.find(id);
+
+        LOG_INFO("module", "skateboard: vehicle {} flags 0x{:X} seat {} off ({:.2f}, {:.2f}, {:.2f}) ride anim {} {}",
+            id, veh->m_flags, seatId, seat->m_attachmentOffsetX, seat->m_attachmentOffsetY,
+            seat->m_attachmentOffsetZ, seat->m_rideAnimStart,
+            it == example.end() ? "" : ("- spawn creature " + std::to_string(it->second.first) + " '" + it->second.second + "'"));
+        ++listed;
+    }
+
+    LOG_INFO("module", "Skateboard: vehicle probe listed {} Vehicle.dbc rows whose seat can drive it.", listed);
+}
 
 // =====================================================================
 //  PlayerScript: the integrator, and every reason the deck must go
