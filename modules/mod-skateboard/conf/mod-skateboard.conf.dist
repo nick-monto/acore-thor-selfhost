@@ -5,7 +5,9 @@
 ########################################
 #
 # A skateboard, not a mount: the character keeps walking, and the module gives it
-# a deck to ride. '.board on' puts a deck under the character, '.board push' kicks
+# a deck to ride. The deck itself is drawn as a mount display (Deck.Render), but
+# no mount speed and no mount aura are involved - it is a drawing choice.
+# '.board on' puts a deck under the character, '.board push' kicks
 # its speed up, terrain slope and friction fight it back, and the jump button
 # becomes the trick button. A boarded deck always rolls - Skateboard.Cruise is
 # its floor - and Skateboard.Drive is what moves the character: one knockback
@@ -22,15 +24,20 @@
 #
 # Two ways to draw the board (Skateboard.Deck.Render):
 #
-#   unit  - the deck is a creature summoned under the rider and walked after them
-#           in Skateboard.Deck.FollowMs spline segments. The rider stands on it,
-#           and every client draws a creature display. This is the default,
-#           because the client draws no mount model for a unit without
-#           UNIT_FLAG_MOUNT (playtested: the field alone shows nothing).
-#   mount - the older path: Unit::Mount(). The deck is drawn for certain, but
-#           the client seats the rider on it and the mount flag makes the core's
-#           own UpdateSpeed take the mounted branch. The module re-asserts the
-#           rate when it is wiped, so the cap still holds.
+#   mount - Unit::Mount(), the default. The deck is the player's own mount
+#           display, so the client draws it at the rider's position and
+#           interpolates it with the rider: the board cannot stutter relative to
+#           the feet, because nothing else is moving it. The cost is the mounted
+#           pose - the client seats the rider on the board - the mount flag makes
+#           the core's own UpdateSpeed take the mounted branch (the module
+#           re-asserts the rate when it is wiped, so the cap still holds), and
+#           Unit::Mount unsummons the pet, as every real mount does.
+#   unit  - the deck is a creature summoned under the rider and walked after
+#           them in Skateboard.Deck.FollowMs spline segments, so the rider
+#           stands on it. Every client draws a creature display, but the deck is
+#           then a second mover the server steers many times a second, and each
+#           spline restarts the client's interpolation: playtested, that reads
+#           as a hop. Opt in to it for the standing pose, not for smoothness.
 #
 # The speed cap: while the deck is the mover the character's own run rate is held
 # at 1.0, and with Skateboard.Drive = 0 the deck speed is published as a run-speed
@@ -95,15 +102,17 @@ Skateboard.Deck = plank
 
 #
 #    Skateboard.Deck.Render
-#        unit = summon a creature that carries Skateboard.Deck's display and
-#        follow the rider with it, so the deck is a real object under a standing
-#        character. mount = Unit::Mount(), the deck as a mount display: drawn by
-#        every client, but the rider sits on it. Changing this takes effect at the
-#        next tick: a deck already down is taken away and drawn again in the new
-#        shape, so '.reload config' is enough and an active ride is not lost.
-#        Default: unit, range: unit|mount
+#        mount = Unit::Mount(), the deck as the player's own mount display: drawn
+#        by every client, moves with the rider's own interpolation, and seats the
+#        rider on it. unit = summon a creature that carries Skateboard.Deck's
+#        display and follow the rider with it, so the rider stands on a real
+#        object - at the cost of a second mover that the client re-interpolates
+#        on every spline. Changing this takes effect at the next tick: a deck
+#        already down is taken away and drawn again in the new shape, so
+#        '.reload config' is enough and an active ride is not lost.
+#        Default: mount, range: unit|mount
 #
-Skateboard.Deck.Render = unit
+Skateboard.Deck.Render = mount
 
 #
 #    Skateboard.Deck.Carrier

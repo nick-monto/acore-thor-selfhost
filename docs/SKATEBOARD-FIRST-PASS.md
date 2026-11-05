@@ -157,15 +157,21 @@ On a self-hosted realm the RTT is ~1-5 ms, so the gate still allows tens of upda
 
 ### 2.5 The deck visual
 
-Two shapes, and the playtest answered this one: writing the mount display field alone draws
-nothing, so the deck has to be an object of its own.
+Two shapes, and the second playtest decided it: as a creature of its own the deck is a *second
+mover*. Chaining its splines removed the snapping, but every `SMSG_MONSTER_MOVE` still restarts
+the client's interpolation for that mover, so a deck steered 25 times a second reads as a hop.
+A mount display has no mover: the client draws it at the player's position and interpolates it
+with the player.
 
 | `Skateboard.Deck.Render` | What the module does | What it looks like |
 |---|---|---|
-| `unit` (default) | summons a creature with the deck's display and walks it under the rider in `Deck.FollowMs` segments (`Creature::SetDisplayId`, `TempSummon`) | the deck under a **standing** player — the pose a skateboard wants, and a display every client draws |
-| `mount` | `Unit::Mount(id)` (`Unit.cpp:10262`), which writes the field *and* sets `UNIT_FLAG_MOUNT` | the deck for certain, but under a **sitting** rider, and `UpdateSpeed` takes the mounted branch |
+| `mount` (default) | `Unit::Mount(id)` (`Unit.cpp:10262`), which writes the field *and* sets `UNIT_FLAG_MOUNT` | the deck under a **seated** rider — it cannot lag or hop against the feet, because nothing else moves it; `UpdateSpeed` takes the mounted branch, and the rate is re-asserted when an aura wipes it |
+| `unit` | summons a creature with the deck's display and chains `Deck.FollowMs` splines under the rider (`Creature::SetDisplayId`, `TempSummon`) | the deck under a **standing** player — the pose a skateboard wants, at the cost of the mover above |
 
-`mount` remains because it is the only path the core itself exercises; it costs the standing pose.
+`unit` is the opt-in now: it buys the standing pose and pays for it with a mover. Writing the mount
+display field *alone* draws nothing (playtested) — `Unit::Mount` writes the flag with it, and that
+pair is what draws. Mounting also has the core's side effect every real mount has: `Unit::Mount`
+unsummons the pet and stuns a charmed creature (`Unit.cpp:10262`).
 
 The display id comes from config, validated once at load against `sCreatureDisplayInfoStore`
 (`DBCStores.cpp:294`); a missing id warns once and falls back to the stock `Log Ride` display
@@ -189,9 +195,11 @@ with that:
 | `--survey HINT [--listfile FILE] [--data-dir DIR]` | every model whose path contains `HINT`: the registered ones with their display ids, plus a 3.3.5a `listfile.txt` and the client's archive listfiles when they can be read. Each hit says whether it is self-skinned (drawable as a creature) and prints the `Skateboard.Deck` id or the `--model` line that would use it - which is how a surfboard, a plank or anything else board-shaped is found in the client the realm ships |
 
 The deck's *placement* is `Deck.Render`. The old note "a flat object under your own feet has nothing
-to interpolate" was wrong: `NearTeleportTo` sends an uninterpolated relocate, so at 25 object updates
-a second the client snapped the deck from point to point and the rider saw it chasing them. The
-follow is a `MoveSplineInit` over the same distance now, which the client interpolates.
+to interpolate" was wrong, and the fix took two passes: `NearTeleportTo` sends an uninterpolated
+relocate, so at 25 object updates a second the client snapped the deck from point to point; a
+chained `MoveSplineInit` interpolates each segment, but the client restarts that interpolation at
+every new spline, which is the hop. Neither problem exists in `mount`: the deck is drawn at the
+player's own position, and the player's interpolation is the only one involved.
 
 ### 2.6 Tricks
 
@@ -225,7 +233,7 @@ is ever boarded.
 |---|---|---|
 | `Skateboard.Enable` | 1 | whole feature |
 | `Skateboard.Deck` | `plank` | `plank` (90001, the Redridge boardwalk) or `coffinlid` (90002) once `scripts/skateboard/patch_deck_dbc.py` lands the rows, `log` (26609, no client patch), or a raw display id. `engravedwall` is the old name for 90001 and still resolves |
-| `Skateboard.Deck.Render` | `unit` | §2.5: `unit` summons the deck under a standing rider, `mount` is the sitting fallback |
+| `Skateboard.Deck.Render` | `mount` | §2.5: `mount` draws the deck at the rider's own position (seated pose, no second mover, no hop); `unit` summons the deck under a standing rider and steers it there |
 | `Skateboard.Deck.Carrier` / `.FollowMs` | `29443` / `40` | the inert stock creature template the deck is summoned from (`unit` mode; a row with an `AIName` or a `ScriptName` is refused), and the length of one follow segment - chained onto the last, aimed at the rider projected a segment ahead and past the staleness of their last movement packet |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s |
 | `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
@@ -400,7 +408,7 @@ Every place an in-tree module appears today, so `mod-skateboard` does not get a 
 |---|---|---|
 | offline | `scripts/syntax-check.sh` on the module; `check_skateboard.py` | compiles against the pinned core, every conf key read by the code, every emote id exists |
 | boot | worldserver with the module | `Skateboard: <enabled|disabled> (deck '<name>', resolved on the first board).`, conf read, zero ERROR lines |
-| deck | `.board on` | the deck renders under the player, standing rider (`Deck.Render = unit`) |
+| deck | `.board on` | the deck renders under the player and does not lag or hop against the feet (`Deck.Render = mount`, the seated pose); `Deck.Render = unit` shows the standing pose with the deck steered after the rider |
 | activation | bind a key to `Skateboard` in the stock Key Bindings frame, press it | boards, and a second press leaves; the same action appears in `/cp` for a pad button; `/say .board toggle` works with the add-on removed from the folder (a bare `/say .board` prints the subcommand list) |
 | momentum | ride downhill in Elwynn, then uphill | `v` climbs without input on the slope, bleeds uphill, coasts down to `Cruise` in ~8 s and never below it; `Debug` line shows `v`, slope and rate agreeing |
 | cap | 10-minute ride, `Debug` on | zero `Incorrect speed` kicks, `pendingAcks` never stuck, the rate never above the target the module holds (the cap only lowers) |

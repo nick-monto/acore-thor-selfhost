@@ -16,7 +16,7 @@ Confidence: **[V]** verified here from source, artifact or API, **[R]** reported
 
 | Layer | Feasible today? | What it needs | Where the limit is |
 |---|---|---|---|
-| **Board under the feet** | **yes** | a summoned creature carrying the deck display, followed after the rider (§4.1), or `Unit::Mount()` for a drawn deck and a sitting rider | the field alone draws nothing (playtested), so the deck is an object of its own |
+| **Board under the feet** | **yes** | `Unit::Mount()` for a drawn deck on a seated rider (the default), or a summoned creature carrying the deck display and followed after the rider (§4.1) for a standing rider | the field alone draws nothing (playtested) - the flag has to go with it; a creature deck is a second mover, and the client restarts its interpolation at every new spline (a hop) |
 | **Momentum (accel, friction, downhill, top speed)** | **yes, as an arcade approximation** | module: a velocity integrator on `PlayerScript::OnPlayerUpdate` + `MovementHandlerScript::OnPlayerMove`, pushing `Unit::SetSpeed(MOVE_RUN, …)` | the client is the mover; the server shapes a **cap**, it cannot push the player (§3) |
 | **Ramps / ollies / airtime** | **yes** | `Unit::KnockbackFrom` arc (client plays it), or a `MoveJump` spline (authoritative, input locked) | knockback is client-interruptible; spline velocity is clamped to `max(28, 4×run)` `MoveSplineInit.cpp:106` |
 | **Tricks** | **yes**, as animation + FX + timing | `Unit::HandleEmoteCommand` with stock trick emotes, `Unit::SendPlaySpellVisual`, fall-flag landing window | animation is a canned client clip; no skeletal manipulation (§5) |
@@ -267,7 +267,7 @@ All `Skateboard.*` keys read in `WorldScript::OnAfterConfigLoad`, so `.reload co
 | `Skateboard.BoardCastMs` | 2000 | boarding delay; nothing is written until it completes, and the add-on's bar is driven by the module's own `c` push rather than by the status poll |
 | `Skateboard.OffOnHit` | 1 | a hit from another unit takes the deck; the start of a fight does not, and neither does fall damage |
 | `Skateboard.MaxSpeed` | 21.0 | yd/s ceiling |
-| `Skateboard.Deck.Render` / `.Carrier` / `.FollowMs` | `unit` / 29443 / 40 | the deck as a summoned unit under a standing rider; the carrier must be an inert template (no `AIName`, no `ScriptName`), and the follow interval sets the length of one spline segment the deck walks to the rider's projected position |
+| `Skateboard.Deck.Render` / `.Carrier` / `.FollowMs` | `mount` / 29443 / 40 | `mount` draws the deck as the player's own mount display, so the client moves it with the player and it cannot stutter - it seats the rider, and `Unit::Mount` unsummons the pet; `unit` is the standing option: a summoned unit under the rider, from an inert carrier template (no `AIName`, no `ScriptName`), walked to the rider's projected position in `FollowMs`-long spline segments |
 | `Skateboard.Cruise` | 4.0 | the floor a boarded deck never rolls below |
 | `Skateboard.Drive` / `.ImpulseMs` / `.GroundMs` / `.MinSpeed` / `.Brake` | 1 / 350 / 100 / 3.0 / 6.0 | the carry: one knockback impulse along the facing per cycle, the standing gap in it, the speed the carry opens at (capped by `Cruise`) and the brake |
 | `Skateboard.Drive.Mode` / `.ArcMs` / `.SplineMs` | 0 / 0 / 150 | which carrier moves the rider (`0` knockback arcs, `1` a server spline that follows the terrain), the knockback's arc length (`0` derives it from the cycle) and one spline segment |

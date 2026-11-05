@@ -16,13 +16,16 @@
  *     then runs Skateboard.BoardCastMs of boarding: nothing is written until
  *     the clock runs out, so a step off the spot, a hit, a fight, a death or a
  *     teleport drops the request instead of having something to take back. The
- *     bar is the add-on's, fed by an unsolicited 'c' push. Boarding puts the
- *     deck under the rider as a summoned creature (Skateboard.Deck.Render =
- *     unit), followed with Deck.FollowMs-long spline segments aimed a segment
- *     ahead of the rider: the client draws no mount model for a unit without
- *     UNIT_FLAG_MOUNT, and the flag would sit
- *     the rider, so the deck is an object of its own and the rider stands on
- *     it. Render = mount keeps the older Unit::Mount() path.
+ *     bar is the add-on's, fed by an unsolicited 'c' push. Boarding draws the
+ *     deck as the player's own mount display (Skateboard.Deck.Render = mount):
+ *     the client puts it at the rider's position and interpolates it with the
+ *     rider, so there is no second mover to stutter. The cost is the mounted
+ *     pose - the client seats the rider. Render = unit is the standing option:
+ *     a summoned creature carrying the deck display, walked after the rider in
+ *     Deck.FollowMs-long spline segments. It keeps the rider upright on their
+ *     feet, but every segment restarts the client's interpolation for a mover
+ *     the server has to steer 25 times a second, which is what the playtest
+ *     read as a hop. The mount render is the default for that reason.
  *   - Every PlayerScript update integrates the deck: terrain gradient under the
  *     heading (Map::GetGridHeight, one sample 6 yd ahead, no vmaps, no normals
  *     exist), static plus rolling friction, an optional push impulse, airtime
@@ -843,12 +846,12 @@ namespace Skateboard
         cfg.MaxSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.MaxSpeed", 21.0f), 1.0f, 40.0f);
         cfg.Cruise = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Cruise", 4.0f), 0.0f, 20.0f);
 
-        std::string render = sConfigMgr->GetOption<std::string>("Skateboard.Deck.Render", "unit");
+        std::string render = sConfigMgr->GetOption<std::string>("Skateboard.Deck.Render", "mount");
         std::transform(render.begin(), render.end(), render.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         if (render != "unit" && render != "mount")
         {
-            LOG_WARN("module", "Skateboard: unknown Skateboard.Deck.Render '{}', expected unit or mount. Using unit.", render);
-            render = "unit";
+            LOG_WARN("module", "Skateboard: unknown Skateboard.Deck.Render '{}', expected unit or mount. Using mount.", render);
+            render = "mount";
         }
         cfg.RenderUnit = render == "unit";
         cfg.Carrier = sConfigMgr->GetOption<uint32>("Skateboard.Deck.Carrier", 29443);
