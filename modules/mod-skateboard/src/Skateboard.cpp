@@ -16,16 +16,20 @@
  *     then runs Skateboard.BoardCastMs of boarding: nothing is written until
  *     the clock runs out, so a step off the spot, a hit, a fight, a death or a
  *     teleport drops the request instead of having something to take back. The
- *     bar is the add-on's, fed by an unsolicited 'c' push. Boarding draws the
- *     deck as the player's own mount display (Skateboard.Deck.Render = mount):
- *     the client puts it at the rider's position and interpolates it with the
- *     rider, so there is no second mover to stutter. The cost is the mounted
- *     pose - the client seats the rider. Render = unit is the standing option:
- *     a summoned creature carrying the deck display, walked after the rider in
- *     Deck.FollowMs-long spline segments. It keeps the rider upright on their
- *     feet, but every segment restarts the client's interpolation for a mover
- *     the server has to steer 25 times a second, which is what the playtest
- *     read as a hop. The mount render is the default for that reason.
+ *     bar is the add-on's, fed by an unsolicited 'c' push. Boarding puts the
+ *     deck under the rider as a summoned creature (Skateboard.Deck.Render =
+ *     unit, the default): the client draws no mount model for a creature
+ *     without UNIT_FLAG_MOUNT, and the flag would SEAT the rider, so the deck is
+ *     an object of its own and the rider stands on it. Render = mount is the
+ *     other shape - the deck as the player's own mount display, drawn at the
+ *     rider's position but sitting them down on it (playtested: on a board model
+ *     that reads as sitting on a plank), and a doodad deck display draws
+ *     untextured without them.
+ *   - The unit deck is moved by the same thing that moves the rider. Under the
+ *     spline carrier (Drive.Mode = 1) that is literally the same path: one
+ *     polyline launched on both in one tick, so the board cannot drift from the
+ *     feet. Under the knockback carrier it is a follow of its own, chained
+ *     Deck.FollowMs segments aimed past the rider's reported position.
  *   - Every PlayerScript update integrates the deck: terrain gradient under the
  *     heading (Map::GetGridHeight, one sample 6 yd ahead, no vmaps, no normals
  *     exist), static plus rolling friction, an optional push impulse, airtime
@@ -502,6 +506,13 @@ namespace
             return;
         }
 
+        // The spline carrier launches the deck on the rider's own path in the same tick
+        // (CarrySpline), so there is nothing here to steer. The projection below in particular is
+        // for a client-moved rider, whose position the server only samples: a server-driven one is
+        // not stale, and projecting it would put the deck half a second ahead of its own rider.
+        if (cfg.DriveMode == 1)
+            return;
+
         // A segment that is still running owns the deck: look again next tick rather than replacing
         // it. One creature lookup per tick, and only for a boarded player.
         if (!unit->movespline->Finalized())
@@ -729,8 +740,12 @@ namespace
         float const y = player->GetPositionY();
         Map* map = player->GetMap();
 
-        Movement::MoveSplineInit init(player);
-        Movement::PointsArray& path = init.Path();
+        // The path is built once and launched on whoever walks it: the rider, and the deck under
+        // them when it is a unit. Two packets carrying the same vertices, speed and facing arrive in
+        // the same tick and the client interpolates each object from its own, so the board and the
+        // feet cannot disagree - while any second estimate of where the rider will be is a gap
+        // waiting to open. This is why the unit deck needs no follow at all under this carrier.
+        Movement::PointsArray path;
 
         // Eight samples inside one segment: at MaxSpeed a segment is just over three yards, so this
         // is a sample every half yard - fine enough to follow a hill instead of cutting the crest.
@@ -772,9 +787,21 @@ namespace
 
         float const walkTime = std::max(seconds, length / std::max(deck.v, 1.0f));
 
-        init.SetVelocity(length / walkTime);
-        init.SetFacing(o);
-        init.Launch();
+        auto launch = [&](Unit* mover)
+        {
+            Movement::MoveSplineInit moverInit(mover);
+            for (G3D::Vector3 const& point : path)
+                moverInit.Path().push_back(point);
+            moverInit.SetVelocity(length / walkTime);
+            moverInit.SetFacing(o);
+            moverInit.Launch();
+        };
+
+        launch(player);
+
+        if (cfg.RenderUnit)
+            if (Creature* unit = player->GetMap()->GetCreature(deck.deckUnit))
+                launch(unit);
 
         deck.driveNextMs = now + uint32(walkTime * 1000.0f);
         deck.lastImpulseMs = 0;
@@ -846,12 +873,12 @@ namespace Skateboard
         cfg.MaxSpeed = std::clamp(sConfigMgr->GetOption<float>("Skateboard.MaxSpeed", 21.0f), 1.0f, 40.0f);
         cfg.Cruise = std::clamp(sConfigMgr->GetOption<float>("Skateboard.Cruise", 4.0f), 0.0f, 20.0f);
 
-        std::string render = sConfigMgr->GetOption<std::string>("Skateboard.Deck.Render", "mount");
+        std::string render = sConfigMgr->GetOption<std::string>("Skateboard.Deck.Render", "unit");
         std::transform(render.begin(), render.end(), render.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         if (render != "unit" && render != "mount")
         {
-            LOG_WARN("module", "Skateboard: unknown Skateboard.Deck.Render '{}', expected unit or mount. Using mount.", render);
-            render = "mount";
+            LOG_WARN("module", "Skateboard: unknown Skateboard.Deck.Render '{}', expected unit or mount. Using unit.", render);
+            render = "unit";
         }
         cfg.RenderUnit = render == "unit";
         cfg.Carrier = sConfigMgr->GetOption<uint32>("Skateboard.Deck.Carrier", 29443);

@@ -14,12 +14,11 @@
  * the older path and needs the forward key.
  *
  *   - '.board on' puts a deck *under* the character. Skateboard.Deck.Render =
- *     mount (the default) is Unit::Mount(): the deck is the player's own mount
- *     display, drawn at the rider's position and interpolated by the client
- *     with them, so there is no second mover to stutter - but the client seats
- *     the rider. Render = unit summons a creature carrying the deck display
- *     and walks it under the rider's feet, which keeps the rider standing and
- *     makes the deck a mover the server steers 25 times a second.
+ *     unit (the default) summons a creature carrying the deck display, so the
+ *     rider stands on a real object; under the spline carrier the deck is
+ *     launched on the rider's own path in the same tick. Render = mount is
+ *     Unit::Mount(): the deck is the player's own mount display, which the
+ *     client draws at the rider's position - and seats them on.
  *   - A per-tick integrator keeps a deck speed `v` (yd/s): terrain slope pulls
  *     it down or lets it run, rolling friction bleeds it off, '.board push'
  *     adds one impulse, and Skateboard.Cruise is the floor the deck never
@@ -99,7 +98,7 @@ namespace Skateboard
         bool Enable                = true;     // Skateboard.Enable
         std::string DeckName       = "plank";          // Skateboard.Deck, as configured
         uint32 DeckDisplayId       = 90001;    // Skateboard.Deck, resolved
-        bool RenderUnit            = false;    // Skateboard.Deck.Render (unit, not mount)
+        bool RenderUnit            = true;     // Skateboard.Deck.Render (unit, not mount)
         uint32 Carrier             = 29443;    // Skateboard.Deck.Carrier
         uint32 FollowMs            = 40;       // Skateboard.Deck.FollowMs
         float MaxSpeed             = 21.0f;    // Skateboard.MaxSpeed

@@ -78,7 +78,7 @@ MERCENARY_CONF_DEFAULTS=(
 SKATEBOARD_CONF_DEFAULTS=(
     "Skateboard.Enable=1"
     "Skateboard.Deck=plank"
-    "Skateboard.Deck.Render=mount"
+    "Skateboard.Deck.Render=unit"
     "Skateboard.Deck.Carrier=29443"
     "Skateboard.Deck.FollowMs=40"
     "Skateboard.MaxSpeed=21.0"
@@ -607,14 +607,6 @@ wc_write_all() {
         # MountedPose was the mount render's "seat the rider" switch, folded into Render = mount: a
         # conf that still sets it to 1 looks like it draws the sitting deck and does not.
         sed -i -E '/^[[:space:]]*Skateboard\.MountedPose[[:space:]]*=/d' "$sb"
-        # unit was the shipped render until a playtest read the deck's own spline follow as a hop:
-        # a mount display is drawn at the rider's position and needs no second mover. A conf that
-        # still says unit is most likely the old default rather than a choice, so it is migrated,
-        # and the log line says so - Render = unit can be set back for the standing pose.
-        if [ "$(wc_get_conf "$sb" Skateboard.Deck.Render)" = unit ]; then
-            wc_warn "mod-skateboard.conf: Skateboard.Deck.Render was unit (the old default), using mount - set unit back for the standing pose"
-            wc_set_conf "$sb" Skateboard.Deck.Render mount
-        fi
         # 16386 was the shipped carrier until it turned out to carry ScriptName npc_necropolis_relay,
         # whose constructor marks every summoned deck active. The module refuses a scripted row, so
         # an upgraded conf that still names it is migrated - otherwise the deck stops appearing and

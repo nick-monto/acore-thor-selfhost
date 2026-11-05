@@ -2416,14 +2416,6 @@ run_checks() {   # run_checks FIX(0|1)
         # an absent key means the live conf is older than the artifact, a bad one means it says
         # something the module will not take.
         local sb_default sb_key sb_val sb_bad="" sb_absent=""
-        # Render = unit was the shipped default until the playtest read the deck's own spline
-        # follow as a hop: a mount display is drawn at the rider's position and needs no second
-        # mover. A live conf that still says unit is the old default rather than a choice, so it
-        # is migrated with the reason, and Render = unit can be set back for the standing pose.
-        if [ "$(conf_get "$sb" Skateboard.Deck.Render)" = unit ]; then
-            warn "mod-skateboard.conf: Skateboard.Deck.Render was unit (the old default), using mount - set unit back for the standing pose"
-            if [ "$fix" = 1 ]; then set_conf "$sb" Skateboard.Deck.Render mount; fi
-        fi
         for sb_default in "${SKATEBOARD_CONF_DEFAULTS[@]}"; do
             sb_key="${sb_default%%=*}"
             sb_val="$(conf_get "$sb" "$sb_key")"

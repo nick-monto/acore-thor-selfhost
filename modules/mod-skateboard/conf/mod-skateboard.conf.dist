@@ -24,20 +24,25 @@
 #
 # Two ways to draw the board (Skateboard.Deck.Render):
 #
-#   mount - Unit::Mount(), the default. The deck is the player's own mount
-#           display, so the client draws it at the rider's position and
-#           interpolates it with the rider: the board cannot stutter relative to
-#           the feet, because nothing else is moving it. The cost is the mounted
-#           pose - the client seats the rider on the board - the mount flag makes
-#           the core's own UpdateSpeed take the mounted branch (the module
-#           re-asserts the rate when it is wiped, so the cap still holds), and
-#           Unit::Mount unsummons the pet, as every real mount does.
-#   unit  - the deck is a creature summoned under the rider and walked after
-#           them in Skateboard.Deck.FollowMs spline segments, so the rider
-#           stands on it. Every client draws a creature display, but the deck is
-#           then a second mover the server steers many times a second, and each
-#           spline restarts the client's interpolation: playtested, that reads
-#           as a hop. Opt in to it for the standing pose, not for smoothness.
+#   unit  - the default. The deck is a creature summoned under the rider, so the
+#           rider stands on it - the pose a skateboard wants - and every client
+#           draws it. Under the spline carrier (Skateboard.Drive.Mode = 1) the
+#           deck is launched on the rider's own path in the same tick, so it
+#           cannot drift from the feet; under the knockback carrier it is walked
+#           after them instead (Skateboard.Deck.FollowMs).
+#   mount - Unit::Mount(). The deck is the player's own mount display, drawn at
+#           the rider's position by the client - but the client SEATS the rider
+#           on it (playtested: on a board model that reads as sitting on a
+#           plank, not riding it). The mount flag also makes the core's own
+#           UpdateSpeed take the mounted branch (the module re-asserts the rate
+#           when it is wiped, so the cap still holds) and Unit::Mount unsummons
+#           the pet, as every real mount does.
+#
+# The deck's display has to match the render. The two plank rows (90001, 90002)
+# are DOODAD models registered as creature displays: the client draws them
+# correctly as a creature, and as a mount display it draws them untextured and
+# without the rider (playtested) - a doodad has no rider seat. A mount display
+# needs a mount-authored model, such as the stock 'log' (26609).
 #
 # The speed cap: while the deck is the mover the character's own run rate is held
 # at 1.0, and with Skateboard.Drive = 0 the deck speed is published as a run-speed
@@ -102,17 +107,16 @@ Skateboard.Deck = plank
 
 #
 #    Skateboard.Deck.Render
-#        mount = Unit::Mount(), the deck as the player's own mount display: drawn
-#        by every client, moves with the rider's own interpolation, and seats the
-#        rider on it. unit = summon a creature that carries Skateboard.Deck's
-#        display and follow the rider with it, so the rider stands on a real
-#        object - at the cost of a second mover that the client re-interpolates
-#        on every spline. Changing this takes effect at the next tick: a deck
-#        already down is taken away and drawn again in the new shape, so
-#        '.reload config' is enough and an active ride is not lost.
-#        Default: mount, range: unit|mount
+#        unit = summon a creature that carries Skateboard.Deck's display, so the
+#        rider stands on a real object (the skateboard pose). mount = Unit::Mount(),
+#        the deck as the player's own mount display: drawn by every client at the
+#        rider's position, but the client seats the rider on it, and a doodad deck
+#        display draws untextured without them. Changing this takes effect at the
+#        next tick: a deck already down is taken away and drawn again in the new
+#        shape, so '.reload config' is enough and an active ride is not lost.
+#        Default: unit, range: unit|mount
 #
-Skateboard.Deck.Render = mount
+Skateboard.Deck.Render = unit
 
 #
 #    Skateboard.Deck.Carrier
@@ -257,20 +261,25 @@ Skateboard.Drive = 1
 #        How the carry moves the rider.
 #          0 - knockback kicks: one SMSG_MOVE_KNOCK_BACK impulse per cycle. The
 #              rider keeps client control between impulses, so steering is
-#              instant, and a jump can start in the gap GroundMs leaves. The arc
-#              is tilted by the terrain gradient along the heading, so it lands
-#              back on the surface after ArcMs on a hill as well as on the flat:
-#              without the tilt a rise cut the arc short (at speed it cut it to
-#              nothing - the rider stood still at 0 yd/s) and a drop let it sail.
-#              A slope the arc cannot follow, a steep descent at speed, hands the
-#              rider a longer flight, and that flight is what the trick window
-#              covers.
+#              instant, and a jump can start in the gap GroundMs leaves. An
+#              impulse IS the client's knockback, which is a jump arc: at the
+#              shipped 350 ms cycle the rider leaves the ground 2.86 times a
+#              second, and that bounce is what a playtest read as "still hopping".
+#              The arc is tilted by the terrain gradient along the heading, so it
+#              lands back on the surface after ArcMs on a hill as well as on the
+#              flat: without the tilt a rise cut the arc short (at speed it cut it
+#              to nothing - the rider stood still at 0 yd/s) and a drop let it
+#              sail. A slope the arc cannot follow, a steep descent at speed,
+#              hands the rider a longer flight, and that flight is what the trick
+#              window covers.
 #          1 - server spline: each segment is a polyline the server samples along
-#              the terrain, so the path follows the hill exactly. The core drops
-#              the client's own movement while a player's spline is unfinalized
-#              (VerifyMovementInfo), so the rider steers *between* segments -
-#              Drive.SplineMs is how often that chance comes - and no jump or
-#              trick can start during one.
+#              the terrain, so the path follows the hill exactly, and the client
+#              interpolates it - no bounce. A unit deck is launched on the same
+#              path in the same tick, so it stays under the feet too. The core
+#              drops the client's own movement while a player's spline is
+#              unfinalized (VerifyMovementInfo), so the rider steers *between*
+#              segments - Drive.SplineMs is how often that chance comes - and no
+#              jump or trick can start during one.
 #        Force-restores Skateboard.Drive to 1: the spline is the carrier itself.
 #        Default: 0, range: 0|1
 #
