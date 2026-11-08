@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Give the client the loot-bag items: extend ``Item.dbc`` and ship it as a patch MPQ.
+"""Give the client the custom items: extend ``Item.dbc`` and ship it as a patch MPQ.
+
+The records are the loot-bag items (from ``scripts/loot-bags/gen_loot_bags.py``,
+mirrored here) and the rune items (from the SQL that
+``scripts/runewords/gen_runewords.py`` writes, which is also what the database is
+loaded from).
 
 Why this is needed
 ------------------
@@ -45,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -107,6 +113,86 @@ def bag_records(gen) -> list[tuple[int, ...]]:
 def bag_id_range(gen) -> range:
     count = len(gen.BRACKETS) * len(gen.TIERS)
     return range(gen.BAG_ENTRY_BASE, gen.BAG_ENTRY_BASE + count)
+
+
+# ---------------------------------------------------------------------------
+# Rune records
+# ---------------------------------------------------------------------------
+#
+# Read from the SQL the runeword generator writes, not from the generator itself:
+# the runes' display ids are borrowed from the base database's gems, which would
+# mean needing a core checkout on the realm host. The committed SQL is the same
+# data, is what the database is loaded from, and scripts/runewords/gen_runewords.py
+# --check keeps it in step with the pinned dumps, so there is still one source.
+
+RUNEWORD_SQL_NAME = "runewords_10_items.sql"
+
+# The generator's file is not in the same place in every layout this script runs
+# in: this repository keeps it under sql/, while the packaged server artifact and
+# the container image carry the same tree under src/data/. The search is ordered
+# and the failure names every path it tried, so a moved file is a one-line error
+# rather than a silently smaller patch.
+RUNEWORD_SQL_HINTS = (
+    Path("sql") / "custom" / "db_world",
+    Path("src") / "data" / "sql" / "custom" / "db_world",
+    Path("data") / "sql" / "custom" / "db_world",
+)
+
+
+# Where the tree above this script can start. In this repository the script sits at
+# scripts/item-dbc/, so the repository root is the grandparent; both installers fetch it to
+# <state>/item-dbc/ next to loot-bags/ and the SQL, which makes the parent the root; the
+# container image keeps it at /opt/acore/dbc-patch/item-dbc/ with the artifact's src/ beside
+# again one level up. Searching the grandparent first keeps the repository case unambiguous,
+# and the second root is what makes a fetched copy find its own sql/.
+RUNEWORD_SQL_ROOTS = (lambda: (HERE.parents[1], HERE.parent))()
+
+
+def default_runeword_sql() -> Path:
+    tried = []
+    for root in RUNEWORD_SQL_ROOTS:
+        for hint in RUNEWORD_SQL_HINTS:
+            candidate = root / hint / RUNEWORD_SQL_NAME
+            tried.append(str(candidate))
+            if candidate.is_file():
+                return candidate
+    raise SystemExit(
+        f"cannot find {RUNEWORD_SQL_NAME}; tried:\n  " + "\n  ".join(tried) + "\n"
+        "run scripts/runewords/gen_runewords.py first, or pass --runeword-sql"
+    )
+
+RUNE_ROW = re.compile(r"^\((\d+), (\d+), (\d+), '(?:[^'\\]|\\.)*', (\d+), (\d+),")
+
+
+def rune_rows(path: Path | None = None) -> list[tuple[int, int, int, int]]:
+    """(entry, class, subclass, displayid) for every rune the SQL writes."""
+    path = path or default_runeword_sql()
+    if not path.is_file():
+        raise SystemExit(f"{path} is missing; run scripts/runewords/gen_runewords.py first")
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = RUNE_ROW.match(line)
+        if match:
+            entry, cls, subclass, display, _quality = (int(match.group(i)) for i in range(1, 6))
+            rows.append((entry, cls, subclass, display))
+    if not rows:
+        raise SystemExit(f"{path} carries no rune rows")
+    return rows
+
+
+def rune_records(path: Path | None = None) -> list[tuple[int, ...]]:
+    """One Item.dbc record per rune, in id order."""
+    return [
+        (entry, cls, subclass, BAG_SOUND_OVERRIDE, BAG_MATERIAL, display, BAG_INVENTORY_TYPE, BAG_SHEATHE)
+        for entry, cls, subclass, display in rune_rows(path)
+    ]
+
+
+def rune_id_range(path: Path | None = None) -> range:
+    ids = [entry for entry, _, _, _ in rune_rows(path)]
+    if ids != list(range(ids[0], ids[0] + len(ids))):
+        raise SystemExit(f"{path}: rune entries are not a contiguous range")
+    return range(ids[0], ids[0] + len(ids))
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +263,7 @@ def patch_target(data_dir: Path) -> Path:
     return dbc_mpq.patch_target(data_dir, MEMBERS)
 
 
-def build(dbc_path: Path) -> tuple[bytes, bytes, int]:
+def build(dbc_path: Path, runeword_sql: Path | None = None) -> tuple[bytes, bytes, int]:
     gen = load_generator()
     records, strings = read_dbc(dbc_path)
     ours = bag_records(gen)
@@ -185,13 +271,17 @@ def build(dbc_path: Path) -> tuple[bytes, bytes, int]:
     if len(ours) != len(ids):
         raise SystemExit(f"{len(ours)} bag records for a range of {len(ids)} ids")
     extended = extend_records(records, ours, ids)
+    # The runes are a second, higher range; appending them after the bags keeps
+    # the file's id order, which extend_records enforces.
+    rune_ids = rune_id_range(runeword_sql)
+    extended = extend_records(extended, rune_records(runeword_sql), rune_ids)
     patched = write_dbc(extended, strings)
     archive = patch_archive(patched)
     if read_mpq_file(archive, "DBFilesClient\\Item.dbc") != patched:
         raise SystemExit("the archive does not read back as the patched Item.dbc")
     if read_mpq_file(archive, "DBFilesClient/Item.dbc") != patched:
         raise SystemExit("the archive does not find the file through a forward-slash name")
-    return patched, archive, len(ours)
+    return patched, archive, len(ours) + len(rune_ids)
 
 
 def main() -> int:
@@ -200,6 +290,8 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=HERE.parents[1] / "build" / "item-dbc", help="where to write Item.dbc and the patch archive")
     parser.add_argument("--client-data", type=Path, help="the client's Data directory; the patch archive is copied in under the first free name")
     parser.add_argument("--server-dbc", type=Path, help="the server's data/dbc directory; the patched Item.dbc is copied in")
+    parser.add_argument("--runeword-sql", type=Path,
+                        help="the generated runewords_10_items.sql (default: search the repository and artifact layouts)")
     parser.add_argument("--check", action="store_true", help="fail if the files in --out differ from a fresh run")
     parser.add_argument("--verify", action="store_true",
                         help="report whether the client in --client-data reads a patched Item.dbc, and exit")
@@ -211,15 +303,16 @@ def main() -> int:
         if not args.client_data.is_dir():
             raise SystemExit(f"{args.client_data} is not a directory; point --client-data at the client's Data folder")
         gen = load_generator()
-        return verify_client(args.client_data, bag_id_range(gen))
+        ids = set(bag_id_range(gen)) | set(rune_id_range(args.runeword_sql))
+        return verify_client(args.client_data, ids)
 
     if args.dbc is None:
         parser.error("--dbc is required unless --verify is given")
     if not args.dbc.is_file():
         raise SystemExit(f"{args.dbc} does not exist; it is the client's Item.dbc")
 
-    patched, archive, count = build(args.dbc)
-    print(f"{args.dbc}: {count} bag records appended, {len(patched)} bytes")
+    patched, archive, count = build(args.dbc, args.runeword_sql)
+    print(f"{args.dbc}: {count} custom item records appended (loot bags and runes), {len(patched)} bytes")
     print(f"archive: {len(archive)} bytes")
 
     if args.check:

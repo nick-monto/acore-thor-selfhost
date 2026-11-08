@@ -74,9 +74,6 @@ done
 case "$BOTS" in ''|*[!0-9]*) die "BOTS must be a number, got '$BOTS'" ;; esac
 case "$BOT_TICK_MS" in ''|*[!0-9]*) die "BOT_TICK_MS must be a number of milliseconds, got '$BOT_TICK_MS'" ;; esac
 case "$HORDE_RATIO" in ''|*[!0-9]*) die "HORDE_RATIO must be a number, got '$HORDE_RATIO'" ;; esac
-# The skateboard is off unless this is 1. It is a dial rather than a conf edit because /opt/acore/etc
-# lives in the image layer: a hand edit there does not survive a rebuild.
-case "${SKATEBOARD_ENABLE:-0}" in 0|1) ;; *) die "SKATEBOARD_ENABLE must be 0 or 1, got '$SKATEBOARD_ENABLE'" ;; esac
 # 10# so a leading zero stays decimal: write-confs.sh subtracts from this to get the Alliance side,
 # where 010 would be ten in the conf and eight to the arithmetic, and 08 would abort the render
 # outright. The length bound comes first so a long digit string cannot wrap into range.
@@ -215,30 +212,6 @@ patch_item_dbc() { # patch_item_dbc - put the 64 bag records into the server's I
     fi
 }
 
-# --- 3c. the shield deck rows in CreatureDisplayInfo/CreatureModelData --------------------------
-# Skateboard.Deck ships as `engravedwall` (90001), an item shield model registered as a creature
-# display - a row the stock DBCs do not have. Without it the module warns once at startup and draws
-# the stock log (26609) instead, so this is not fatal, but the shipped default is not the log.
-# Same shape as the bag patch: the tool drops its own rows before appending them, so running it on
-# every start is a no-op rewrite rather than a file that grows.
-patch_deck_dbc() { # patch_deck_dbc - put the two shield deck rows into the server's DBCs
-    local tool="$DBC_PATCH_DIR/skateboard/patch_deck_dbc.py"
-    if [ ! -f "$tool" ]; then
-        warn "no $tool in this image, so the shield decks are not in the DBCs (the log is used instead)"
-        return 0
-    fi
-    if [ ! -f "$DATA/dbc/CreatureDisplayInfo.dbc" ] || [ ! -f "$DATA/dbc/CreatureModelData.dbc" ]; then
-        warn "no $DATA/dbc/CreatureDisplayInfo.dbc or CreatureModelData.dbc, so the shield decks were not added"
-        return 0
-    fi
-    if python3 "$tool" --dbcs "$DATA/dbc" --server-dbc "$DATA/dbc" --out /tmp/deck-dbc >/dev/null 2>&1; then
-        log "CreatureDisplayInfo.dbc: the two shield deck rows are in $DATA/dbc"
-    else
-        # Not fatal: the module falls back to the stock log display.
-        warn "CreatureDisplayInfo.dbc: the shield deck rows could not be added (python3 or the tool failed)"
-    fi
-}
-
 # --- 4. confs ----------------------------------------------------------------------------------
 write_confs() {
     mkdir -p "$LOGS" "$STATE" "$DATA"
@@ -257,7 +230,6 @@ write_confs() {
     WC_DB_PORT="$DB_PORT"
     WC_DB_USER="$DB_USER"
     WC_DB_PASS="$DB_PASS"
-    WC_SKATEBOARD="${SKATEBOARD_ENABLE:-0}"
     WC_BOTS="$BOTS"
     WC_BOT_TICK_MS="$BOT_TICK_MS"
     WC_HORDE_RATIO="$HORDE_RATIO"
@@ -576,7 +548,6 @@ main() {
     init_schemas
     ensure_data
     patch_item_dbc
-    patch_deck_dbc
     write_confs
     first_boot_if_needed
     run_realm

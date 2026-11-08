@@ -18,9 +18,9 @@ pins.toml
 README.md
 LICENSE
 
-# scripts/ except the five files the image copies: write-confs.sh (the realm's conf writer, shared
-# with scripts/thor-install.sh) and the two client-data patchers with the generator and the MPQ
-# library they load. Every one of them is named, because a `!dir/` re-includes the directory and not
+# scripts/ except the four files the image copies: write-confs.sh (the realm's conf writer, shared
+# with scripts/thor-install.sh) and the client-data patcher with the generator and the MPQ library
+# it loads. Every one of them is named, because a `!dir/` re-includes the directory and not
 # what is under it - `scripts/**` above still matches the file, and the COPY fails at build time with
 # "not found" rather than in any way the installer reports.
 scripts/**
@@ -28,7 +28,6 @@ scripts/**
 !scripts/item-dbc/patch_item_dbc.py
 !scripts/loot-bags/gen_loot_bags.py
 !scripts/lib/dbc_mpq.py
-!scripts/skateboard/patch_deck_dbc.py
 
 # Local artifacts and noise: the tarballs and client data the docs tell you to download, plus
 # anything a build or an editor leaves behind.

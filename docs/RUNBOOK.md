@@ -79,7 +79,7 @@ Neither check proves the module links or behaves — the arm64 build and a clien
 
 ## Part 0b — What the installer fetches, and the commit it fetches from
 
-Both installers download code and then run it: `docker/entrypoint.sh`, `docker/Dockerfile`, `docker/docker-compose.yml` and `scripts/write-confs.sh` as root inside the container, and `scripts/item-dbc/patch_item_dbc.py` with `scripts/loot-bags/gen_loot_bags.py` as you. A branch is a moving pointer, so the ref is resolved to a commit on the first fetch and recorded:
+Both installers download code and then run it: `docker/entrypoint.sh`, `docker/Dockerfile`, `docker/docker-compose.yml` and `scripts/write-confs.sh` as root inside the container, and `scripts/item-dbc/patch_item_dbc.py` with `scripts/loot-bags/gen_loot_bags.py` as you. That same host-side list carries `sql/custom/db_world/runewords_10_items.sql`, which the patcher reads for the runes' records, and `scripts/runewords/gen_runewords.py`, so the SQL can be regenerated on the device without a core checkout. A branch is a moving pointer, so the ref is resolved to a commit on the first fetch and recorded:
 
 | installer | ref | recorded as |
 |---|---|---|
@@ -90,7 +90,7 @@ Every download then addresses the commit, never the branch: `raw.githubuserconte
 
 - **Install from a known commit:** `SELF_REF=<40-hex>` / `-SelfRef <40-hex>`. Nothing is resolved; the commit is used directly.
 - **Move an existing install to the tip:** name the ref explicitly — `SELF_REF=main thor-install.sh --repair` on the device, `-SelfRef main -Docker -Repair` on Windows. An explicitly named ref is resolved again and the new commit recorded.
-- **A pin that predates a file** is dropped rather than reported as a network failure. The pin is content-addressed, not immortal: `scripts/lib/dbc_mpq.py` shipped after `scripts/skateboard/patch_deck_dbc.py`, so a realm installed before the lib existed pins a commit that cannot serve it. On an HTTP 404 for one of the fetched files the installer resolves the ref again, records the new commit and fetches the whole list from it - once, and never over a ref you named explicitly. The files fetched before the failure are re-fetched too, because they came from the same stale commit.
+- **A pin that predates a file** is dropped rather than reported as a network failure. The pin is content-addressed, not immortal: `scripts/lib/dbc_mpq.py` shipped after the tool that imports it (`scripts/item-dbc/patch_item_dbc.py`), so a realm installed before the lib existed pins a commit that cannot serve it. On an HTTP 404 for one of the fetched files the installer resolves the ref again, records the new commit and fetches the whole list from it - once, and never over a ref you named explicitly. The files fetched before the failure are re-fetched too, because they came from the same stale commit.
 - **When GitHub's API is unreachable** the installer says so and falls back to the ref itself for that run. The lookup is one unauthenticated request per install, or authenticated when `--github-token` / `THOR_GH_TOKEN` is set.
 
 The server artifact is a separate download and is checked against the `.sha256` beside it; when the release carries none, the hash the install already recorded in `state.env` is used instead, and an artifact that can be verified by neither is refused rather than unpacked - both installers fail closed the way `docker/Dockerfile` already did. The client data is pinned by a hard-coded SHA-256 that fails the install on a mismatch.
@@ -258,7 +258,7 @@ One trap worth knowing before you debug a "bots do not load" symptom: **module c
 
 ## Part 4a — The CUSTOM SQL patches
 
-Two patches ride the core's CUSTOM slot rather than a module: the loot bags (Part 9a) and the capital portals. The installer puts `sql/custom/db_world/*.sql` under `<core>/data/sql/custom/db_world/`, i.e. under `SourceDirectory` (Part 4), and the world database updater applies each CUSTOM file **once per file name**, recording its SHA-1 hash in the world database's `updates` table [V].
+Three patches ride the core's CUSTOM slot rather than a module: the loot bags (Part 9a), the runewords (Part 5d) and the capital portals. The installer puts `sql/custom/db_world/*.sql` under `<core>/data/sql/custom/db_world/`, i.e. under `SourceDirectory` (Part 4), and the world database updater applies each CUSTOM file **once per file name**, recording its SHA-1 hash in the world database's `updates` table [V].
 
 The SQL no longer has to ride the artifact. `refresh_custom_sql()` runs right after `fetch_server` on every install and re-run — it is skipped under `--from-source`, which already extracts the same tree with the module sources — and it downloads `sql/custom*` from `SELF_REPO@SELF_REF` (`nick-monto/acore-thor-selfhost` at `SELF_REF`, default `main`) into `$SRC_DIR/data/sql`. A SQL change therefore reaches the device with an ordinary re-run, and the commit only has to be on the ref that `SELF_REF` names; no rebuilt artifact is involved.
 
@@ -266,8 +266,9 @@ The SQL no longer has to ride the artifact. `refresh_custom_sql()` runs right af
 |---|---|---|
 | `travel_portals_10_spawns.sql` | 16 `gameobject` spawns, guids 9800000-9800015: two per capital city, standing at that city's own teleport arrival point and casting the two same-faction cities on the other continent. Stock `gameobject_template` type-22 (spellcaster) entries — no DBC, no new template, no module [V] | `scripts/travel/gen_portals.py` |
 | `loot_bags_*.sql` (three files) | the bag items, drop tables and creature drops from Part 9a | `scripts/loot-bags/gen_loot_bags.py` |
+| `runewords_*.sql` (four files) | the 33 rune items, the `runeword_words` table and its rows, and the drop tables and creature drops from Part 5d | `scripts/runewords/gen_runewords.py` |
 
-The portal file is the one that must be careful with its `DELETE`: it names its 16 guids explicitly (`WHERE guid IN (9800000, …, 9800015)`), never a range, because the core seeds its gameobject guid allocator from `MAX(guid) + 1` — once the file has applied, objects the server creates are allocated above these guids, and a range delete would take them out on re-apply. The loot-bag files delete their own private ranges instead (`item_template` / `item_loot_template` 91000-91099, `reference_loot_template` / `creature_loot_template` 9800100-9800199) [V]. Every CUSTOM file starts with a `DELETE`, which is what makes re-application idempotent.
+The portal file is the one that must be careful with its `DELETE`: it names its 16 guids explicitly (`WHERE guid IN (9800000, …, 9800015)`), never a range, because the core seeds its gameobject guid allocator from `MAX(guid) + 1` — once the file has applied, objects the server creates are allocated above these guids, and a range delete would take them out on re-apply. The loot-bag files delete their own private ranges instead (`item_template` / `item_loot_template` 91000-91099, `reference_loot_template` / `creature_loot_template` 9800100-9800199), and the runeword files do the same one range above them (`item_template` 93000-93099, `reference_loot_template` 9800200-9800299, `creature_loot_template` group 102) [V]. Every CUSTOM file starts with a `DELETE`, which is what makes re-application idempotent.
 
 Faction, since it is easy to misread as an access rule: seven of the eight portal templates carry Alliance 1732 (Stormwind, Darnassus, Exodar) or Horde 1735 (Orgrimmar, Undercity, Thunder Bluff, Silvermoon) in `gameobject_template_addon`, and only Ironforge's 176497 is neutral (0), used only as an Alliance destination. The server-side use path never tests that faction, so it does not gate who may click a portal [V].
 
@@ -472,141 +473,79 @@ mercenaries pass on a drop, that a mercenary stays at its hired level when the p
 (no XP, and `fallen behind` in the party row), and that the party comes back after a relog and a
 world-server restart.
 
-## Part 5d — The skateboard
+## Part 5d — Prove the runeword module is live
 
-`mod-skateboard` ships **off**: development of the deck is paused, so the installer creates `/opt/acore/etc/modules/mod-skateboard.conf` from the shipped `.dist` with `Skateboard.Enable = 0`. The module is still compiled in and `.board` still exists, but every refusal says the skateboard is disabled and nothing updates. The launcher no longer installs the client add-on (it went to the retired list with the pause and is deleted on the next launch of a client that carried it), so a player boards with the `.board` chat commands once the key is back on, and gets the add-on back only when it is shipped again. Turning it back on is one key, and needs no rebuild: `sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/'` on that conf, then `.reload config` (or `SKATEBOARD_ENABLE=1` on the Windows container). With `Skateboard.Enable = 1` the board is *available*; nobody is boarded until a player presses `.board on` or the add-on's Board button.
-
-A conf is written once, from the `.dist` of the artifact that was installed, but it is not frozen: on every container start `scripts/write-confs.sh` appends every key the live file is missing with the shipped default, validates each existing value, and refuses an out-of-range one - so a newer artifact's new keys (`Skateboard.Cruise`, `Skateboard.Drive.GroundMs`, ...) appear in the live conf on the next boot without deleting anything. Deleting the conf is only for starting over from the shipped values, and it throws away hand-set dials. Retired keys (the ones the module no longer reads - `Skateboard.OffInCombat`, `Skateboard.MountedPose`) are deleted from the live file on the same pass, and `Skateboard.Deck.Carrier = 16386` is migrated to `29443`: the old default turned out to carry a script, which the module now refuses, so an upgraded realm would otherwise board an invisible deck.
-
-The deck draws as a creature summoned under the rider (`Skateboard.Deck.Render = unit`, the shipped default), so the two deck rows still have to be in the **client's** DBC pair - Part 5e's `patch-8.MPQ` - or the summon shows the carrier template's own model (the module falls back to the stock `Log Ride` 26609, which needs no patch).
-
-On the Windows container, `/opt/acore/etc` is **not** a volume - it is the image's own layer, re-created from the `.dist` on every image rebuild - so a `sed` on that file survives `docker compose restart` and nothing else. The switch there is the compose dial, which is re-applied on every start and defaults to off:
+Same shape as 5a–5c, for `mod-runewords`:
 
 ```bash
-# C:\acore\docker-src\docker\.env, beside the compose file - only to turn the board ON
-SKATEBOARD_ENABLE=1
+# 1. the module conf the worldserver actually reads
+ls -l /opt/acore/etc/modules/mod-runewords.conf
+grep -E '^Runewords\.(Enable|SweepIntervalMs|ApplyWhenDead|Announce)' /opt/acore/etc/modules/mod-runewords.conf
+
+# 2. the generated world SQL reached the database: the rune items, the words and the drops
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_world \
+  -e "SELECT COUNT(*) AS runes, MIN(entry) AS first_rune, MAX(entry) AS last_rune
+        FROM item_template WHERE entry BETWEEN 93000 AND 93032;
+      SELECT COUNT(*) AS words FROM runeword_words;
+      SELECT COUNT(*) AS drop_tables FROM reference_loot_template
+        WHERE entry BETWEEN 9800200 AND 9800299;
+      SELECT COUNT(*) AS creature_rows FROM creature_loot_template WHERE GroupId = 102;"
+
+# 3. the one characters table was created at startup (programmatically, not by module SQL)
+mysql --protocol=socket --socket=/opt/acore/run/mysqld.sock -uroot acore_characters \
+  -e "SELECT COUNT(*) AS rolls FROM character_runeword_rune;"
+
+# 4. the module loaded its words, and every word it skipped said why
+grep -i "Runewords" /opt/acore/logs/Server.log | tail -10
 ```
 
-```bash
-docker compose -f docker/docker-compose.yml up -d acore
-```
+- (1) prints the file and the four keys. `Runewords.Enable = 1`, `Runewords.SweepIntervalMs = 1000`,
+  `Runewords.ApplyWhenDead = 0` and `Runewords.Announce = 1` are the installer's values. The sweep
+  interval is the one player's bags are rescanned at, and the module **floors it at 200 ms** rather
+  than refusing the value - so a number below it is not an error, it is the floor. The installer
+  rewrites a value outside 200..60000 and leaves a deliberate `Enable = 0` alone: the module then
+  loads, keeps its tables, and removes any word already granted on the next tick it would have run.
+- (2) is the patch. `runes` is `33` with `first_rune`/`last_rune` `93000`/`93032`; a `0` means
+  `sql/custom/db_world/runewords_*.sql` never applied, and the drop tables and the word table are
+  empty for the same reason. `words` is the ladder's word count; `drop_tables` is one table per level
+  bracket a creature actually rolls, and `creature_rows` is the `reference_loot_template` pointer in
+  each of them. `--status` reports the families it found by name (`sql sources: runeword patch
+  (runewords_10_items.sql)`), and `python3 scripts/runewords/gen_runewords.py --core <checkout>
+  --check` proves the committed SQL is still what the pinned dumps produce.
+- (3) prints `0` on a fresh realm: the table exists but no rune has been seen in a bag yet. It fills
+  lazily, one row per rune **item instance** the first time the scan sees it, and that row is the
+  1..100 roll the word is scored on. A rune that is mailed, auctioned or picked up again keeps its
+  roll, because the key is the item guid.
+- (4) is the important one. A healthy boot is one line:
 
-```bash
-# turn it on, then apply it without a restart
-sed -i 's/^Skateboard\.Enable = 0$/Skateboard.Enable = 1/' /opt/acore/etc/modules/mod-skateboard.conf
-# in the worldserver console:
-.reload config
-```
+  ```
+  Runewords: loaded N words over M distinct rune items (minimum level 1)
+  ```
 
-The module reads its config in `OnAfterConfigLoad`, so `.reload config` is enough [V]; a restart works too and is what an installer re-run expects.
+  A `Runewords: word N ('name') has an unusable pattern and is skipped` or `… grants no spells and is
+  skipped` means that word does nothing, and the reason is printed above it (`cell 'row:col:entry' is
+  outside the RxC grid`, `names spell X, which is not in Spell.dbc`). Both come from the generated
+  SQL, so a `--check` of the generator is what to run before hunting the conf. The load is read at
+  load and on `.runewords reload`, not per use.
 
-An artifact built before `mod-skateboard` landed has no `.board` command at all, and the client cannot tell that from a typo: the add-on's Board button and `/sb` both answer `Command 'board on' does not exist`, and the status poll answers `Command 'board status' does not exist` until it gives up. No conf edit fixes that, because there is no conf to read - the check is one command, and 0 means the artifact predates the module:
+The ladder and the drops are worth looking at from the database side before a client does: the 33
+runes run El (level 1) to Zod (level 80) and a rung joins the bracket it lands in and every later
+one, with a weight that falls as it ages (`weight = 1 + age/2`, capped at 40), so within a bracket
+the newest rune is the rarest row; each bracket's table is referenced once per creature loot id, at
+2% for a normal creature and 15% for a boss. That is the whole progression: no rune is
+level-locked out of a drop it should have, and the top of the ladder stays a chase.
 
-```bash
-grep -c 'You cannot board while mounted' /opt/acore/bin/worldserver
-```
-
-| Key | Default | What it does |
-|---|---|---|
-| `Skateboard.Enable` | `0` | the whole feature; 0 (the shipped default, development paused) refuses `.board on` and boards nobody |
-| `Skateboard.Deck` | `plank` | the Redridge boardwalk plank (display 90001); `coffinlid` (90002) is the Duskwood coffin lid; `log` is the stock `Log Ride` display id 26609 and needs no client patch. Both decks are self-textured *doodad* models, not shields - an item model draws white as a creature (Part 5e). They only exist once Part 5e's rows are in the DBCs, and the module falls back to `log` with one warning until they are |
-| `Skateboard.Deck.Render` | `unit` | how the deck is drawn (a `.reload config` switches it under a live rider): `unit` summons a creature carrying the display, so the rider stands on it (`Deck.Carrier` 29443; under `Drive.Mode = 1` it is launched on the rider's own path, under `Mode = 0` it is followed in `Deck.FollowMs` segments); `mount` is `Unit::Mount()`, drawn at the rider's position but **seating** them - and a doodad deck display (the planks) draws untextured with no rider in that mode |
-| `Skateboard.BoardCastMs` | `2000` | how long `.board on` takes to put the deck under the player; a step, a hit, a fight, a death or a teleport stops it before anything is written, and the client's bar is driven by the module's own add-on message (`cbegin=`, `cdone`, `ccancel=`) |
-| `Skateboard.MaxSpeed` | `21.0` | the deck's speed in yd/s, three times the base run rate [V] |
-| `Skateboard.Cruise` | `4.0` | the floor a boarded deck never rolls below |
-| `Skateboard.Drive` | `1` | the carry: the module moves the rider with one knockback impulse along the facing every `Drive.ImpulseMs`, its arc tilted by the terrain gradient so it lands back on the slope, so no key is needed to travel - at the cost of a hop, because an impulse is a jump. `0` publishes the deck as a run-speed cap instead (`SetSpeed(MOVE_RUN, max(1.0, v / 7.0f), true)`): the rider walks and steers with their own input and the deck's speed is the cap, so it needs the forward key - the only carrier with real steering. Note the clamp: a cap below 1.0 is a walk, so with `Drive = 0` the deck only acts once `v` is above the 7 yd/s run speed, and `Cruise` below 7 means it never acts at all |
-| `Skateboard.Drive.ImpulseMs` / `.GroundMs` | `350` / `100` | the carry's cycle, and how much of it the rider spends standing (the jump window). The impulse is `ImpulseMs / (ImpulseMs - GroundMs)` times the deck speed on the flat, and the average is the deck speed |
-| `Skateboard.Drive.Mode` | `0` | which carrier moves the rider: `0` knockback arcs (steering is instant, and the arc is tilted by the gradient, so a rise no longer stops it dead and a drop is one glide) - but an impulse is the client's knockback, a jump arc, so at the shipped 350 ms cycle the rider bounces 2.86 times a second; `1` a server spline whose path is sampled along the terrain (smooth, the rider steers between segments, not during them, and cannot jump during one; the unit deck rides the same path in the same tick) |
-| `Skateboard.Drive.ArcMs` / `.SplineMs` | `0` / `150` | the arc's length (`0` = `ImpulseMs - GroundMs`); one spline segment with `Drive.Mode = 1`, which is also how often steering comes back |
-| `Skateboard.Deck.Carrier` | `29443` | the stock `creature_template` the deck is summoned from. It must be inert - no `AIName`, no `ScriptName` - or the summon is refused with one log line: a scripted row gives the deck an AI of its own (`16386`, the relay this module shipped first, marks the creature active) |
-| `Skateboard.OffOnHit` | `1` | leaves the board when another unit hits the player (a 21 yd/s cap is a free disengage). Starting a fight does not take the deck and neither does fall damage; boarding while already in combat is refused either way |
-
-A deck display id the client's DBC does not carry warns once at load and falls back to 26609, so `plank`/`coffinlid` on an unpatched realm looks like `log`, not like a bug. That warning is the signal to run Part 5e.
-
-`.board` is a player command, one handler per verb:
-
-| Command | Effect |
-|---|---|
-| `.board on` / `.board off` / `.board toggle` | board, leave, or the other one |
-| `.board status` | one line: `boarded=<0\|1> tricks=<n> push=<0\|1> deck=<displayId> speed=<yd/s>`, where `speed` is the cap the module holds |
-| `.board speed` | `v=<yd/s> rate=<rate> pending=<n>` — the deck speed, the rate the server holds, the speed-change ACKs still outstanding |
-| `.board push [down\|up]` | one push impulse; with `Skateboard.Push.Mode = 1`, `push down` starts a pump and `push up` stops it; a message and no change when not boarded |
-| `.board trick <name\|index>` | play a trick from `Skateboard.Trick.List` by name or by position, by hand |
-| `.board tricks` | list the realm's tricks: `tricks=<n>`, then one `1 kickflip 399` line per entry |
-
-The client half is the launcher's Skateboard add-on. It registers **five click bindings** — board/leave, push, the selected trick, the tricks menu and bail — and sends each as `board <verb>` through the AzerothCore add-on channel, so it claims no physical button itself. All five appear in the stock **Key Bindings** frame under the `Skateboard` entries, where a keyboard player rebinds them like any other action; ConsolePort lists the same five in its `/cp` binding list, which is where a pad button is assigned to one. Its movable bar carries board/leave, push and one button per entry of the realm's `Skateboard.Trick.List` - board/leave is the first button, so the way back on is never hidden - and the speed readout shows the cap the module publishes. Push is a press or a hold: the bar button pumps while the mouse is down, and a keyboard or pad click pumps for `/sb hold <ms>` (1000 ms by default), which the realm's `Skateboard.Push.MaxHoldMs` caps. `/sb menu` (or the tricks-menu binding) opens the list the realm sends, and picking a row plays it and makes it the selected trick. While the player is on the board and out of combat, the add-on also re-points the keys already on action buttons 1-3 at the board's buttons, so the bar's own keys become board actions without touching ConsolePort; every original binding is restored on leaving, on logout and on the next login after a crash. Bail is `.board off` whatever the state, and is the bind to reach for when a deck behaves oddly.
-
-No add-on is required to play: any chat line that starts with `.` is executed and never broadcast, so a `/say .board toggle` macro (or typing `.board on` in chat) still works when the add-on is missing [V]. A missing add-on costs the bar, the speed readout and the bindings, not the board.
-
-## Part 5e — The deck rows
-
-`Skateboard.Deck` ships as `plank`, display **90001**: the Redridge boardwalk doodad
-(`World\Azeroth\RedRidge\PassiveDoodads\DockPieces\RedRidgeDocksBoardwalk01.mdx`) registered as a
-**creature** display, which is how a mount is drawn. `coffinlid` is 90002, the Duskwood coffin lid.
-
-A **doodad**, not a shield: shields and other item models are painted by `ItemDisplayInfo` at draw
-time and authored "held", so registered as a creature display one draws white and on edge - which is
-exactly what the first pair did on the device. Doodad M2s carry their own texture path and are
-authored on the ground plane. No doodad is registered as a creature model in stock data, so the two
-rows per deck are a client-data patch, and they are needed on **both** sides: the server validates
-the id against `sCreatureDisplayInfoStore` at load, the client is what draws it.
-
-`scripts/skateboard/patch_deck_dbc.py` writes both halves. The installer runs it (Termux, where the
-client's `Data` directory is visible) as its own step after the loot-bag `Item.dbc` patch; by hand it
-is the same command:
-
-```bash
-pkg install python          # once, in Termux
-RF=$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu
-python3 scripts/skateboard/patch_deck_dbc.py \
-    --dbcs "$RF/opt/acore/data/dbc" \
-    --server-dbc "$RF/opt/acore/data/dbc" \
-    --client-data "/sdcard/WOTLK 3.3.5a/Data"
-```
-
-(The path is whatever the installer remembered; `--status` prints it.) The rows are **cloned from
-the stock log** - display 26609 → model 2920, a model the client already draws a rider on - so only
-the id, the model path and the display scale differ from a deck known to render. Re-running is a
-no-op rewrite, and the archive replaces its own copy instead of piling up a new `patch-N` per run.
-The server loads its DBCs once, at start, so a running realm needs a restart before it accepts
-90001 (on a healthy realm the warning above says whether it did).
-
-Want a different board - a surfboard prop, a plank, the coffin lid? `--survey` finds one:
-
-```bash
-python3 scripts/skateboard/patch_deck_dbc.py --survey surfboard \
-    --dbcs "$RF/opt/acore/data/dbc" \
-    --data-dir "/sdcard/WOTLK 3.3.5a/Data"        # or --listfile listfile.txt
-```
-
-It prints every known model path containing the hint, whether it is self-skinned (a doodad: drawable
-as a creature) or skin-supplied (an item model: will draw white), and either the display id to put in
-`Skateboard.Deck` or the `--model plank=<path>` line that adds the row for it. The client's archives
-are read where their listfile is stored or zlib-compressed; an imploded or encrypted one is reported
-by name, and a 3.3.5a `listfile.txt` covers those.
-
-Check, after a client restart:
-
-```bash
-python3 scripts/skateboard/patch_deck_dbc.py --verify \
-    --client-data "/sdcard/WOTLK 3.3.5a/Data"
-```
-
-It names the archive the client actually reads `CreatureDisplayInfo.dbc` from and says whether the
-rows are in it; exit 0 is the only good answer.
-
-`Skateboard.Deck = plank` on a realm whose DBCs were patched only on the server draws nothing on an
-unpatched client - the client has no row for 90001. The module cannot see that side.
-
-Two things the DBC cannot decide:
-
-- **The deck's size.** `--scale` (default `2.0`, the log's own display scale) is the knob; re-run
-  with `--scale 3.0`, restart the client, and look. `--mount-height` lifts the rider off the deck's
-  origin if the feet sink.
-- **The deck's pose.** A model's rest orientation lives in the M2, not in the DBC: doodads and mount
-  models are authored lying flat, item models are authored standing. That is why a shield could not
-  work however it was patched - and why `--survey` marks each candidate self-skinned or skin-supplied
-  before you spend a client restart on it. `log` is always a keystroke away.
+Then build a word in a bag: the client draws every bag four columns wide and fills it row-major, so
+adjacency is `n±1` along a row and `n±4` down a column, and the pattern has to sit in **one**
+container - the backpack or one bag, since bag windows keep no order among themselves. `.runewords
+status` reports the caller's active word and every rune cell with its roll; `.runewords list` and
+`.runewords reload` are GM-level, and `reload` re-reads `runeword_words` without a restart. What
+needs a client and has not been run: whether a rune's borrowed gem icon draws in the bags and in a
+loot window, whether a granted word's auras appear on the buff bar with the stock spell's own icon
+and text, whether a word is derived again after a relog (the auras are removed on logout by the
+core, so the expected answer is "granted again" with the roll stable), and how the announce line
+reads for a body with one word and one broken pattern. None of it has been exercised in a client or
+on the Thor.
 
 ## Part 6 — Prove it with a client before touching the launcher
 
@@ -658,7 +597,7 @@ Four tests, in this order — each one is a gate:
 
 The bag items are custom entries (91000-91063), so the client has no `Item.dbc` record for them: the loot window shows the icon because that packet carries it, and the player's bags show a red question mark.
 
-`thor-install.sh` closes that on every install and every `--repair`, as its last step: it appends the 64 records to the server's `data/dbc/Item.dbc` and writes the archive into the client's `Data` directory under the highest free patch name (`patch-9` down to `patch-4`, so it loads after every archive already there), replacing its own copy rather than adding another one on a re-run. Two things have to be true for the client half, and the step says which one is missing:
+`thor-install.sh` closes that on every install and every `--repair`, as its last step: it appends the bag and rune records (64 + 33 = 97) to the server's `data/dbc/Item.dbc` and writes the archive into the client's `Data` directory under the highest free patch name (`patch-9` down to `patch-4`, so it loads after every archive already there), replacing its own copy rather than adding another one on a re-run. Two things have to be true for the client half, and the step says which one is missing:
 
 - **Termux needs python** (`pkg install python`). It runs out here rather than inside the rootfs because the guest has none, and because the client's `Data` directory is only visible from Termux.
 - **The client's `Data` directory has to be found.** `--client-data DIR` names it. Without the flag the installer asks, at the start of the install (and again on `--repair` if it was never answered): it lists every folder one or two levels under shared storage (`$EXTERNAL_STORAGE`, `/storage/emulated/0`, `/sdcard`, scanned once between them) whose `Data` holds a `common.MPQ`, and takes a number, a path, or an empty line to skip. The answer is remembered in `$HOME/.thor-wow/client-data`, so `--repair` and `--status` keep using it (not in `state.env`, which the inside stage rewrites and would blank). Android's folder picker cannot be used here: an activity hands its result to the app that started it, and nothing in Termux receives one - Termux:API's `termux-storage-get` copies a chosen file out and has no folder picker at all. The prompt reads `/dev/tty`, not stdin, because `curl … | bash` makes stdin the script itself.

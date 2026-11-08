@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """The client-data half of a custom id: read and write a 3.3.5a DBC, and ship it as a patch MPQ.
 
-Two tools need the same thing and differ only in which records they add: the loot bags add
-``Item.dbc`` rows, the skateboard's deck adds ``CreatureModelData``/``CreatureDisplayInfo`` rows.
-The DBC container layout, the MPQ writer and the rule about which archive the client actually
-loads are not specific to either, so they live here once.
+The loot-bag patch (scripts/item-dbc/patch_item_dbc.py) needs it to add ``Item.dbc`` rows: the
+DBC container layout, the MPQ writer and the rule about which archive the client actually loads.
+None of that is specific to the record being added, so it lives here once.
 
 The archive is written the way a patch has to be: version-1, stored single-unit blocks with no
 sector table, both tables encrypted with the key of their own name. Everything about the load

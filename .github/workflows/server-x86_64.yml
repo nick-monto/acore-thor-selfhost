@@ -16,8 +16,8 @@ name: server-x86_64
 #     etc/    *.conf.dist and modules/*.conf.dist   (and the built-in _CONF_DIR is /opt/acore/etc)
 #     src/    data/sql/, modules/mod-playerbots/data/sql/,
 #             modules/mod-creature-gear/data/sql/, modules/mod-survivor/data/sql/ and
-#             data/sql/custom/db_world/ (the loot-bag patch) - the DB updater reads these
-#             (mod-hardcore, mod-e-interact, mod-mercenaries and mod-skateboard create nothing in
+#             data/sql/custom/db_world/ (the loot-bag and rune patches) - the DB updater reads these
+#             (mod-hardcore, mod-e-interact and mod-mercenaries create nothing in
 #             the database and have no SQL tree; mod-survivor ships one world file, the container
 #             gameobject template, and creates its three character tables programmatically;
 #             mod-mercenaries creates its roster table programmatically and puts its picker on every
@@ -129,7 +129,7 @@ jobs:
           cp -a "$GITHUB_WORKSPACE/modules/mod-e-interact" core/modules/mod-e-interact
           cp -a "$GITHUB_WORKSPACE/modules/mod-survivor" core/modules/mod-survivor
           cp -a "$GITHUB_WORKSPACE/modules/mod-mercenaries" core/modules/mod-mercenaries
-          cp -a "$GITHUB_WORKSPACE/modules/mod-skateboard" core/modules/mod-skateboard
+          cp -a "$GITHUB_WORKSPACE/modules/mod-runewords" core/modules/mod-runewords
           # The player-centric distribution mode lives on top of the pinned module commit. The
           # patch is maintained here so the upstream pin stays exact; a bad patch fails the build.
           patch -p1 -d core/modules/mod-playerbots < "$GITHUB_WORKSPACE/patches/playerbots-player-centric.patch"
@@ -210,6 +210,11 @@ jobs:
           # shipped value, so a build that dropped the module is caught here rather than in game.
           test -f "$PREFIX/etc/modules/mod-survivor.conf.dist"
           grep -q '^Survivor.Enable = 1$' "$PREFIX/etc/modules/mod-survivor.conf.dist"
+          # And for the runeword module: same proof, plus its rescan interval, which the module
+          # floors at 200 ms - a conf that lost it would fall back to the built-in default silently.
+          test -f "$PREFIX/etc/modules/mod-runewords.conf.dist"
+          grep -q '^Runewords.Enable = 1$' "$PREFIX/etc/modules/mod-runewords.conf.dist"
+          grep -q '^Runewords.SweepIntervalMs = 1000$' "$PREFIX/etc/modules/mod-runewords.conf.dist"
           # And for the mercenary module: its conf is installed and carries a switch, a temperament
           # pool, the picker's pool keys and the expansion's headline defaults, so a build that
           # dropped the module, its conf or one of the new keys fails here.
@@ -220,10 +225,6 @@ jobs:
           grep -q '^Mercenary.ResupplyFeePercent = 100$' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
           grep -q '^Mercenary.AffinityStep = 100$' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
           grep -q '^Mercenary.VoiceLine.Talkative = ' "$PREFIX/etc/modules/mod-mercenaries.conf.dist"
-          # And for the skateboard module: the conf is installed and its master switch is at the
-          # shipped value (on), so a build that dropped the module is caught here rather than in game.
-          test -f "$PREFIX/etc/modules/mod-skateboard.conf.dist"
-          grep -q '^Skateboard.Enable = 0$' "$PREFIX/etc/modules/mod-skateboard.conf.dist"
 
       - name: Bundle the libraries whose soname is tied to this release
         run: |
@@ -466,7 +467,7 @@ jobs:
           notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
             "Rolling build: AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/x86_64, with client data v20.0 and the SQL sources." \
             "Artifact sha256: $(awk '{print $1}' acore-server-x86_64.tar.zst.sha256). It is published beside the asset so a host can say which build a running container was unpacked from." \
-            "Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), and mod-skateboard (a board that carries a rider along its facing, off by default (Skateboard.Enable = 0; development paused)), plus the loot-bag patch and the player-centric bot patch." \
+            "Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), mod-runewords (rune items drop on a level ladder from El to Zod and a word's pattern held in one container grants its auras), plus the loot-bag and rune patches and the player-centric bot patch." \
             "This asset is the payload of the Docker image: unpack it at /opt/acore. It carries bin/, etc/, lib/ and src/, not the client data - fetch data v20.0 the way the image does, the same bytes scripts/thor-install.sh verifies on the arm64 side.")"
           gh release view server-build-x86_64 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create server-build-x86_64 -R "$GITHUB_REPOSITORY" --latest=false \
@@ -482,7 +483,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           notes="$(printf '%s\n\n%s\n' \
-            "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/x86_64, with client data v20.0 and the SQL sources. Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), and mod-skateboard (a board that carries a rider along its facing, off by default (Skateboard.Enable = 0; development paused)), plus the loot-bag patch and the player-centric bot patch. This asset is the payload of the Docker image: unpack it at /opt/acore; it carries bin/, etc/, lib/ and src/, not the client data." \
+            "AzerothCore core $CORE_COMMIT + mod-playerbots $PB_COMMIT, this repository at ${GITHUB_SHA:0:7} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}), linux/x86_64, with client data v20.0 and the SQL sources. Modules: mod-creature-gear (humanoid creatures wear, and can drop, the gear they carry), mod-hardcore (an opt-in one-death ruleset; ghost is the default, refusing resurrection), mod-e-interact (one interact key, with the local gameobject pass), mod-survivor (death drops the gear into a lootable container), mod-mercenaries (recruit two named mercenaries at a town obelisk; they level with you inside a two-level window and never compete for loot), mod-runewords (rune items drop on a level ladder from El to Zod and a word's pattern held in one container grants its auras), plus the loot-bag and rune patches and the player-centric bot patch. This asset is the payload of the Docker image: unpack it at /opt/acore; it carries bin/, etc/, lib/ and src/, not the client data." \
             "Artifact sha256: $(awk '{print $1}' acore-server-x86_64.tar.zst.sha256), published beside the asset.")"
           # The arm64 and win64 workflows publish their own assets to the same server-v* tag, so this
           # step views before creating - that run may have created the release already, with its own

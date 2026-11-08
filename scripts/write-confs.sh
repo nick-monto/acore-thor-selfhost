@@ -41,6 +41,17 @@ SURVIVOR_CONF_DEFAULTS=(
     "Survivor.BotRegenOnDeath=1"
     "Survivor.BotDropContainer=1"
 )
+# mod-runewords's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. The module
+# reads all four once at load, so a key that is absent or outside its range is silently replaced by
+# the module's own fallback; wc_write_all() and the installer's run_checks() restore them from this
+# one list. SweepIntervalMs is the interval one player's bags are rescanned at, and the module
+# floors it at 200 ms rather than refusing the value, so the floor is what the range below holds.
+RUNEWORD_CONF_DEFAULTS=(
+    "Runewords.Enable=1"
+    "Runewords.SweepIntervalMs=1000"
+    "Runewords.ApplyWhenDead=0"
+    "Runewords.Announce=1"
+)
 # mod-mercenaries's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. Same
 # contract as the survivor list: a key outside its range is silently replaced by the module's own
 # fallback, so wc_write_all() restores it from here.
@@ -70,47 +81,6 @@ MERCENARY_CONF_DEFAULTS=(
     "Mercenary.PoolRefreshMinMinutes=40"
     "Mercenary.PoolRefreshMaxMinutes=60"
     "Mercenary.Debug=0"
-)
-# mod-skateboard's conf keys with the values its shipped .dist carries, as KEY=DEFAULT - the whole
-# set the module reads, the same nineteen the contract and the checkers hold. Same contract as the
-# survivor list: a key absent from the file or outside its range is silently replaced by the
-# module's own fallback, so wc_write_all() and the installer's run_checks() restore it from here.
-SKATEBOARD_CONF_DEFAULTS=(
-    "Skateboard.Enable=0"
-    "Skateboard.Deck=plank"
-    "Skateboard.Deck.Render=unit"
-    "Skateboard.Deck.Carrier=29443"
-    "Skateboard.Deck.FollowMs=40"
-    "Skateboard.MaxSpeed=21.0"
-    "Skateboard.Cruise=4.0"
-    "Skateboard.PushImpulse=4.0"
-    "Skateboard.Push.Mode=0"
-    "Skateboard.Push.IntervalMs=500"
-    "Skateboard.Push.MaxHoldMs=2000"
-    "Skateboard.Friction.Static=1.5"
-    "Skateboard.Friction.Rolling=0.004"
-    "Skateboard.SlopeGain=30.0"
-    "Skateboard.Drive=1"
-    "Skateboard.Drive.Mode=1"
-    "Skateboard.Drive.ImpulseMs=350"
-    "Skateboard.Drive.ArcMs=0"
-    "Skateboard.Drive.SplineMs=400"
-    "Skateboard.Drive.GroundMs=100"
-    "Skateboard.Drive.MinSpeed=3.0"
-    "Skateboard.Brake=6.0"
-    "Skateboard.LandingBonus=2.0"
-    "Skateboard.Tricks=1"
-    "Skateboard.Trick.VisualKit=5036"
-    "Skateboard.Trick.List=kickflip:399:5036, ollie:394:5036, grind:388:5036"
-    "Skateboard.Crash.Enable=1"
-    "Skateboard.Crash.DamagePct=8"
-    "Skateboard.Crash.StaggerMs=1500"
-    "Skateboard.HardcoreSafe=1"
-    "Skateboard.OffOnHit=1"
-    "Skateboard.BoardCastMs=2000"
-    "Skateboard.AckTimeoutMs=500"
-    "Skateboard.Vehicle.Probe=0"
-    "Skateboard.Debug=0"
 )
 
 wc_conf_pair() {   # wc_conf_pair CONF_DIR NAME - print the live config file, creating it from NAME.conf.dist once
@@ -153,10 +123,8 @@ wc_get_conf() {   # wc_get_conf FILE KEY - print the live value (last uncommente
     ' "$1"
 }
 
-# The five helpers below keep their unprefixed names: scripts/mercenaries/check_mercenaries.py
-# reads mercenary_value_ok and MERCENARY_CONF_DEFAULTS out of this file with regexes, and
-# scripts/skateboard/check_skateboard.py does the same for skateboard_value_ok and
-# SKATEBOARD_CONF_DEFAULTS.
+# The value checkers below keep their unprefixed names: scripts/mercenaries/check_mercenaries.py
+# reads mercenary_value_ok and MERCENARY_CONF_DEFAULTS out of this file with regexes.
 
 mercenary_value_ok() {   # mercenary_value_ok KEY VALUE - true when VALUE is one mod-mercenaries accepts
     # Mercenary.Enable and Mercenary.Debug are 0|1, MaxMercenaries 0-4 (the gossip page has room for four party
@@ -241,68 +209,19 @@ survivor_value_ok() {   # survivor_value_ok KEY VALUE - true when VALUE is one t
     esac
 }
 
-skateboard_value_ok() {   # skateboard_value_ok KEY VALUE - true when VALUE is one the module accepts
-    # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s, PushImpulse
-    # and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain 0-90, the
-    # hold-to-pump mode 0|1, its interval 100-2000 ms and cap 100-5000 ms, the carry
-    # impulse 100-2000 ms and its ground gap 0-1000 ms, its floor 0-40 yd/s and the brake
-    # 0-50 yd/s^2, the visual kit
-    # 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000 ms and the ACK
-    # timeout 50-5000 ms. Deck is a name or a raw display id, not a range, so it is settled
-    # before the numeric guard below can see it. The momentum keys carry decimals, so the
-    # comparison is awk's rather than a shell integer test.
-    local key="$1" val="$2" lo hi
-    if [ "$key" = Skateboard.Trick.List ]; then
-        # A list, not a number: `name:emote[:kit]` entries separated by commas. Settled here so
-        # the numeric guard below never sees it; an entry the module cannot use is dropped by the
-        # module itself, which is why anything with a colon is accepted.
-        case "$val" in ?*:*) return 0 ;; *) return 1 ;; esac
-    fi
-    if [ "$key" = Skateboard.Deck.Render ]; then
-        # unit or mount, nothing else: the module's own read falls back to unit with a warning,
-        # so a typo here would be a silent mode switch on the next boot.
-        case "$val" in unit|mount) return 0 ;; *) return 1 ;; esac
-    fi
-    if [ "$key" = Skateboard.Deck ]; then
-        case "$val" in
-            log|plank|engravedwall|coffinlid) return 0 ;;
-            ''|*[!0-9]*) return 1 ;;
-            *) awk -v v="$val" 'BEGIN { exit !(v ~ /^[0-9]+$/ && v + 0 > 0) }'; return ;;
-        esac
-    fi
+runeword_value_ok() {   # runeword_value_ok KEY VALUE - true when VALUE is one the module accepts
+    # The ranges are the ones mod-runewords's own conf comments state: three 0|1 switches, and a
+    # rescan interval from the module's own 200 ms floor up to a minute, so a typo pasted in ms
+    # cannot turn the per-tick scan into a busy loop.
+    local key="$1" val="$2"
+    case "$val" in ''|*[!0-9]*) return 1 ;; esac
     case "$key" in
-        Skateboard.Enable|Skateboard.Tricks|Skateboard.Crash.Enable|\
-        Skateboard.HardcoreSafe|Skateboard.OffOnHit|Skateboard.Debug|Skateboard.Drive|\
-        Skateboard.Vehicle.Probe)
-            case "$val" in 0|1) return 0 ;; *) return 1 ;; esac ;;
-        Skateboard.BoardCastMs)      lo=0;  hi=10000 ;;
-        Skateboard.MaxSpeed)         lo=1;  hi=40 ;;
-        Skateboard.Cruise)           lo=0;  hi=20 ;;
-        Skateboard.Deck.Carrier)     lo=1;  hi=4294967295 ;;
-        Skateboard.Deck.FollowMs)    lo=20; hi=1000 ;;
-        Skateboard.PushImpulse)      lo=0;  hi=20 ;;
-        Skateboard.Push.Mode)        lo=0;  hi=1 ;;
-        Skateboard.Push.IntervalMs)  lo=100; hi=2000 ;;
-        Skateboard.Push.MaxHoldMs)   lo=100; hi=5000 ;;
-        Skateboard.Friction.Static)  lo=0;  hi=20 ;;
-        Skateboard.Friction.Rolling) lo=0;  hi=1 ;;
-        Skateboard.SlopeGain)        lo=0;  hi=90 ;;
-        Skateboard.Drive.ImpulseMs)  lo=100; hi=2000 ;;
-        Skateboard.Drive.Mode)       lo=0;  hi=1 ;;
-        Skateboard.Drive.ArcMs)      lo=0;  hi=2000 ;;
-        Skateboard.Drive.SplineMs)   lo=50; hi=1000 ;;
-        Skateboard.Drive.GroundMs)   lo=0;  hi=1000 ;;
-        Skateboard.Drive.MinSpeed)   lo=0;  hi=40 ;;
-        Skateboard.Brake)            lo=0;  hi=50 ;;
-        Skateboard.LandingBonus)     lo=0;  hi=20 ;;
-        Skateboard.Trick.VisualKit)  lo=0;  hi=100000 ;;
-        Skateboard.Crash.DamagePct)  lo=0;  hi=99 ;;
-        Skateboard.Crash.StaggerMs)  lo=0;  hi=10000 ;;
-        Skateboard.AckTimeoutMs)     lo=50; hi=5000 ;;
+        Runewords.Enable|Runewords.ApplyWhenDead|Runewords.Announce)
+            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
+        Runewords.SweepIntervalMs)
+            [ "$val" -ge 200 ] && [ "$val" -le 60000 ] ;;
         *) return 1 ;;
     esac
-    awk -v v="$val" -v lo="$lo" -v hi="$hi" \
-        'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/ && v + 0 >= lo && v + 0 <= hi) }'
 }
 
 mercenary_append_missing_conf() {   # mercenary_append_missing_conf LIVE DIST - append the shipped keys LIVE lacks
@@ -397,7 +316,7 @@ conf_defaults() {
 # real failure: a missing module conf is a warning, because an artifact built without that module is
 # still a usable realm.
 wc_write_all() {
-    local ws as pb cg hc ei sv pw sb horde
+    local ws as pb cg hc ei sv rw pw horde
     [ -n "${WC_DATA_DIR:-}" ] || WC_DATA_DIR="$WC_ROOT/data"
     # The database is local to the install on the Thor and on Windows, but a container reaches it
     # through the compose network, so the host and port are inputs like the credentials are.
@@ -572,6 +491,17 @@ wc_write_all() {
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-survivor.conf.dist - the artifact was built without the module, survivor mode is unavailable"
     fi
+    if [ -f "$WC_CONF_DIR/modules/mod-runewords.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-runewords.conf" ]; then
+        rw="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-runewords)"
+        # The shipped .dist already holds these values; each one is still read back, because a key
+        # the module cannot use is silently replaced by the module's own default - a sweep interval
+        # below the floor is raised to it, and a switch that is not 0|1 leaves the feature where it
+        # was. Only a value outside its range is rewritten, so a deliberate Enable=0 survives.
+        conf_defaults "$rw" runeword_value_ok mod-runewords.conf "${RUNEWORD_CONF_DEFAULTS[@]}"
+        wc_log "mod-runewords.conf: Enable=$(wc_get_conf "$rw" Runewords.Enable) SweepIntervalMs=$(wc_get_conf "$rw" Runewords.SweepIntervalMs) ApplyWhenDead=$(wc_get_conf "$rw" Runewords.ApplyWhenDead) Announce=$(wc_get_conf "$rw" Runewords.Announce)"
+    else
+        wc_warn "no $WC_CONF_DIR/modules/mod-runewords.conf.dist - the artifact was built without the module, runewords are unavailable"
+    fi
     if [ -f "$WC_CONF_DIR/modules/mod-mercenaries.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-mercenaries.conf" ]; then
         pw="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-mercenaries)"
         # The shipped .dist already holds these values; each is read back because a key the module
@@ -594,43 +524,6 @@ wc_write_all() {
         wc_log "mod-mercenaries.conf: Enable=$(wc_get_conf "$pw" Mercenary.Enable) MaxMercenaries=$(wc_get_conf "$pw" Mercenary.MaxMercenaries) LevelWindow=$(wc_get_conf "$pw" Mercenary.LevelWindow) Featured=$(wc_get_conf "$pw" Mercenary.FeaturedMin)-$(wc_get_conf "$pw" Mercenary.FeaturedMax) Refresh=$(wc_get_conf "$pw" Mercenary.PoolRefreshMinMinutes)-$(wc_get_conf "$pw" Mercenary.PoolRefreshMaxMinutes)min Fee=$(wc_get_conf "$pw" Mercenary.HireFeePercent)%+$(wc_get_conf "$pw" Mercenary.HireFeeHeldPercent)% Gear=$(wc_get_conf "$pw" Mercenary.GearFloorPercent)-$(wc_get_conf "$pw" Mercenary.GearCapPercent)%"
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-mercenaries.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
-    fi
-    if [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-skateboard.conf" ]; then
-        sb="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-skateboard)"
-        # The shipped .dist already holds these values, and Skateboard.Enable ships as 0: the deck's
-        # development is paused, so the board is off from the first boot and a realm opts in with
-        # the key (or WC_SKATEBOARD) below. Each key is still read back, because a key the module
-        # cannot use is silently replaced by its own fallback and a deck id the DBC does not carry
-        # falls back to the stock display. Only a value outside its range is rewritten - a
-        # deliberate Enable=1 is left alone.
-        # The combat rule used to be Skateboard.OffInCombat, which nothing reads now: the start of a
-        # fight leaves the deck alone and a hit takes it (OffOnHit). A leftover key would sit in the
-        # live file looking like it still did something.
-        sed -i -E '/^[[:space:]]*Skateboard\.OffInCombat[[:space:]]*=/d' "$sb"
-        # MountedPose was the mount render's "seat the rider" switch, folded into Render = mount: a
-        # conf that still sets it to 1 looks like it draws the sitting deck and does not.
-        sed -i -E '/^[[:space:]]*Skateboard\.MountedPose[[:space:]]*=/d' "$sb"
-        # 16386 was the shipped carrier until it turned out to carry ScriptName npc_necropolis_relay,
-        # whose constructor marks every summoned deck active. The module refuses a scripted row, so
-        # an upgraded conf that still names it is migrated - otherwise the deck stops appearing and
-        # only the log says why.
-        if [ "$(wc_get_conf "$sb" Skateboard.Deck.Carrier)" = 16386 ]; then
-            wc_warn "mod-skateboard.conf: Skateboard.Deck.Carrier 16386 is scripted (npc_necropolis_relay), using 29443"
-            wc_set_conf "$sb" Skateboard.Deck.Carrier 29443
-        fi
-        conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
-        # WC_SKATEBOARD is how a container or the Thor asks for the board on a given boot. The conf
-        # is rendered from the .dist every start, and the container's /opt/acore/etc is part of the
-        # image layer rather than a volume, so a hand edit there is gone at the next rebuild: the
-        # dial is what survives. Unset leaves the shipped default (off - development is paused).
-        case "${WC_SKATEBOARD:-}" in
-            0|1) wc_set_conf "$sb" Skateboard.Enable "$WC_SKATEBOARD" ;;
-            '') ;;
-            *) wc_warn "mod-skateboard.conf: WC_SKATEBOARD must be 0 or 1, keeping $(wc_get_conf "$sb" Skateboard.Enable)" ;;
-        esac
-        wc_log "mod-skateboard.conf: Enable=$(wc_get_conf "$sb" Skateboard.Enable) Deck=$(wc_get_conf "$sb" Skateboard.Deck) Render=$(wc_get_conf "$sb" Skateboard.Deck.Render) MaxSpeed=$(wc_get_conf "$sb" Skateboard.MaxSpeed) BoardCastMs=$(wc_get_conf "$sb" Skateboard.BoardCastMs) OffOnHit=$(wc_get_conf "$sb" Skateboard.OffOnHit) Crash.Enable=$(wc_get_conf "$sb" Skateboard.Crash.Enable)"
-    else
-        wc_warn "no $WC_CONF_DIR/modules/mod-skateboard.conf.dist - the artifact was built without the module, the skateboard is unavailable"
     fi
     wc_log "worldserver.conf: DataDir=$(wc_get_conf "$ws" DataDir) BindIP=$(wc_get_conf "$ws" BindIP)"
 }

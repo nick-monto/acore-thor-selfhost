@@ -55,15 +55,16 @@ ref = "main"                                                # SELF_REF in thor-i
 # from SELF_REPO ($SELF_REF, default main). The module ships one world SQL file (the container
 # gameobject template) and creates its three character tables programmatically.
 
-[module.skateboard]
+[module.runewords]
 repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
-path = "modules/mod-skateboard"                            # loader symbol Addmod_skateboardScripts()
+path = "modules/mod-runewords"                              # loader symbol Addmod_runewordsScripts()
 ref = "main"                                                # SELF_REF in thor-install.sh (overridable)
-# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-skateboard out of
+# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-runewords out of
 # its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a tarball
-# from SELF_REPO ($SELF_REF, default main). The module ships no SQL and is config-only: every knob
-# lives in conf/mod-skateboard.conf.dist and its state is per-session, so there is no table to create
-# and nothing for the DB updater to apply.
+# from SELF_REPO ($SELF_REF, default main). The module ships no SQL of its own: its world half
+# (the rune items, the runeword_words table and their drops) is generated into sql/custom/db_world
+# by scripts/runewords/gen_runewords.py, and its one characters table (character_runeword_rune) is
+# created programmatically at startup, the way mod-survivor's three are.
 
 [data.client_data]
 url = "https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"

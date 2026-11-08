@@ -1,0 +1,67 @@
+[worldserver]
+
+########################################
+# mod-runewords configuration
+########################################
+#
+# Physical rune items drop from creatures on a level ladder (El at level 1
+# through Zod at 80). A player who holds an exact pattern of those runes in one
+# container - the backpack, or one bag - is granted that word's auras, and loses
+# them the moment the pattern breaks.
+#
+# A word is geometry, not a list order: it is a set of (row, column) cells over
+# the grid the client draws, which is four columns wide and filled row-major, so
+# a word may run along a row, down a column, or around a corner. A match is
+# scoped to one container: bag windows keep no order among themselves, so "in
+# order" can only mean "inside the same grid". When more than one word matches,
+# the longest wins and then the lowest word id.
+#
+# Runes never enter a socket and nothing is written to equipment or item
+# enchantments, so a word stacks on top of the gems and enchants the character
+# already has. Each rune instance carries a 1..100 roll (characters database,
+# table character_runeword_rune) and a word is as strong as its weakest rune: the
+# roll scales the borrowed spell's own basepoints, so the same stock aura serves
+# every roll and no spell is authored per tier.
+#
+# The auras are stock spells scaled at cast time, so the client patch is limited
+# to the runes' own Item.dbc records. Their tooltips are the stock spell text,
+# which is why the client add-on, not the tooltip, is where the real numbers are
+# shown.
+#
+
+#
+#    Runewords.Enable
+#        Master on/off switch for this module. 0 = the module loads, its tables
+#        are still read, and nothing else happens: no scan, no aura, and any
+#        word already granted is removed on the next tick it would have run.
+#        Default: 1
+#
+Runewords.Enable = 1
+
+#
+#    Runewords.SweepIntervalMs
+#        How often one player's containers are rescanned, in milliseconds. The
+#        scan walks the backpack and the four bag slots and compares what it
+#        finds with what is applied, so an unchanged pattern costs one scan and
+#        no cast. A missed event (a bag swap, a mailed rune, a GM destroy) can
+#        therefore never leave a stale aura behind.
+#        Floor: 200. Default: 1000
+#
+Runewords.SweepIntervalMs = 1000
+
+#
+#    Runewords.ApplyWhenDead
+#        Whether a word stays granted while its holder is dead. 0 removes the
+#        auras on death and restores them on the next scan after a resurrection.
+#        Default: 0
+#
+Runewords.ApplyWhenDead = 0
+
+#
+#    Runewords.Announce
+#        Whether forming or changing a word sends its holder a chat line naming
+#        the word and the percentage the rune roll produced. Breaking a word is
+#        never announced.
+#        Default: 1
+#
+Runewords.Announce = 1

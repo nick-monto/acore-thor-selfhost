@@ -195,10 +195,11 @@ modify that install.
    realm wants, so a first boot that dies half way leaves nothing behind that would kill the next
    start on stdin EOF.
 7. **Loot-bag items.** Runs `scripts/item-dbc/patch_item_dbc.py` (fetched at `-SelfRef`) with the
-   client folder: it adds the 64 bag records (91000-91063) to the server's `data\dbc\Item.dbc` and
-   writes a patch archive under the highest free name into `<client>\Data`, then verifies that the
-   client's patch load order picks that archive up. Skipped with a warning when Python 3 is missing
-   or no client folder was chosen; the server half still runs.
+   client folder: it adds the 64 bag records (91000-91063) and the 33 rune records (93000-93032) to
+   the server's `data\dbc\Item.dbc`, writes a patch archive under the highest free name into
+   `<client>\Data`, then verifies that the client's patch load order picks that archive up.
+   Skipped with a warning when Python 3 is missing or no client folder was chosen; the server half
+   still runs.
 8. **Helpers and state.** Writes the start/stop scripts described below, `credentials.txt`, the
    state and the manifest, and with `-LanIp` adds the inbound firewall rules for 3724 and 8085.
 
@@ -308,7 +309,7 @@ data and the logs together.
   client data is unpacked and before anything reads it, the entrypoint runs
   `scripts/item-dbc/patch_item_dbc.py` against `data/dbc/Item.dbc`: the same start imports the
   loot-bag items into `item_template`, and a `Item.dbc` without them is what makes the bags
-  unusable. The tool replaces its own 64 records rather than appending, so this runs on every start
+  unusable. The tool replaces its own 97 records rather than appending, so this runs on every start
   as a no-op rewrite, and the installer no longer writes that file or restarts the realm. It then runs
   both servers under one supervisor: a crash of either restarts it after 5 s, SIGTERM is forwarded
   to both, so `docker stop` is a clean shutdown rather than a half-written database. The authserver
@@ -368,7 +369,7 @@ populated realm untouched: only the binaries under `/opt/acore` are replaced.
 `etc/` at build time, and the confs in it are re-rendered from the artifact's `.dist` files at every
 start. So a hand edit to `/opt/acore/etc/modules/*.conf` survives a `docker compose restart` and is
 gone at the next recreate; the switch for anything the entrypoint knows about is the compose
-environment (see `SKATEBOARD_ENABLE`, `BOTS`, `HORDE_RATIO`).
+environment (see `BOTS`, `HORDE_RATIO`).
 
 ### A new release reaches an image only through the artifact pin
 

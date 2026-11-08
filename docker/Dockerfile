@@ -96,13 +96,12 @@ RUN set -eu; \
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/write-confs.sh /opt/acore/write-confs.sh
-# The two client-data patchers, the generator one of them imports for the bag records, and the
-# container/MPQ library both tools load. The layout is the repository's own (item-dbc/ beside
-# loot-bags/, with lib/ one level up), because each tool loads its siblings by path.
+# The client-data patcher, the generator it imports for the bag records, and the container/MPQ
+# library both load. The layout is the repository's own (item-dbc/ beside loot-bags/, with lib/ one
+# level up), because each tool loads its siblings by path.
 COPY scripts/item-dbc/patch_item_dbc.py /opt/acore/dbc-patch/item-dbc/patch_item_dbc.py
 COPY scripts/loot-bags/gen_loot_bags.py /opt/acore/dbc-patch/loot-bags/gen_loot_bags.py
 COPY scripts/lib/dbc_mpq.py /opt/acore/dbc-patch/lib/dbc_mpq.py
-COPY scripts/skateboard/patch_deck_dbc.py /opt/acore/dbc-patch/skateboard/patch_deck_dbc.py
 
 # The exec bit comes from the checkout, and a checkout made on Windows can lose it; the entrypoint
 # is what the container runs, so set it rather than trust the copy.
