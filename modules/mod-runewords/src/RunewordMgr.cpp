@@ -73,9 +73,10 @@ namespace Runewords
             uint8 requiredLevel = 1;
         };
 
-        struct Applied
+        // What one word is currently granting. A player holds as many of these as
+        // their bags form at once.
+        struct AppliedWord
         {
-            uint32 wordId = 0;
             uint8 pct = 0;
             std::vector<uint32> spells;
         };
@@ -106,7 +107,9 @@ namespace Runewords
                 LOG_ERROR("module", format, args...);
         }
 
-        std::unordered_map<ObjectGuid, Applied> g_applied;   // player -> auras we cast
+        // player -> (word id -> what we cast for it). Several at once is the point: the
+        // bags are the budget, so filling them with runes is meant to pay off.
+        std::unordered_map<ObjectGuid, std::unordered_map<uint32, AppliedWord>> g_applied;
         std::unordered_map<ObjectGuid, uint8> g_rolls;       // rune item -> roll 1..100
         std::unordered_map<ObjectGuid, uint32> g_sweepAccumulator;   // player -> ms since last scan
 
@@ -351,7 +354,7 @@ namespace Runewords
         // reference value here is basepoints plus the average die roll, and the
         // cast subtracts that average again. The result is a spell whose average
         // output is exactly the stock value scaled by the two percentages.
-        void ApplyWord(Player* player, Word const& word, uint8 pct, Applied& applied)
+        void ApplyWord(Player* player, Word const& word, uint8 pct, AppliedWord& applied)
         {
             double const factor = double(word.scale) / 100.0 * double(pct) / 100.0;
 
@@ -403,18 +406,23 @@ namespace Runewords
                 applied.spells.push_back(spellId);
             }
 
-            applied.wordId = word.id;
             applied.pct = pct;
         }
 
-        void RemoveWord(Player* player, Applied& applied)
+        void RemoveWord(Player* player, AppliedWord& applied)
         {
             for (uint32 spellId : applied.spells)
                 player->RemoveAura(spellId);
 
             applied.spells.clear();
-            applied.wordId = 0;
             applied.pct = 0;
+        }
+
+        void RemoveAllWords(Player* player, std::unordered_map<uint32, AppliedWord>& applied)
+        {
+            for (auto& entry : applied)
+                RemoveWord(player, entry.second);
+            applied.clear();
         }
     }
 
@@ -533,22 +541,23 @@ namespace Runewords
         if (!g_config.Enable || g_words.empty())
             return;
 
-        Applied& applied = g_applied[player->GetGUID()];
+        auto& applied = g_applied[player->GetGUID()];
 
         if (!player->IsAlive() && !g_config.ApplyWhenDead)
         {
-            RemoveWord(player, applied);
+            RemoveAllWords(player, applied);
             return;
         }
         if (player->GetLevel() < g_minRequiredLevel)
         {
-            RemoveWord(player, applied);
+            RemoveAllWords(player, applied);
             return;
         }
 
-        Word const* best = nullptr;
-        uint8 bestPct = 0;
-
+        // Strongest fit for every word the bags form, deduped by word id: two copies of
+        // one word in different containers are the same word, not twice the power, and
+        // which copy is picked is the one that rolled highest.
+        std::unordered_map<uint32, std::pair<Word const*, uint8>> matched;
         std::vector<RuneGrid> grids;
         CollectRuneGrids(player, grids);
         for (RuneGrid const& grid : grids)
@@ -562,44 +571,94 @@ namespace Runewords
                 if (!MatchWord(word, grid, pct))
                     continue;
 
-                // Longest wins, then lowest id: independent of the order the
-                // containers and slots happen to be walked in.
-                if (!best || word.cells.size() > best->cells.size() ||
-                    (word.cells.size() == best->cells.size() && word.id < best->id))
-                {
-                    best = &word;
-                    bestPct = pct;
-                }
+                auto& slot = matched[word.id];
+                if (!slot.first || pct > slot.second)
+                    slot = {&word, pct};
             }
         }
 
-        if (!best)
+        // Drop what the bags no longer hold, or whose roll changed: a word is recast
+        // when its percentage moves, because the amount is baked into the aura.
+        for (auto it = applied.begin(); it != applied.end();)
         {
-            RemoveWord(player, applied);
-            return;
+            auto const found = matched.find(it->first);
+            if (found == matched.end() || found->second.second != it->second.pct)
+            {
+                RemoveWord(player, it->second);
+                it = applied.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
         }
 
-        // Already exactly what the bags say - but only trust that while the aura is
-        // still there: a dispel, a purge or a shapeshift can strip it without the
-        // pattern moving, and this is the one cheap check that notices.
-        if (applied.wordId == best->id && applied.pct == bestPct && !applied.spells.empty() &&
-            player->HasAura(applied.spells.front()))
+        // A dispel, a purge or a shapeshift can strip an aura without the pattern
+        // moving, and this is the one cheap check that notices. A word that grants no
+        // spells has nothing to check.
+        for (auto it = applied.begin(); it != applied.end();)
+        {
+            if (!it->second.spells.empty() && !player->HasAura(it->second.spells.front()))
+            {
+                RemoveWord(player, it->second);
+                it = applied.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+
+        // Ascending id, so two words that share a stock spell (Frenzy and Call to Arms
+        // both grant Increased Strength 46) end on the same amount whatever order the
+        // hash walked the matches in.
+        std::vector<uint32> ids;
+        ids.reserve(matched.size());
+        for (auto const& [wordId, entry] : matched)
+            ids.push_back(wordId);
+        std::sort(ids.begin(), ids.end());
+
+        std::vector<std::pair<std::string, uint8>> formed;
+        for (uint32 wordId : ids)
+        {
+            auto const& [word, pct] = matched[wordId];
+            if (applied.count(wordId))
+                continue;
+
+            AppliedWord& record = applied[wordId];
+            ApplyWord(player, *word, pct, record);
+            formed.emplace_back(word->name, pct);
+
+            LOG_DEBUG("module", "Runewords: player {} formed '{}' at {}% with {} spell(s)",
+                      player->GetGUID().ToString(), word->name, uint32(pct), record.spells.size());
+        }
+
+        if (formed.empty() || !g_config.Announce)
             return;
 
-        RemoveWord(player, applied);
-        ApplyWord(player, *best, bestPct, applied);
+        WorldSession* session = player->GetSession();
+        if (!session)
+            return;
 
-        if (g_config.Announce && applied.wordId)
+        if (formed.size() > 3)
         {
-            if (WorldSession* session = player->GetSession())
-                // Acore::StringFormat is fmt (braces), not printf: a %s here
-                // printed the format string back at the player.
+            // A bag full of words is a login, not a moment: one line instead of twenty.
+            // Acore::StringFormat is fmt (braces), not printf: a %s here printed the
+            // format string back at the player.
+            std::string names;
+            for (size_t k = 0; k < formed.size() && k < 6; ++k)
+                names += (k ? ", " : "") + formed[k].first;
+            if (formed.size() > 6)
+                names += Acore::StringFormat(", and {} more", formed.size() - 6);
+            ChatHandler(session).PSendSysMessage("|cffd8b000Runewords formed:|r {} words ({})",
+                                                 formed.size(), names);
+        }
+        else
+        {
+            for (auto const& [name, pct] : formed)
                 ChatHandler(session).PSendSysMessage("|cffd8b000Runeword formed:|r {} |cff808080({}%)|r",
-                                                     best->name, uint32(bestPct));
+                                                     name, uint32(pct));
         }
-
-        LOG_DEBUG("module", "Runewords: player {} formed '{}' at {}% with {} spell(s)",
-                  player->GetGUID().ToString(), best->name, uint32(bestPct), applied.spells.size());
     }
 
     void ForgetPlayer(ObjectGuid guid)
@@ -616,7 +675,10 @@ namespace Runewords
         std::lock_guard<std::recursive_mutex> guard(StateMutex());
         auto it = g_applied.find(player->GetGUID());
         if (it != g_applied.end())
-            RemoveWord(player, it->second);
+        {
+            RemoveAllWords(player, it->second);
+            g_applied.erase(it);
+        }
     }
 
     bool HandleAddonChat(Player* player, uint32 type, uint32 language, std::string& msg, Player* receiver)
@@ -726,11 +788,17 @@ namespace Runewords
 
         auto const applied = g_applied.find(player->GetGUID());
         std::string out;
-        if (applied == g_applied.end() || !applied->second.wordId)
+        if (applied == g_applied.end() || applied->second.empty())
+        {
             out = "no active runeword\n";
+        }
         else
-            out = Acore::StringFormat("active word #{} at {}% with {} spell(s)\n", applied->second.wordId,
-                                      uint32(applied->second.pct), applied->second.spells.size());
+        {
+            out = Acore::StringFormat("{} active runeword(s)\n", applied->second.size());
+            for (auto const& [wordId, record] : applied->second)
+                out += Acore::StringFormat("  word #{} at {}% with {} spell(s)\n", wordId,
+                                           uint32(record.pct), record.spells.size());
+        }
 
         std::vector<RuneGrid> grids;
         CollectRuneGrids(player, grids);

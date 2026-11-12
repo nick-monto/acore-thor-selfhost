@@ -143,8 +143,12 @@ by matching. Matching is scoped to one container because bag windows keep no ord
 themselves: the server sees `(bag, slot)` pairs, and the client floats each bag window
 wherever the player drags it, so "in order across bags" would be neither visible nor stable.
 
-Ties resolve to the longest word, then the lowest id, so the outcome does not depend on the
-order containers and slots happen to be walked in.
+**Every** word the bags form is granted, not the best one: the budget is bag slots, so a player
+who fills their bags with runes gets all of it. Two copies of the same word in different
+containers are the same word — it counts once, at its highest-rolled placement — and two words
+that share a stock spell (Frenzy and Call to Arms both grant `Increased Strength 46`) end on the
+same amount whatever order the matches were walked in, because the auras are cast in ascending
+word id. A word whose pattern breaks loses its auras on the next pass; the rest stay up.
 
 ### Variance
 
@@ -387,5 +391,6 @@ unverified:
 2. do the borrowed auras appear on the buff bar with the stock spell's own icon and text;
 3. does a word survive a relog (the auras are removed on logout by the core and re-derived on
    the next scan, so the expected result is "granted again", with the roll stable);
-4. does the announce line and `.runewords status` read correctly for a body that has one word
-   and one broken pattern.
+4. does the announce read correctly for a body that forms several words at once (one line per
+   word up to three, a single summary line beyond that), and does a broken pattern drop only its
+   own auras while the others stay up.
