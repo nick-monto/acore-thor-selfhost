@@ -99,6 +99,16 @@ namespace
             Runewords::ForgetPlayer(player->GetGUID());
         }
 
+        // A rune sold to a vendor keeps pace with its roll. The hook is the only
+        // point a module can reach before the core pays the template price; the
+        // conditions PayRollBonus repeats are the ones the sell handler checks
+        // after this call.
+        bool OnPlayerCanSellItem(Player* player, Item* item, Creature* /*creature*/) override
+        {
+            Runewords::PayRollBonus(player, item);
+            return true;
+        }
+
         // The add-on's own whisper to itself: 'RUNE\tsync' in, the rolls out. It
         // is swallowed so no other handler - nor the chat log - ever sees it.
         bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 language, std::string& msg,

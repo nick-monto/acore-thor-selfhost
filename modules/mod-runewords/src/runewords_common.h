@@ -15,7 +15,7 @@
  *   - the longest matching word wins, then the lowest word id, which makes the
  *     outcome independent of bag iteration order;
  *   - each rune instance carries a 1..100 roll (characters table
- *     character_runeword_rune), and a word is as strong as its weakest rune:
+ *     character_runeword_rune), and a word is worth the average of them:
  *     the roll scales the borrowed spell's own basepoints, so the same stock
  *     spell serves every roll and no spell is authored per tier;
  *   - nothing is written to equipment, sockets or item enchantments: runes sit
@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <string>
 
+class Item;
 class Player;
 
 namespace Runewords
@@ -109,6 +110,12 @@ namespace Runewords
     // the cell index the pattern is written in, counted from zero, which is the
     // client's own container slot minus one.
     bool HandleAddonChat(Player* player, uint32 type, uint32 language, std::string& msg, Player* receiver);
+
+    // What a rune is worth at the vendor, beyond the price its template carries.
+    // The template's SellPrice is the rarity's floor; the roll pays up to that
+    // floor again. Called from the sell hook before the core pays the template
+    // price, so the sale itself is still the core's.
+    void PayRollBonus(Player* player, Item* item);
 
     // Diagnostics, for '.runewords'.
     std::string DescribeWords();

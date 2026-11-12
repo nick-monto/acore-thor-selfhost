@@ -56,16 +56,19 @@ item field is spent to make room.
 
 1. Thirty-three runes (El through Zod) drop from creatures, one ladder rung at a time: El from
    level 1, Zod from level 80, spread evenly between.
-2. A rune is an ordinary item — class 15, not equippable, stackable, tradable, worth a little
-   coin. It occupies an inventory slot, not a bag slot.
+2. A rune is an ordinary item — class 15, not equippable, **not stackable**, tradable, and worth
+   coin that rises with its rarity. It occupies an inventory slot, not a bag slot. One rune per
+   slot: the roll belongs to the item instance, and a stack would carry one roll for the whole
+   pile.
 3. Holding a word's runes in the shape the word describes, inside **one** container, grants
    the word. The longest match wins, then the lowest word id.
-4. Each rune instance rolls 1..100 when it is first seen. A word is as strong as its weakest
-   rune, floored by the word's own minimum; the roll scales the borrowed spell's basepoints.
+4. Each rune instance rolls 1..100 when it is first seen. A word is worth the **average** of its
+   rune rolls, rounded half up and floored by the word's own minimum; the average scales the
+   borrowed spell's basepoints.
 5. Breaking the pattern removes the auras on the next scan. Death removes them too, unless
    `Runewords.ApplyWhenDead = 1`.
 6. Nothing is announced when a word breaks; forming one sends a chat line naming the word and
-   the percentage its weakest rune produced.
+   the percentage its runes averaged to.
 
 ## Mechanisms, with the evidence
 
@@ -80,7 +83,7 @@ custom SQL slot (`sql/custom/db_world/runewords_20_words.sql`). One row per word
 | `pattern` | ordered `row:col:entry` triples — the shape, and the rune expected in each cell |
 | `spell_1..3` | the stock spell ids granted while the word holds |
 | `scale` | percent of the stock spell's own basepoints |
-| `min_pct` | floor on the rune-roll variance |
+| `min_pct` | floor on the rune-roll average |
 | `required_level` | player level gate |
 
 Encoding the cells and the runes together in one column means the shape and its runes cannot
@@ -122,8 +125,37 @@ The roll is assigned **lazily** — the first time a rune item is seen in a bag 
 again, so it survives the auction house, the mail and a reinstall of the module, and no
 item-creation hook is needed for drops, crafts, quest rewards or `.additem`.
 
-A word's percentage is `max(min_pct, min(roll over its runes))`: every slot is worth
-rerolling, and a terrible roll cannot make a word worthless.
+A word's percentage is `max(min_pct, round(mean(roll over its runes)))`: one poor rune costs
+its share of the word rather than the whole thing, two perfect runes are worth more than one
+perfect and one poor, and the floor keeps an all-1s word from being worthless.
+
+### Rarity and value
+
+A rune's rarity is its ladder position, so the quality colour says the same thing twice: the
+rune that has just become available is the rarest row in its bracket's table, and one that has
+been dropping for twenty levels is the commonest thing in it. Five bands, in
+`scripts/runewords/gen_runewords.py`:
+
+| Steps | Quality | Floor price |
+|---|---|---|
+| 1–8 | white | 25 copper |
+| 9–16 | green | 5 silver |
+| 17–24 | blue | 50 silver |
+| 25–30 | epic | 2 gold 50 |
+| 31–33 | legendary | 12 gold |
+
+`item_template.SellPrice` is the band floor plus a quarter of it per step inside the band, so a
+later rune of the same colour is still the rarer purchase; the ladder ends at 18 gold for Zod.
+The roll pays up to that price again, which no static `item_template` column can express:
+`PlayerScript::OnPlayerCanSellItem` is the only point a module reaches before the core pays
+(`ItemHandler.cpp` calls it, then computes `money = SellPrice * count`), so the module pays
+`SellPrice * roll / 100` there and the core pays the template price after it. The hook repeats
+the sell handler's own refusals - not the owner, a non-empty bag, a refundable item, the item
+being looted, the gold cap - because a payout for a sale that then fails cannot be taken back.
+
+The add-on does not need the hook to know the number: the price lands in
+`Runewords_Data.lua` with the rest of the ladder, and the rune tooltip shows the value at that
+instance's roll.
 
 ### Scaling a stock spell
 
@@ -248,8 +280,9 @@ that borrows a non-passive spell.
   right edge of a row and 4 the left edge of the next — so a placement is only accepted when every
   cell stays inside the anchor's column band. Without that, Tal on the right edge and Eth on the
   next row's left would form a word nobody drew.
-- **A stacked rune**: a stack counts as one rune for the pattern; the count is not part of the
-  identity.
+- **A stack of runes from before they stopped stacking**: the stack counts as one rune for the
+  pattern and carries one roll; the count is not part of the identity, and the sale hook pays the
+  roll's bonus per unit in the stack.
 - **A word whose pattern needs more rows than the container has**: the candidate origin is
   rejected when any cell would land outside the grid, so a small bag simply cannot host a tall
   word. A 4-wide container caps a horizontal run at four runes; longer words must turn a corner

@@ -226,8 +226,8 @@ namespace Runewords
             }
         }
 
-        // Try one word against one container. `pct` comes back as the weakest
-        // rune's roll, floored by the word's own minimum.
+        // Try one word against one container. `pct` comes back as the average of
+        // its rune rolls, floored by the word's own minimum.
         bool MatchWord(Word const& word, RuneGrid const& grid, uint8& pct)
         {
             bool matched = false;
@@ -256,7 +256,7 @@ namespace Runewords
                         continue;
 
                     bool complete = true;
-                    uint8 weakest = 100;
+                    uint32 rollSum = 0;
                     for (Cell const& expected : word.cells)
                     {
                         int32 const index = origin + int32(expected.row) * GridColumns + int32(expected.col);
@@ -272,16 +272,24 @@ namespace Runewords
                             complete = false;
                             break;
                         }
-                        weakest = std::min(weakest, RollFor(found->second->GetGUID()));
+                        rollSum += RollFor(found->second->GetGUID());
                     }
 
                     if (complete)
                     {
+                        // The word is worth the average of its runes, rounded
+                        // half up: one poor rune costs a share of the word
+                        // rather than all of it, and two perfect runes are worth
+                        // more than one perfect and one poor. `minPct` stays a
+                        // floor, so a word of all-1 rolls is still not nothing.
+                        uint32 const count = uint32(word.cells.size());
+                        uint8 const average = uint8(std::min<uint32>(100, (rollSum + count / 2) / count));
+                        uint8 const value = std::max(word.minPct, average);
+
                         // One word can fit a grid in more than one place. Taking
                         // the strongest placement makes the amount the player
                         // gets independent of the order the cells were walked
                         // in, which is a hash order and nothing else.
-                        uint8 const value = std::max(word.minPct, weakest);
                         if (!matched || value > pct)
                         {
                             pct = value;
@@ -584,8 +592,10 @@ namespace Runewords
         if (g_config.Announce && applied.wordId)
         {
             if (WorldSession* session = player->GetSession())
-                ChatHandler(session).PSendSysMessage("|cffd8b000Runeword formed:|r %s |cff808080(%u%%)|r",
-                                                     best->name.c_str(), uint32(bestPct));
+                // Acore::StringFormat is fmt (braces), not printf: a %s here
+                // printed the format string back at the player.
+                ChatHandler(session).PSendSysMessage("|cffd8b000Runeword formed:|r {} |cff808080({}%)|r",
+                                                     best->name, uint32(bestPct));
         }
 
         LOG_DEBUG("module", "Runewords: player {} formed '{}' at {}% with {} spell(s)",
@@ -664,6 +674,50 @@ namespace Runewords
         return g_words.size();
     }
 
+    // What one rune instance is worth at the vendor: the template's SellPrice is
+    // the rarity's floor, and the roll pays up to that floor again, so a perfect
+    // rune is worth twice a zero-roll one of its colour.
+    void PayRollBonus(Player* player, Item* item)
+    {
+        if (!player || !item || !g_config.Enable)
+            return;
+
+        {
+            std::lock_guard<std::recursive_mutex> guard(StateMutex());
+            if (!g_runeEntries.count(item->GetEntry()))
+                return;
+        }
+
+        // The core checks the same conditions before it pays the template price -
+        // this hook runs first, so anything that would make the sale fail has to
+        // fail here too, or the roll would have paid for a sale that never was.
+        if (player->GetGUID() != item->GetOwnerGUID() || item->IsNotEmptyBag() || item->IsRefundable() ||
+            player->GetLootGUID() == item->GetGUID())
+            return;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || !proto->SellPrice)
+            return;
+
+        uint32 count = item->GetCount();
+        if (!count)
+            return;
+
+        uint8 roll = 0;
+        {
+            std::lock_guard<std::recursive_mutex> guard(StateMutex());
+            roll = RollFor(item->GetGUID());
+        }
+        uint64 const base = uint64(proto->SellPrice) * count;
+        uint64 const bonus = base * roll / 100;
+        if (player->GetMoney() + base + bonus > MAX_MONEY_AMOUNT)
+            return;                                  // the core refuses this sale anyway
+
+        player->ModifyMoney(int32(bonus));
+        LOG_DEBUG("module", "Runewords: {} sold rune {} x{} at {}% for a {} copper roll bonus",
+                  player->GetGUID().ToString(), item->GetEntry(), count, uint32(roll), bonus);
+    }
+
     std::string DescribePlayer(Player* player)
     {
         std::lock_guard<std::recursive_mutex> guard(StateMutex());
@@ -683,12 +737,22 @@ namespace Runewords
         if (grids.empty())
             return out + "no runes in the bags\n";
 
+        // A legend, because the cells are diagnostics: the index is the client's own container
+        // slot minus one (the numbering the pattern is written in), and the two numbers after the
+        // item are the roll that scales the word and what a vendor would pay for it.
+        out += "cells are container:slot (0-based) name entry@roll% (vendor price)\n";
         for (size_t index = 0; index < grids.size(); ++index)
         {
             out += Acore::StringFormat("container {} of {} slot(s):", index + 1, grids[index].size);
             for (auto const& [slot, item] : grids[index].cells)
-                out += Acore::StringFormat(" [{}]={}@{}%", uint32(slot), item->GetEntry(),
-                                          uint32(RollFor(item->GetGUID())));
+            {
+                uint8 const roll = RollFor(item->GetGUID());
+                ItemTemplate const* proto = item->GetTemplate();
+                uint32 const price = proto ? proto->SellPrice : 0;
+                out += Acore::StringFormat(" [{}]={} {}@{}% ({}c)", uint32(slot),
+                                          proto ? proto->Name1 : "?", item->GetEntry(), uint32(roll),
+                                          price + price * uint32(roll) / 100);
+            }
             out += "\n";
         }
         return out;

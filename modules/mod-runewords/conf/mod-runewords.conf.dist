@@ -19,7 +19,7 @@
 # Runes never enter a socket and nothing is written to equipment or item
 # enchantments, so a word stacks on top of the gems and enchants the character
 # already has. Each rune instance carries a 1..100 roll (characters database,
-# table character_runeword_rune) and a word is as strong as its weakest rune: the
+# table character_runeword_rune) and a word is worth the average of them: the
 # roll scales the borrowed spell's own basepoints, so the same stock aura serves
 # every roll and no spell is authored per tier.
 #

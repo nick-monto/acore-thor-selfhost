@@ -5,7 +5,10 @@ The patch is pure data, in four files under ``sql/custom/db_world``:
 
 ``runewords_10_items.sql``
     One ``item_template`` row per rune (33 of them, El through Zod). Class 15,
-    not equippable, stackable, one row per rune in the ladder.
+    not equippable, and one rune per slot: the 1..100 roll belongs to the item
+    instance, so a stack would carry one roll for several runes. Each row
+    carries the quality colour its ladder position earns and the vendor price
+    that rarity is worth; the roll pays up to that price again on sale.
 
 ``runewords_20_words.sql``
     The ``runeword_words`` table and its rows. A word is a *pattern*: an ordered
@@ -124,15 +127,48 @@ def available_at(index: int) -> int:
     return 1 + round(index * (MAX_BRACKET_LEVEL - 1) / (len(RUNES) - 1))
 
 
-def quality(level: int) -> int:
-    """Item quality colour, rising with the rune's level."""
-    if level <= 20:
-        return 1                      # white
-    if level <= 40:
-        return 2                      # green
-    if level <= 60:
-        return 3                      # blue
-    return 4                          # epic
+# A rune's rarity *is* its ladder position: the rune that has just become
+# available is the rarest row in its bracket's table and one that has been
+# dropping for levels is the commonest, so the colour ladder and the five bands
+# below say the same thing twice. (first step, last step, quality), one-based.
+QUALITY_BANDS = (
+    (1, 8, 1),                        # white
+    (9, 16, 2),                       # green
+    (17, 24, 3),                      # blue
+    (25, 30, 4),                      # epic
+    (31, 33, 5),                      # legendary
+)
+
+# What a vendor pays for a rune at a zero roll, by quality, in copper: the band
+# floor is what the rarity is worth. Inside a band the price still climbs, a
+# quarter of the floor per step, because a later rune of the same colour is the
+# rarer one; the roll pays up to the same amount again on top (mod-runewords,
+# on sale), so a perfect Zod is worth two zero-roll Zods.
+QUALITY_SELL = {1: 25, 2: 500, 3: 5000, 4: 25000, 5: 120000}
+BAND_STEP_PERCENT = 25
+
+
+def quality(index: int) -> int:
+    """Item quality colour of the rune at 0-based ``index``."""
+    step = index + 1
+    for first, last, colour in QUALITY_BANDS:
+        if first <= step <= last:
+            return colour
+    raise SystemExit(f"rune {step} is outside the quality bands")
+
+
+def band_first(index: int) -> int:
+    """0-based index of the first rune in ``index``'s quality band."""
+    step = index + 1
+    for first, last, _ in QUALITY_BANDS:
+        if first <= step <= last:
+            return first - 1
+    raise SystemExit(f"rune {step} is outside the quality bands")
+
+
+def sell_price(index: int) -> int:
+    """Vendor price of the rune at 0-based ``index``, in copper, before its roll."""
+    return QUALITY_SELL[quality(index)] * (100 + BAND_STEP_PERCENT * (index - band_first(index))) // 100
 
 
 # Chance a creature drops its bracket's rune table at all, indexed by the base
@@ -329,18 +365,18 @@ def build_items(world: Path):
             0,
             f"{name} Rune",
             displays[index],
-            quality(level),
+            quality(index),
             0,                                    # Flags: not unique, not conjured
             1,                                    # BuyCount
             0,                                    # BuyPrice
-            max(1, level * 10),                   # SellPrice
+            sell_price(index),                    # SellPrice: rarity floor, roll pays on top
             0,                                    # InventoryType: carried, never equipped
             -1,                                   # AllowableClass
             -1,                                   # AllowableRace
             level,                                # ItemLevel
             0,                                    # RequiredLevel (see the word's own gate)
             0,                                    # maxcount
-            200,                                  # stackable
+            1,                                    # stackable: one rune per slot, the roll is per instance
             0,                                    # ContainerSlots
             0,                                    # bonding: runes stay tradable
             "A rune. Hold a pattern of them in your bags to form a runeword.",
@@ -410,7 +446,7 @@ def lua_table() -> str:
         level = available_at(index)
         lines.append(
             f'\t\t[{rune_entry(index)}] = {{ name = "{name}", step = {index + 1}, '
-            f'level = {level}, quality = {quality(level)} }},'
+            f'level = {level}, quality = {quality(index)}, sell = {sell_price(index)} }},'
         )
     lines += ["\t},", "\twords = {"]
     for word in WORDS:

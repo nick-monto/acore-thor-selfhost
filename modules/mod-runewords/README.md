@@ -27,9 +27,14 @@ columns wide and filled row-major, so a word may run along a row, down a column,
 corner. A match is scoped to one container — the backpack or one bag — because bag windows
 keep no order among themselves. The longest matching word wins, then the lowest word id.
 
-Each rune rolls 1..100 the first time it is seen, and a word is as strong as its weakest rune
-(floored by the word's own minimum). The roll scales the borrowed spell's own basepoints at
-cast time, so one stock spell serves every roll.
+Each rune rolls 1..100 the first time it is seen, and a word is worth the average of its rune
+rolls, rounded half up and floored by the word's own minimum. The average scales the borrowed
+spell's own basepoints at cast time, so one stock spell serves every roll.
+
+Runes do not stack: the roll belongs to the item instance. Their quality colour and vendor price
+follow the ladder - white at the bottom through legendary at the top - and the roll pays up to
+that price again when the rune is sold (`OnPlayerCanSellItem` pays `SellPrice * roll / 100`, and
+the core pays the template price after it).
 
 The applied state is re-derived from the bags on an interval
 (`Runewords.SweepIntervalMs`, default 1000 ms) rather than from inventory events, so a missed

@@ -270,11 +270,19 @@ def build(dbc_path: Path, runeword_sql: Path | None = None) -> tuple[bytes, byte
     ids = bag_id_range(gen)
     if len(ours) != len(ids):
         raise SystemExit(f"{len(ours)} bag records for a range of {len(ids)} ids")
-    extended = extend_records(records, ours, ids)
-    # The runes are a second, higher range; appending them after the bags keeps
-    # the file's id order, which extend_records enforces.
+    # The runes are a second, higher range. Both are dropped in one pass and then
+    # appended in id order: dropping and appending range by range breaks the
+    # file's order on a re-run, because the bags would be appended below runes
+    # that are already there.
     rune_ids = rune_id_range(runeword_sql)
-    extended = extend_records(extended, rune_records(runeword_sql), rune_ids)
+    rune_ours = rune_records(runeword_sql)
+    kept = [record for record in records if record[0] not in ids and record[0] not in rune_ids]
+    if kept and max(record[0] for record in kept) >= ids.start:
+        raise SystemExit(
+            f"the client's Item.dbc already has entries above {ids.start}; "
+            f"appending would break the file's id order"
+        )
+    extended = kept + ours + rune_ours
     patched = write_dbc(extended, strings)
     archive = patch_archive(patched)
     if read_mpq_file(archive, "DBFilesClient\\Item.dbc") != patched:
