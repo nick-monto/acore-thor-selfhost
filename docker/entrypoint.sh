@@ -455,6 +455,22 @@ preserve_crash_tail() { # preserve_crash_tail STATUS
     warn "kept the last 200 lines of $WS_LOG in $out"
 }
 
+# 127 is the loader refusing to exec the binary at all - a soname that is not in the image and not
+# under the rpath $ORIGIN/../lib the artifact is built with. Retrying is still right, because a
+# half-copied artifact is fixed by the copy that is still running, but the loader's one line is the
+# whole diagnosis and it lands only in the preserved tail: a hand-copied worldserver that lost its
+# rpath spun on "exited with status 127" for sixteen minutes here with the reason invisible.
+explain_exec_failure() { # explain_exec_failure STATUS
+    case "$1" in 126 | 127) ;; *) return 0 ;; esac
+    local said
+    said="$(tail -n 200 "$WS_LOG" 2>/dev/null | grep -m1 'error while loading shared libraries' || true)"
+    if [ -n "$said" ]; then
+        warn "$said"
+    else
+        warn "the worldserver could not be executed (status $1); its rpath and the lib/ beside it are the first things to check"
+    fi
+}
+
 run_realm() {
     local rc done_pid tick waited world_up auth_up
     world_up=0
@@ -507,6 +523,7 @@ run_realm() {
         if [ "$done_pid" = "$WS_PID" ]; then
             warn "worldserver exited with status $rc; restarting in 5s"
             preserve_crash_tail "$rc"
+            explain_exec_failure "$rc"
             world_up=0
             waited=0
             rm -f "$READY"
