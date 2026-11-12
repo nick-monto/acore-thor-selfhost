@@ -92,7 +92,11 @@ RUN set -eu; \
         fi; \
     done; \
     test -x /opt/acore/bin/worldserver; \
-    test -x /opt/acore/bin/authserver
+    test -x /opt/acore/bin/authserver; \
+    printf '%s\n' "$sha" > /opt/acore/artifact.sha256
+# The stamp is what docker/realm.sh reads back to prove the running realm is the published build.
+# It is deliberately not a LABEL: the sha can also arrive at run time, from the .sha256 beside the
+# URL, so only the layer itself knows what it unpacked.
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/write-confs.sh /opt/acore/write-confs.sh
