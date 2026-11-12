@@ -577,6 +577,17 @@ namespace Runewords
             }
         }
 
+        // Which words were already up before this pass. A word whose roll changed is
+        // removed and recast below, and that must not read as a formation: swapping one
+        // copy of Bulwark for a better-rolled one changes the amount, not the word.
+        std::unordered_set<uint32> const wasActive = [&applied]
+        {
+            std::unordered_set<uint32> ids;
+            for (auto const& entry : applied)
+                ids.insert(entry.first);
+            return ids;
+        }();
+
         // Drop what the bags no longer hold, or whose roll changed: a word is recast
         // when its percentage moves, because the amount is baked into the aura.
         for (auto it = applied.begin(); it != applied.end();)
@@ -627,7 +638,8 @@ namespace Runewords
 
             AppliedWord& record = applied[wordId];
             ApplyWord(player, *word, pct, record);
-            formed.emplace_back(word->name, pct);
+            if (!wasActive.count(wordId))
+                formed.emplace_back(word->name, pct);
 
             LOG_DEBUG("module", "Runewords: player {} formed '{}' at {}% with {} spell(s)",
                       player->GetGUID().ToString(), word->name, uint32(pct), record.spells.size());
