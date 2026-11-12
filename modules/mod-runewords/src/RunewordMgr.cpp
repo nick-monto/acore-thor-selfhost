@@ -585,15 +585,15 @@ namespace Runewords
                           word.id, word.name);
                 continue;
             }
-            Cell const& first = word.cells[0];
-            bool const horizontal = first.row == word.cells[1].row;
+            Cell const& anchor = word.cells[0];
+            bool const horizontal = anchor.row == word.cells[1].row;
             bool straight = true;
             for (size_t step = 0; step < word.cells.size() && straight; ++step)
             {
                 Cell const& cell = word.cells[step];
                 straight = horizontal
-                    ? (cell.row == first.row && cell.col == first.col + step)
-                    : (cell.col == first.col && cell.row == first.row + step);
+                    ? (cell.row == anchor.row && cell.col == anchor.col + step)
+                    : (cell.col == anchor.col && cell.row == anchor.row + step);
             }
             if (!straight)
             {
