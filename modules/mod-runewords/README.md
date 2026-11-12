@@ -24,7 +24,8 @@ characters table is created programmatically at startup.
 
 A word is a pattern of `(row, column)` cells over the grid the client draws, which is four
 columns wide and filled row-major, so a word may run along a row, down a column, or around a
-corner. A match is scoped to one container — the backpack or one bag — because bag windows
+corner. The shipped table holds 24 words, 2 to 6 cells each, and every rune in the ladder is
+named by at least one of them; the generator refuses a table with a rune nothing uses. A match is scoped to one container — the backpack or one bag — because bag windows
 keep no order among themselves. The longest matching word wins, then the lowest word id.
 
 Each rune rolls 1..100 the first time it is seen, and a word is worth the average of its rune

@@ -89,6 +89,36 @@ custom SQL slot (`sql/custom/db_world/runewords_20_words.sql`). One row per word
 Encoding the cells and the runes together in one column means the shape and its runes cannot
 drift apart; there is no parallel array to keep in step.
 
+### The words, and the spells they borrow
+
+Twenty-four words, 2 to 6 cells each, and **every one of the 33 runes is named by at least one
+of them** — `gen_runewords.py` refuses to write a table that leaves a rune out, because a rune
+no word uses is an item whose only purpose is its price (the add-on says exactly that on its
+tooltip). The generator also refuses an unconnected path, a cell off the 4-wide grid, a rune
+outside the ladder, and a `min_pct` outside 1..100.
+
+Effects are stock auras, never authored spells, and only four families are drawn from:
+
+| Family | Aura | What it does | Amounts used |
+|---|---|---|---|
+| `Increased <stat> NN` | 29 (MOD_STAT) | flat Str/Agi/Sta/Int/Spi | 12 to 46 |
+| `Attack Power NN` | 99 (MOD_ATTACK_POWER) | flat attack power | 40, 60 |
+| `Increase Spell Dam NN` | 13 (MOD_DAMAGE_DONE) | flat spell damage | 23, 40 |
+| `Thrash`, `Bruise`, `Thick Skin`, `Fel Lightning` | 42 (PROC_TRIGGER_SPELL) | a weapon proc | the spell itself |
+
+Every pick was read out of the client's own `Spell.dbc` (`data/dbc/Spell.dbc`, the file the
+server loads) and satisfies the same four conditions, which are what make a stock spell safe to
+serve every roll: the aura is permanent (`SpellDuration.dbc` duration `-1`, decode it as
+`4294967295`), its value is deterministic (`EffectDieSides` 1, `EffectRealPointsPerLevel` 0), its
+`EffectBasePoints` is positive, and it targets the caster (`ImplicitTargetA` 1). Anything else —
+a finite duration, a die roll, a level term — is skipped with a log line rather than granted for
+a minute.
+
+Gates are the rarest rune's own availability: Nadir (Nef, Tir) opens at 8, Heart of the Oak
+(Ko, Vex, Pul, Thul) at 63, Breath of the Dying (Vex, Hel, El, Eld, Zod, Eth) at 80. A word is
+worth the average roll of its runes, so the top of the ladder buys a wider effect, not a bigger
+multiplier: Call to Arms, Doom and Breath of the Dying each grant three auras.
+
 ### Matching
 
 The matcher walks the rune cells of one container, and for each rune tries every cell of the

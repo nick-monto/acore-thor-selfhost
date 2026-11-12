@@ -285,6 +285,44 @@ WORDS = [
         "min_pct": 60,
         "required_level": 60,
     },
+    # The second tier: the rest of D2's ladder, drawn to put every rune on the board.
+    # Same rule as the first eight - stock permanent auras only - and every word here
+    # names at least one rune the first eight did not, so no rune is worth coin and
+    # nothing else. Gate levels are the rarest rune's own availability, and the
+    # families are the game's "Increased <stat> NN" (aura 29), "Attack Power NN" (99),
+    # "Increase Spell Dam NN" (13) and the four proc auras the shipped words borrow.
+    {"id": 9, "name": "Nadir", "cells": [("0:0", "Nef"), ("1:0", "Tir")],
+     "spells": [9123, 9119], "scale": 100, "min_pct": 50, "required_level": 8},          # +12 Str, +12 Sta
+    {"id": 10, "name": "Radiance", "cells": [("0:0", "Nef"), ("0:1", "Sol"), ("1:1", "Ith")],
+     "spells": [14415, 14447], "scale": 100, "min_pct": 50, "required_level": 28},       # +25 Int, +25 Spi
+    {"id": 11, "name": "Smoke", "cells": [("0:0", "Nef"), ("0:1", "Lum")],
+     "spells": [14482, 5364], "scale": 100, "min_pct": 50, "required_level": 41},        # +35 Sta, Thick Skin
+    {"id": 12, "name": "Treachery", "cells": [("0:0", "Shael"), ("1:0", "Thul"), ("1:1", "Lem")],
+     "spells": [14399, 14049, 4133], "scale": 100, "min_pct": 50, "required_level": 48}, # +35 Agi, AP 40, Bruise
+    {"id": 13, "name": "Lawbringer", "cells": [("0:0", "Amn"), ("0:1", "Lem"), ("0:2", "Ko")],
+     "spells": [14507, 14049, 4133], "scale": 100, "min_pct": 50, "required_level": 48}, # +35 Str, AP 40, Bruise
+    {"id": 14, "name": "Voice of Reason", "cells": [("0:0", "Lem"), ("0:1", "Ko"), ("1:1", "El"), ("1:2", "Eld")],
+     "spells": [14415, 14951, 44537], "scale": 100, "min_pct": 50, "required_level": 48},# +25 Int, +45 Spi, Fel Lightning
+    {"id": 15, "name": "Oath", "cells": [("0:0", "Shael"), ("0:1", "Pul"), ("1:1", "Mal"), ("1:2", "Lum")],
+     "spells": [14963, 14957, 14052], "scale": 100, "min_pct": 50, "required_level": 55},# +45 Str, +45 Sta, AP 60
+    {"id": 16, "name": "Delirium", "cells": [("0:0", "Lem"), ("1:0", "Ist"), ("1:1", "Io")],
+     "spells": [14945, 14951, 44537], "scale": 100, "min_pct": 50, "required_level": 58},# +45 Int, +45 Spi, Fel Lightning
+    {"id": 17, "name": "Heart of the Oak", "cells": [("0:0", "Ko"), ("0:1", "Vex"), ("0:2", "Pul"), ("0:3", "Thul")],
+     "spells": [14945, 14951, 14482], "scale": 100, "min_pct": 50, "required_level": 63},# +45 Int, +45 Spi, +35 Sta
+    {"id": 18, "name": "Call to Arms", "cells": [("0:0", "Amn"), ("0:1", "Ral"), ("1:1", "Mal"), ("1:2", "Ist"), ("2:2", "Ohm")],
+     "spells": [14964, 14940, 14958], "scale": 100, "min_pct": 50, "required_level": 65},# +46 Str, +46 Agi, +46 Sta
+    {"id": 19, "name": "Bramble", "cells": [("0:0", "Ral"), ("0:1", "Ohm"), ("1:1", "Sur"), ("1:2", "Eth")],
+     "spells": [14951, 14939, 5364], "scale": 100, "min_pct": 50, "required_level": 70}, # +45 Spi, +45 Agi, Thick Skin
+    {"id": 20, "name": "Chains of Honor", "cells": [("0:0", "Dol"), ("0:1", "Um"), ("1:1", "Ber"), ("1:2", "Ist")],
+     "spells": [14958, 14052, 5364], "scale": 100, "min_pct": 50, "required_level": 73}, # +46 Sta, AP 60, Thick Skin
+    {"id": 21, "name": "Dream", "cells": [("0:0", "Io"), ("1:0", "Jah"), ("1:1", "Pul")],
+     "spells": [14946, 14952, 14047], "scale": 100, "min_pct": 50, "required_level": 75},# +46 Int, +46 Spi, Spell Dam 23
+    {"id": 22, "name": "Phoenix", "cells": [("0:0", "Vex"), ("0:1", "Vex"), ("1:1", "Lo"), ("1:2", "Jah")],
+     "spells": [18056, 14946, 44537], "scale": 100, "min_pct": 50, "required_level": 75},# Spell Dam 40, +46 Int, Fel Lightning
+    {"id": 23, "name": "Doom", "cells": [("0:0", "Hel"), ("0:1", "Ohm"), ("1:1", "Um"), ("1:2", "Lo"), ("2:2", "Cham")],
+     "spells": [14964, 18056, 5364], "scale": 100, "min_pct": 50, "required_level": 78}, # +46 Str, Spell Dam 40, Thick Skin
+    {"id": 24, "name": "Breath of the Dying", "cells": [("0:0", "Vex"), ("0:1", "Hel"), ("0:2", "El"), ("0:3", "Eld"), ("1:3", "Zod"), ("1:2", "Eth")],
+     "spells": [14964, 14940, 14958], "scale": 100, "min_pct": 50, "required_level": 80},# +46 Str, +46 Agi, +46 Sta
 ]
 
 WORDS_DDL = """CREATE TABLE `runeword_words` (
@@ -586,6 +624,17 @@ def validate_outputs(world: Path, item_rows, word_rows, ref_rows, creature_rows,
     for row in creature_rows:
         if row[1] not in refs:
             raise SystemExit(f"loot id {row[0]} points at reference {row[1]}, which is not written")
+
+    # Every rune must be *used*: a rune no word names is an item whose only purpose is
+    # its price, and the add-on says exactly that on its tooltip. The ladder is the
+    # design's vocabulary, so a rune with no word is a hole in it.
+    named = set()
+    for row in word_rows:
+        for triple in row[2].split(","):
+            named.add(int(triple.split(":")[2]))
+    unused = [name for index, name in enumerate(RUNES) if rune_entry(index) not in named]
+    if unused:
+        raise SystemExit(f"runes in no word: {unused}")
 
     # A rune must be reachable: every rune appears in the table of the bracket
     # that matches its availability, and no table holds a rune that does not
