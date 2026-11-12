@@ -97,22 +97,35 @@ no word uses is an item whose only purpose is its price (the add-on says exactly
 tooltip). The generator also refuses an unconnected path, a cell off the 4-wide grid, a rune
 outside the ladder, and a `min_pct` outside 1..100.
 
-Effects are stock auras, never authored spells, and only four families are drawn from:
+Effects are stock auras, never authored spells, and the palette is as wide as a bag-resident
+permanent aura gets — nine families, so a word can read like the D2 word it is named for rather
+than like a stat stick:
 
-| Family | Aura | What it does | Amounts used |
+| Family | Aura | D2 idea it carries | Words |
 |---|---|---|---|
-| `Increased <stat> NN` | 29 (MOD_STAT) | flat Str/Agi/Sta/Int/Spi | 12 to 46 |
-| `Attack Power NN` | 99 (MOD_ATTACK_POWER) | flat attack power | 40, 60 |
-| `Increase Spell Dam NN` | 13 (MOD_DAMAGE_DONE) | flat spell damage | 23, 40 |
-| `Thrash`, `Bruise`, `Thick Skin`, `Fel Lightning` | 42 (PROC_TRIGGER_SPELL) | a weapon proc | the spell itself |
+| `Increased <stat> NN` | 29 MOD_STAT | attributes | most words |
+| `Attack Power NN` | 99 MOD_ATTACK_POWER | enhanced damage | Malice, Vigor, Oath … |
+| `Increase <school> Dam NN` | 13 MOD_DAMAGE_DONE | elemental damage | Lawbringer (holy), Voice of Reason and Doom (cold), Bramble (poison), Phoenix (fire) |
+| `Increased Armor NN` | 22 MOD_RESISTANCE (physical) | enhanced defense | Bulwark, Nadir, Smoke, Chains of Honor |
+| `Increased [All] Resist NN` | 22 MOD_RESISTANCE | resistances | Smoke, Treachery, Bramble, Chains of Honor |
+| `Increased Defense/Dodge/Block NN` | 189 MOD_RATING | block, avoid, defense | Bulwark, Nadir, Oath |
+| `Increased Mana Regen NN`, `Vitality` | 85, 161 | meditation, replenish life | Insight, Harmony, Heart of the Oak |
+| `Immolation` | 15 DAMAGE_SHIELD | thorns | Bramble |
+| `Add Fire/Lightning Dam - Weap NN`, `Backlash`, `Bruise`, `Chilling Touch`, `Aura of Fear`, `Bloodpetal Poison` | 42 PROC_TRIGGER_SPELL | "chance to cast on striking", elemental weapon damage | Zephyr, Frenzy, Dream, Phoenix, Delirium … |
 
 Every pick was read out of the client's own `Spell.dbc` (`data/dbc/Spell.dbc`, the file the
-server loads) and satisfies the same four conditions, which are what make a stock spell safe to
-serve every roll: the aura is permanent (`SpellDuration.dbc` duration `-1`, decode it as
-`4294967295`), its value is deterministic (`EffectDieSides` 1, `EffectRealPointsPerLevel` 0), its
-`EffectBasePoints` is positive, and it targets the caster (`ImplicitTargetA` 1). Anything else —
-a finite duration, a die roll, a level term — is skipped with a log line rather than granted for
-a minute.
+server loads) and satisfies the same conditions, which are what make a stock spell safe to serve
+every roll: the first effect is `APPLY_AURA`, the duration is permanent (`SpellDuration.dbc`
+duration `-1`, decode it as `4294967295`), the value is deterministic (`EffectDieSides` 0 or 1,
+`EffectRealPointsPerLevel` 0), and it targets the caster (`ImplicitTargetA` 1). Anything else —
+a finite duration, a real die roll, a level term, another target — is skipped with a log line
+rather than granted for a minute.
+
+`scripts/runewords/check_spells.py` re-derives all of that from a real `Spell.dbc` and fails on
+any id a word borrows that the module cannot honour, so "aligned with spells available in game"
+is a check, not a claim. The table currently borrows 42 distinct spells; 18 of them are shared by
+two or more words (the stat and regeneration rungs, which several words owe), and no proc is used
+by more than two.
 
 Gates are the rarest rune's own availability: Nadir (Nef, Tir) opens at 8, Heart of the Oak
 (Ko, Vex, Pul, Thul) at 63, Breath of the Dying (Vex, Hel, El, Eld, Zod, Eth) at 80. A word is

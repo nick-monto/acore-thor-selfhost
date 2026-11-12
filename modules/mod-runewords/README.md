@@ -32,6 +32,11 @@ Each rune rolls 1..100 the first time it is seen, and a word is worth the averag
 rolls, rounded half up and floored by the word's own minimum. The average scales the borrowed
 spell's own basepoints at cast time, so one stock spell serves every roll.
 
+The table borrows stock `Spell.dbc` auras only — stats, attack power, per-school spell damage,
+armour, resistances, combat ratings, mana and health regeneration, a damage shield and the stock
+proc auras — and `scripts/runewords/check_spells.py` re-checks every borrowed id against a real
+`Spell.dbc` (permanent, deterministic, caster-targeted).
+
 Runes do not stack: the roll belongs to the item instance. Their quality colour and vendor price
 follow the ladder - white at the bottom through legendary at the top - and the roll pays up to
 that price again when the rune is sold (`OnPlayerCanSellItem` pays `SellPrice * roll / 100`, and

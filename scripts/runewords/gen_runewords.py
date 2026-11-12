@@ -191,138 +191,93 @@ def weight(index: int, bracket_hi: int) -> int:
 # Words
 # ---------------------------------------------------------------------------
 #
-# A word is staged from D2's list but its *effects* are borrowed stock spells:
-# permanent single-aura stat spells from the game's own "Increased <stat> NN"
-# ladder (one spell per stat and amount, +12 to +46), and permanent proc auras
-# (3417 Thrash, 4133 Bruise, 5364 Thick Skin, 44537 Fel Lightning). None of them
-# needs a Spell.dbc row, so the client patch stays at Item.dbc only.
+# A word is staged from D2's list but its *effects* are borrowed stock spells, so
+# nothing new is authored and the client patch stays at Item.dbc only. The palette
+# is every permanent aura a bag can hold: the "Increased <stat> NN" ladder,
+# "Attack Power NN", the per-school "Increase <school> Dam NN" ladder, "Increased
+# Armor", "Increased [All] Resist", the defense/dodge/block ratings, the mana and
+# health regeneration rungs, a damage shield, the weapon elemental procs
+# ("Add Fire/Lightning Dam - Weap NN") and the stock proc auras. Which word takes
+# which is the comment beside it; the rule is that a word should read like the D2
+# word it is named for, not that it should be a stat stick.
 #
-# The amount matters: the 01/02 rungs of that ladder are +1 and +2, which no
-# scaling turns into a buff. Every spell here was read out of the client's own
-# Spell.dbc and has a non-zero EffectBasePoints, EffectDieSides <= 1 so its value
-# is deterministic, and EffectRealPointsPerLevel 0 so nothing is added on top of
-# the scaled amount (a level term would make the same word worth more at 80).
+# Every spell here was read out of the client's own Spell.dbc and passes four
+# conditions: the first effect is APPLY_AURA, the duration is -1 (permanent),
+# EffectDieSides is 0 or 1 and EffectRealPointsPerLevel 0 so the value is
+# deterministic, and ImplicitTargetA is 1 so it lands on the holder.
+# scripts/runewords/check_spells.py re-checks all four against a real Spell.dbc.
 #
-# Duration matters and the module enforces it: a word's auras are granted once and
+# Duration is the one the module cannot forgive: a word's auras are granted once and
 # re-derived only when the pattern changes, so a spell with a finite duration would
-# simply lapse and never come back. Only spells whose duration is -1 (permanent)
-# belong in this table; a finite one is skipped with a log line rather than granted
-# for a minute. Most stock proc auras are self-buffs with a duration - 168 Frost
-# Armor, 324 Lightning Shield and 742 Pulverize are all out for that reason. ``scale`` is a percent of the stock
-# spell's own basepoints, applied after the rune-roll variance, so the numbers
-# rise with the roll without a spell per tier.
+# simply lapse and never come back. ``scale`` is a percent of the stock spell's own
+# basepoints, applied after the rune-roll variance, so the numbers rise with the
+# roll without a spell per tier.
 
 WORDS = [
-    {
-        "id": 1,
-        "name": "Bulwark",
-        "cells": [("0:0", "Tal"), ("0:1", "Eth")],
-        "spells": [9123, 5364],          # +12 Strength, Thick Skin
-        "scale": 100,
-        "min_pct": 50,
-        "required_level": 12,
-    },
-    {
-        "id": 2,
-        "name": "Malice",
-        "cells": [("0:0", "Ith"), ("0:1", "El"), ("1:1", "Eth")],
-        "spells": [4133],                # Bruise
-        "scale": 100,
-        "min_pct": 50,
-        "required_level": 15,
-    },
-    {
-        "id": 3,
-        "name": "Strength",
-        "cells": [("0:0", "Amn"), ("1:0", "Tir")],
-        "spells": [14507],               # +35 Strength
-        "scale": 100,
-        "min_pct": 60,
-        "required_level": 25,
-    },
-    {
-        "id": 4,
-        "name": "Zephyr",
-        "cells": [("0:0", "Ort"), ("0:1", "Eth")],
-        "spells": [44537],               # Fel Lightning
-        "scale": 100,
-        "min_pct": 50,
-        "required_level": 20,
-    },
-    {
-        "id": 5,
-        "name": "Insight",
-        "cells": [("0:0", "Ral"), ("1:0", "Ort"), ("2:0", "Tal")],
-        "spells": [14415, 14447],        # +25 Intellect, +25 Spirit
-        "scale": 100,
-        "min_pct": 50,
-        "required_level": 25,
-    },
-    {
-        "id": 6,
-        "name": "Vigor",
-        "cells": [("1:0", "Thul"), ("1:1", "Sol"), ("1:2", "Amn")],
-        "spells": [14482, 14399],        # +35 Stamina, +35 Agility
-        "scale": 100,
-        "min_pct": 50,
-        "required_level": 35,
-    },
-    {
-        "id": 7,
-        "name": "Harmony",
-        "cells": [("0:2", "Ko"), ("1:2", "Dol"), ("1:1", "Tir"), ("0:1", "Eth")],
-        "spells": [14939, 14951],        # +45 Agility, +45 Spirit
-        "scale": 100,
-        "min_pct": 50,
-        "required_level": 45,
-    },
-    {
-        "id": 8,
-        "name": "Frenzy",
-        "cells": [("0:0", "Um"), ("1:0", "Shael"), ("2:0", "Gul"), ("2:1", "Fal")],
-        "spells": [3417, 14964],         # Thrash, +46 Strength
-        "scale": 100,
-        "min_pct": 60,
-        "required_level": 60,
-    },
-    # The second tier: the rest of D2's ladder, drawn to put every rune on the board.
-    # Same rule as the first eight - stock permanent auras only - and every word here
-    # names at least one rune the first eight did not, so no rune is worth coin and
-    # nothing else. Gate levels are the rarest rune's own availability, and the
-    # families are the game's "Increased <stat> NN" (aura 29), "Attack Power NN" (99),
-    # "Increase Spell Dam NN" (13) and the four proc auras the shipped words borrow.
+    # Staged from D2's list, and its *effects* are the game's own permanent auras: no
+    # spell is authored, so the client patch stays at the runes' Item.dbc records. Each
+    # word carries up to three of them, and they are drawn from the families a bag
+    # resident aura can actually use - stats, attack power, per-school spell damage,
+    # armour, resistances, combat ratings, mana and health regeneration, a damage
+    # shield, weapon-damage procs and the stock proc auras - so a word reads like the
+    # D2 word it is named for: Bramble reflects damage, Doom chills, Phoenix burns,
+    # Delirium frightens, Smoke resists.
+    #
+    # Every id below was read out of the client's own Spell.dbc and satisfies four
+    # conditions: the first effect is APPLY_AURA, the duration is permanent
+    # (SpellDuration.dbc -1), the spell targets its caster (ImplicitTargetA 1), and its
+    # value is deterministic (EffectDieSides 1, EffectRealPointsPerLevel 0).
+    # scripts/runewords/check_spells.py re-checks all of that against a Spell.dbc.
+    # `scale` is 100 throughout: a word grows by breadth (more auras, higher rungs),
+    # never by a multiplier, so the roll's 50..100% is the only variance.
+    {"id": 1, "name": "Bulwark", "cells": [("0:0", "Tal"), ("0:1", "Eth")],
+     "spells": [9764, 13677, 9119], "scale": 100, "min_pct": 50, "required_level": 12},   # Armor 50, Block 20, +12 Sta
+    {"id": 2, "name": "Malice", "cells": [("0:0", "Ith"), ("0:1", "El"), ("1:1", "Eth")],
+     "spells": [4133, 14049], "scale": 100, "min_pct": 50, "required_level": 15},         # Bruise proc, AP 40
+    {"id": 3, "name": "Strength", "cells": [("0:0", "Amn"), ("1:0", "Tir")],
+     "spells": [14507, 9119], "scale": 100, "min_pct": 60, "required_level": 25},         # +35 Str, +12 Sta
+    {"id": 4, "name": "Zephyr", "cells": [("0:0", "Ort"), ("0:1", "Eth")],
+     "spells": [16615, 34935], "scale": 100, "min_pct": 50, "required_level": 20},        # Lightning Strike proc, Backlash when struck
+    {"id": 5, "name": "Insight", "cells": [("0:0", "Ral"), ("1:0", "Ort"), ("2:0", "Tal")],
+     "spells": [18378, 14415], "scale": 100, "min_pct": 50, "required_level": 25},        # Mana regen 10, +25 Int
+    {"id": 6, "name": "Vigor", "cells": [("1:0", "Thul"), ("1:1", "Sol"), ("1:2", "Amn")],
+     "spells": [14482, 20885, 14049], "scale": 100, "min_pct": 50, "required_level": 35}, # +35 Sta, Vitality 8, AP 40
+    {"id": 7, "name": "Harmony", "cells": [("0:2", "Ko"), ("1:2", "Dol"), ("1:1", "Tir"), ("0:1", "Eth")],
+     "spells": [14939, 14951, 20959], "scale": 100, "min_pct": 50, "required_level": 45}, # +45 Agi, +45 Spi, mana regen 12
+    {"id": 8, "name": "Frenzy", "cells": [("0:0", "Um"), ("1:0", "Shael"), ("2:0", "Gul"), ("2:1", "Fal")],
+     "spells": [14964, 14052, 7726], "scale": 100, "min_pct": 60, "required_level": 60},  # +46 Str, AP 60, Fire Strike 14
     {"id": 9, "name": "Nadir", "cells": [("0:0", "Nef"), ("1:0", "Tir")],
-     "spells": [9123, 9119], "scale": 100, "min_pct": 50, "required_level": 8},          # +12 Str, +12 Sta
+     "spells": [9762, 13387], "scale": 100, "min_pct": 50, "required_level": 8},          # Armor 30, Defense 12
     {"id": 10, "name": "Radiance", "cells": [("0:0", "Nef"), ("0:1", "Sol"), ("1:1", "Ith")],
-     "spells": [14415, 14447], "scale": 100, "min_pct": 50, "required_level": 28},       # +25 Int, +25 Spi
+     "spells": [15666, 21363, 14415], "scale": 100, "min_pct": 50, "required_level": 28}, # Armor 100, mana regen 6, +25 Int
     {"id": 11, "name": "Smoke", "cells": [("0:0", "Nef"), ("0:1", "Lum")],
-     "spells": [14482, 5364], "scale": 100, "min_pct": 50, "required_level": 41},        # +35 Sta, Thick Skin
+     "spells": [18686, 15693], "scale": 100, "min_pct": 50, "required_level": 41},        # All Resist 15, Armor 150
     {"id": 12, "name": "Treachery", "cells": [("0:0", "Shael"), ("1:0", "Thul"), ("1:1", "Lem")],
-     "spells": [14399, 14049, 4133], "scale": 100, "min_pct": 50, "required_level": 48}, # +35 Agi, AP 40, Bruise
+     "spells": [18681, 14111, 14049], "scale": 100, "min_pct": 50, "required_level": 48}, # All Resist 10, Bloodpetal Poison, AP 40
     {"id": 13, "name": "Lawbringer", "cells": [("0:0", "Amn"), ("0:1", "Lem"), ("0:2", "Ko")],
-     "spells": [14507, 14049, 4133], "scale": 100, "min_pct": 50, "required_level": 48}, # +35 Str, AP 40, Bruise
+     "spells": [21526, 14049, 4133], "scale": 100, "min_pct": 50, "required_level": 48},  # Holy Dam 40, AP 40, Bruise
     {"id": 14, "name": "Voice of Reason", "cells": [("0:0", "Lem"), ("0:1", "Ko"), ("1:1", "El"), ("1:2", "Eld")],
-     "spells": [14415, 14951, 44537], "scale": 100, "min_pct": 50, "required_level": 48},# +25 Int, +45 Spi, Fel Lightning
+     "spells": [17900, 35188, 14415], "scale": 100, "min_pct": 50, "required_level": 48},# Frost Dam 40, Chilling Touch, +25 Int
     {"id": 15, "name": "Oath", "cells": [("0:0", "Shael"), ("0:1", "Pul"), ("1:1", "Mal"), ("1:2", "Lum")],
-     "spells": [14963, 14957, 14052], "scale": 100, "min_pct": 50, "required_level": 55},# +45 Str, +45 Sta, AP 60
+     "spells": [14963, 14052, 13670], "scale": 100, "min_pct": 50, "required_level": 55}, # +45 Str, AP 60, Dodge 24
     {"id": 16, "name": "Delirium", "cells": [("0:0", "Lem"), ("1:0", "Ist"), ("1:1", "Io")],
-     "spells": [14945, 14951, 44537], "scale": 100, "min_pct": 50, "required_level": 58},# +45 Int, +45 Spi, Fel Lightning
+     "spells": [25820, 14945, 18378], "scale": 100, "min_pct": 50, "required_level": 58}, # Aura of Fear proc, +45 Int, mana regen 10
     {"id": 17, "name": "Heart of the Oak", "cells": [("0:0", "Ko"), ("0:1", "Vex"), ("0:2", "Pul"), ("0:3", "Thul")],
-     "spells": [14945, 14951, 14482], "scale": 100, "min_pct": 50, "required_level": 63},# +45 Int, +45 Spi, +35 Sta
+     "spells": [14945, 14951, 20959], "scale": 100, "min_pct": 50, "required_level": 63}, # +45 Int, +45 Spi, mana regen 12
     {"id": 18, "name": "Call to Arms", "cells": [("0:0", "Amn"), ("0:1", "Ral"), ("1:1", "Mal"), ("1:2", "Ist"), ("2:2", "Ohm")],
-     "spells": [14964, 14940, 14958], "scale": 100, "min_pct": 50, "required_level": 65},# +46 Str, +46 Agi, +46 Sta
+     "spells": [14958, 14964, 18378], "scale": 100, "min_pct": 50, "required_level": 65}, # +46 Sta, +46 Str, mana regen 10
     {"id": 19, "name": "Bramble", "cells": [("0:0", "Ral"), ("0:1", "Ohm"), ("1:1", "Sur"), ("1:2", "Eth")],
-     "spells": [14951, 14939, 5364], "scale": 100, "min_pct": 50, "required_level": 70}, # +45 Spi, +45 Agi, Thick Skin
+     "spells": [4436, 18686, 17997], "scale": 100, "min_pct": 50, "required_level": 70},  # Immolation thorns 10, All Resist 15, Nature Dam 40
     {"id": 20, "name": "Chains of Honor", "cells": [("0:0", "Dol"), ("0:1", "Um"), ("1:1", "Ber"), ("1:2", "Ist")],
-     "spells": [14958, 14052, 5364], "scale": 100, "min_pct": 50, "required_level": 73}, # +46 Sta, AP 60, Thick Skin
+     "spells": [18691, 15957, 14963], "scale": 100, "min_pct": 50, "required_level": 73}, # All Resist 20, Armor 300, +45 Str
     {"id": 21, "name": "Dream", "cells": [("0:0", "Io"), ("1:0", "Jah"), ("1:1", "Pul")],
-     "spells": [14946, 14952, 14047], "scale": 100, "min_pct": 50, "required_level": 75},# +46 Int, +46 Spi, Spell Dam 23
+     "spells": [16615, 21526, 14946], "scale": 100, "min_pct": 50, "required_level": 75}, # Lightning Strike, Holy Dam 40, +46 Int
     {"id": 22, "name": "Phoenix", "cells": [("0:0", "Vex"), ("0:1", "Vex"), ("1:1", "Lo"), ("1:2", "Jah")],
-     "spells": [18056, 14946, 44537], "scale": 100, "min_pct": 50, "required_level": 75},# Spell Dam 40, +46 Int, Fel Lightning
+     "spells": [17875, 7726, 14803], "scale": 100, "min_pct": 50, "required_level": 75},  # Fire Dam 40, Fire Strike 14, Armor 200
     {"id": 23, "name": "Doom", "cells": [("0:0", "Hel"), ("0:1", "Ohm"), ("1:1", "Um"), ("1:2", "Lo"), ("2:2", "Cham")],
-     "spells": [14964, 18056, 5364], "scale": 100, "min_pct": 50, "required_level": 78}, # +46 Str, Spell Dam 40, Thick Skin
+     "spells": [17900, 35188, 14964], "scale": 100, "min_pct": 50, "required_level": 78}, # Frost Dam 40, Chilling Touch, +46 Str
     {"id": 24, "name": "Breath of the Dying", "cells": [("0:0", "Vex"), ("0:1", "Hel"), ("0:2", "El"), ("0:3", "Eld"), ("1:3", "Zod"), ("1:2", "Eth")],
-     "spells": [14964, 14940, 14958], "scale": 100, "min_pct": 50, "required_level": 80},# +46 Str, +46 Agi, +46 Sta
+     "spells": [14964, 14940, 14958], "scale": 100, "min_pct": 50, "required_level": 80}, # +46 Str, +46 Agi, +46 Sta
 ]
 
 WORDS_DDL = """CREATE TABLE `runeword_words` (
