@@ -240,18 +240,28 @@ namespace Runewords
             return (size + GridColumns - 1) / GridColumns;
         }
 
-        // The slot the client draws at (row, col), with row 0 the top row and col 0 the left
-        // column. Measured from the container frames' own buttons: a bag fills from the bottom
-        // right, leftwards and upwards, so a container whose slot count is not a multiple of four
-        // keeps its short row at the *top*, right-aligned, and (rows-1-row)*4 + (3-col) is the
-        // whole of the layout. Cells the container does not have answer with a slot it never
+        // How many cells of the top row a container of `size` slots is missing. Measured from the
+        // container frames' own buttons, by GetID(): a 22-slot bag puts slot 1 at (col 2, row 0) and
+        // slot 22 at (col 3, row 5), and a 6-slot bag puts slot 1 at (col 2, row 0) - so the grid is
+        // drawn from the top left, left to right and downwards, and a slot count that is not a multiple
+        // of four leaves the *top* row short at its left end.
+        uint32 GridInset(uint32 size)
+        {
+            return (GridColumns - size % GridColumns) % GridColumns;
+        }
+
+        // The slot the client draws at (row, col), with row 0 the top row and col 0 the left column.
+        // The inset is what makes that true: without it the last cell of one row and the first cell of
+        // the next are neighbours in the flat index and strangers on screen, and a word would form
+        // across the gap between them. Cells the container does not have answer with a slot it never
         // fills, so a caller only ever has to check emptiness.
         uint32 SlotAt(uint32 size, uint32 row, uint32 col)
         {
             uint32 const rows = GridRowCount(size);
             if (row >= rows || col >= GridColumns)
                 return size;
-            return (rows - 1 - row) * GridColumns + (GridColumns - 1 - col);
+            int32 const slot = int32(row * GridColumns + col) - int32(GridInset(size));
+            return slot < 0 ? size : uint32(slot);
         }
 
         // What a line is looked up by: the axis and the runes in reading order. A word is a

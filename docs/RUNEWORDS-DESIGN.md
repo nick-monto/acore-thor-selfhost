@@ -42,34 +42,38 @@ if ( mod((i-1), columns) == 0 ) then ...       -- :525  a new row every fourth s
 ```
 
 but not which way round it is drawn, and the difference decides whether two runes are neighbours
-or strangers. So it was measured from the container frames' own buttons in the running client —
-`GetTop`/`GetLeft` of every `ContainerFrameNItemM` — and the answer is that a bag fills from the
-**bottom right**, leftwards and then upwards. In a 22-slot bag (six rows of four, the last two
-cells missing):
+or strangers. So it was measured from the container frames' own buttons in the running client — the
+slot id of every `ContainerFrameNItemM` against its `GetLeft`/`GetTop` — and the answer is that a
+bag is drawn from the **top left**, left to right and downwards, with a slot count that is not a
+multiple of four leaving the top row short at its *left* end:
 
-| slot | cell (row from top, col from left) | left | top |
-|---|---|---|---|
-| 1 | 5, 3 | 2985 | 485 |
-| 2 | 5, 2 | 2943 | 485 |
-| 5 | 4, 3 | 2985 | 526 |
-| 19 | 1, 1 | 2901 | 648 |
-| 21 | 0, 3 | 2985 | 689 |
-| 22 | 0, 2 | 2943 | 689 |
+| bag | slot | left | top | cell (row, col) |
+|---|---|---|---|---|
+| 6-slot | 1 | 2943 | 412 | 0, 2 |
+| 6-slot | 2 | 2985 | 412 | 0, 3 |
+| 6-slot | 3 | 2859 | 371 | 1, 0 |
+| 6-slot | 6 | 2985 | 371 | 1, 3 |
+| 22-slot | 1 | 2943 | 690 | 0, 2 |
+| 22-slot | 2 | 2985 | 690 | 0, 3 |
+| 22-slot | 22 | 2985 | 485 | 5, 3 |
 
-`GetTop` grows upward, so slot 21 is the *top* row and slot 1 the bottom one. A container whose
-slot count is not a multiple of four therefore keeps its short row at the **top**, right-aligned,
-which is why slots 1 and 2 are already two columns in. The whole layout is one expression:
+`GetTop` grows upward, so the 22-slot row at 690 is the *top* row and 485 the bottom. The whole
+layout is one expression, with `inset = (4 - size mod 4) mod 4`:
 
 ```
-rows        = ceil(size / 4)
-slot(row, col) = (rows - 1 - row) * 4 + (3 - col)        row 0 top, col 0 left
+inset          = (4 - size % 4) % 4        cells the top row is missing at its left end
+slot(row, col) = row * 4 + col - inset
 ```
 
-with a cell the container does not own answering with a slot past its end. **[V]** the six rows
-above are measured button positions, and the same expression maps the 16-slot backpack: slot 1 at
-(3, 3), slot 5 at (2, 3), slot 13 at (0, 3). `CONTAINER_FIELD_SLOT_1` is 72 fields
-(`Entities/Object/Updates/UpdateFields.h:80`), so eighteen rows of four is the tallest grid a
-pattern may address.
+so slot 1 of a 6-slot bag is at (0, 2) and the four cells of its second row are slots 3 to 6.
+**[V]** the table above is measured button positions; the same expression maps a 16-slot backpack
+(slot 1 at (0, 0), slot 16 at (3, 3)) and a 22-slot bag (slot 1 at (0, 2), slot 22 at (5, 3)).
+`CONTAINER_FIELD_SLOT_1` is 72 fields (`Entities/Object/Updates/UpdateFields.h:80`), so eighteen rows
+of four is the tallest grid a pattern may address.
+
+The inset is not cosmetic. Without it a flat index reads slot 2 and slot 3 of a 6-slot bag as
+neighbours, while on screen slot 2 is the top row's right end and slot 3 the second row's left —
+a word would form across a gap nobody drew.
 
 A word's pattern is written in that same orientation, so it reads the way the player's eye moves:
 across a row from the left, down a column from the top. A flat index would not do: slot 19 and
