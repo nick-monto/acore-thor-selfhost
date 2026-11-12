@@ -13,11 +13,13 @@
 #include "runewords_common.h"
 
 #include "Chat.h"
+#include "Common.h"
 #include "Config.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "StringFormat.h"
+#include "WorldSession.h"
 #include "WorldSessionMgr.h"
 
 // The command table's own namespace, as mod-survivor declares it: the return type
@@ -146,7 +148,9 @@ namespace
             if (!player)
                 return false;
 
-            handler->SendSysMessage(Runewords::DescribePlayer(player).c_str());
+            bool const detail = handler->GetSession() &&
+                                handler->GetSession()->GetSecurity() >= SEC_GAMEMASTER;
+            handler->SendSysMessage(Runewords::DescribePlayer(player, detail).c_str());
             return true;
         }
 

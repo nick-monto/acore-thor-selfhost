@@ -60,7 +60,9 @@ def string_at(strings: bytes, offset: int) -> str:
     return strings[offset:end].decode("utf-8", "replace")
 
 
-ROW = re.compile(r"^\((\d+), '([^']*)', '([^']*)', (\d+), (\d+), (\d+),")
+# A name may carry an apostrophe ("Ancients'' Pledge"), which the generator escapes as a
+# doubled quote the way MySQL wants it: a naive [^']* stops there and the word is skipped.
+ROW = re.compile(r"^\((\d+), '((?:[^']|'')*)', '((?:[^']|'')*)', (\d+), (\d+), (\d+),")
 
 
 def words(sql: Path) -> list[tuple[int, str, list[int]]]:
@@ -74,7 +76,7 @@ def words(sql: Path) -> list[tuple[int, str, list[int]]]:
         match = ROW.match(line.strip())
         if not match:
             continue
-        out.append((int(match.group(1)), match.group(2),
+        out.append((int(match.group(1)), match.group(2).replace("''", "'"),
                     [int(match.group(i)) for i in (4, 5, 6) if int(match.group(i))]))
     return out
 

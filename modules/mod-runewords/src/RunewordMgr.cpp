@@ -1,6 +1,9 @@
 /*
  * mod-runewords - the word table, the pattern matcher and the aura carrier.
  *
+ * A word is a line of runes across or down, matched as a maximal run, so the
+ * same rune can serve a word across and a word down at once.
+ *
  * Nothing here is per-player-tick work: RunewordScripts drives Reconcile on a
  * configurable interval, and Reconcile re-derives everything from the bags. That
  * is deliberate. A missed event - a bag swap, a mailed rune, an item destroyed by
@@ -40,11 +43,9 @@ namespace Runewords
 {
     namespace
     {
-        // The client draws every bag four columns wide and fills it row-major
-        // (FrameXML ContainerFrame.lua: NUM_CONTAINER_COLUMNS = 4, `rows =
-        // ceil(size / columns)`, a new row every fourth slot). A pattern that
-        // assumes any other width would address the cells the player is not
-        // looking at.
+        // The client draws every bag four columns wide (FrameXML ContainerFrame.lua:
+        // NUM_CONTAINER_COLUMNS = 4). A pattern that assumes any other width would address the
+        // cells the player is not looking at.
         constexpr uint8 GridColumns = 4;
 
         // CONTAINER_FIELD_SLOT_1 is 72 fields: eighteen rows of four is the
@@ -67,9 +68,10 @@ namespace Runewords
             uint32 id = 0;
             std::string name;
             std::vector<Cell> cells;
+            std::vector<uint32> entries;   // the cells' entries, in reading order
+            bool horizontal = true;        // the axis the line is written on
             std::array<uint32, 3> spells{};
             uint16 scale = 100;
-            uint8 minPct = 50;
             uint8 requiredLevel = 1;
         };
 
@@ -93,6 +95,9 @@ namespace Runewords
 
         Config g_config;
         std::vector<Word> g_words;
+        // axis and entries -> the word written that way. A word *is* its line, so this is a
+        // whole lookup rather than a shape to be searched for.
+        std::unordered_map<std::string, Word const*> g_lines;
         std::unordered_set<uint32> g_runeEntries;
         uint8 g_minRequiredLevel = 1;
 
@@ -229,79 +234,118 @@ namespace Runewords
             }
         }
 
-        // Try one word against one container. `pct` comes back as the average of
-        // its rune rolls, floored by the word's own minimum.
-        bool MatchWord(Word const& word, RuneGrid const& grid, uint8& pct)
+        // How many rows of four the client draws for a container of `size` slots.
+        uint32 GridRowCount(uint32 size)
         {
-            bool matched = false;
-            for (auto const& [slot, item] : grid.cells)
+            return (size + GridColumns - 1) / GridColumns;
+        }
+
+        // The slot the client draws at (row, col), with row 0 the top row and col 0 the left
+        // column. Measured from the container frames' own buttons: a bag fills from the bottom
+        // right, leftwards and upwards, so a container whose slot count is not a multiple of four
+        // keeps its short row at the *top*, right-aligned, and (rows-1-row)*4 + (3-col) is the
+        // whole of the layout. Cells the container does not have answer with a slot it never
+        // fills, so a caller only ever has to check emptiness.
+        uint32 SlotAt(uint32 size, uint32 row, uint32 col)
+        {
+            uint32 const rows = GridRowCount(size);
+            if (row >= rows || col >= GridColumns)
+                return size;
+            return (rows - 1 - row) * GridColumns + (GridColumns - 1 - col);
+        }
+
+        // What a line is looked up by: the axis and the runes in reading order. A word is a
+        // straight line across or down, so that pair is the whole of its shape.
+        std::string LineKey(bool horizontal, std::vector<uint32> const& entries)
+        {
+            std::string key(horizontal ? "H" : "V");
+            for (uint32 entry : entries)
+                key += Acore::StringFormat(":{}", entry);
+            return key;
+        }
+
+        // Every word one container forms. A cell may stand in a word across and in a word down at
+        // the same time - sharing a rune between two words is the point of the table - so nothing
+        // here consumes or marks a cell, and two words are read off the same grid independently.
+        void ScanGrid(RuneGrid const& grid, uint8 playerLevel,
+                      std::unordered_map<uint32, std::pair<Word const*, uint8>>& matched)
+        {
+            uint32 const rows = GridRowCount(grid.size);
+
+            auto ItemAt = [&grid](uint32 row, uint32 col) -> Item*
             {
-                // Which cell of the word could this rune be? Trying each in turn
-                // means a word is found wherever the player drew it: nothing
-                // anchors the pattern to a corner.
-                for (size_t anchor = 0; anchor < word.cells.size(); ++anchor)
+                auto const found = grid.cells.find(uint16(SlotAt(grid.size, row, col)));
+                return found == grid.cells.end() ? nullptr : found->second;
+            };
+
+            // One maximal run, read off the grid in its own reading order: left to right across,
+            // top to bottom down. The roll average is the same rule the add-on applies.
+            auto TryRun = [&](bool horizontal, uint32 row, uint32 col, uint32 length)
+            {
+                std::vector<uint32> entries;
+                entries.reserve(length);
+                uint32 rollSum = 0;
+                for (uint32 step = 0; step < length; ++step)
                 {
-                    Cell const& cell = word.cells[anchor];
-                    if (cell.entry != item->GetEntry())
-                        continue;
+                    Item* const item = horizontal ? ItemAt(row, col + step) : ItemAt(row + step, col);
+                    entries.push_back(item->GetEntry());
+                    rollSum += RollFor(item->GetGUID());
+                }
 
-                    // The grid is four wide, so a flat index alone does not describe a shape:
-                    // slot 3 is the right edge of a row and slot 4 the left edge of the next,
-                    // and a pattern that ran from one to the other would form a word the
-                    // player never drew. The anchor fixes the origin's column, and every cell
-                    // has to stay inside that column's row.
-                    int32 const originCol = int32(slot % GridColumns) - int32(cell.col);
-                    if (originCol < 0)
-                        continue;
+                auto const line = g_lines.find(LineKey(horizontal, entries));
+                if (line == g_lines.end())
+                    return;
+                Word const& word = *line->second;
+                if (playerLevel < word.requiredLevel)
+                    return;
 
-                    int32 const origin = int32(slot) - int32(cell.row) * GridColumns - int32(cell.col);
-                    if (origin < 0)
-                        continue;
+                uint8 const value = uint8(std::min<uint32>(100, (rollSum + length / 2) / length));
+                auto& slot = matched[word.id];
+                if (!slot.first || value > slot.second)
+                    slot = {&word, value};
+            };
 
-                    bool complete = true;
-                    uint32 rollSum = 0;
-                    for (Cell const& expected : word.cells)
+            // Only a *maximal* run is a word: a line may not carry another rune past either end,
+            // or a two-rune word would form inside a longer line the player drew for another
+            // word. That is also what makes sharing legible - two crossing lines, each exactly
+            // its own word, and one rune where they meet.
+            for (uint32 row = 0; row < rows; ++row)
+            {
+                uint32 col = 0;
+                while (col < GridColumns)
+                {
+                    if (!ItemAt(row, col))
                     {
-                        int32 const index = origin + int32(expected.row) * GridColumns + int32(expected.col);
-                        if (index < 0 || index >= int32(grid.size) ||
-                            originCol + int32(expected.col) >= int32(GridColumns))
-                        {
-                            complete = false;      // the pattern would run off the grid
-                            break;
-                        }
-                        auto const found = grid.cells.find(uint16(index));
-                        if (found == grid.cells.end() || found->second->GetEntry() != expected.entry)
-                        {
-                            complete = false;
-                            break;
-                        }
-                        rollSum += RollFor(found->second->GetGUID());
+                        ++col;
+                        continue;
                     }
-
-                    if (complete)
-                    {
-                        // The word is worth the average of its runes, rounded
-                        // half up: one poor rune costs a share of the word
-                        // rather than all of it, and two perfect runes are worth
-                        // more than one perfect and one poor. `minPct` stays a
-                        // floor, so a word of all-1 rolls is still not nothing.
-                        uint32 const count = uint32(word.cells.size());
-                        uint8 const average = uint8(std::min<uint32>(100, (rollSum + count / 2) / count));
-                        uint8 const value = std::max(word.minPct, average);
-
-                        // One word can fit a grid in more than one place. Taking
-                        // the strongest placement makes the amount the player
-                        // gets independent of the order the cells were walked
-                        // in, which is a hash order and nothing else.
-                        if (!matched || value > pct)
-                        {
-                            pct = value;
-                            matched = true;
-                        }
-                    }
+                    uint32 end = col;
+                    while (end < GridColumns && ItemAt(row, end))
+                        ++end;
+                    if (end - col >= 2)
+                        TryRun(true, row, col, end - col);
+                    col = end + 1;      // the cell at `end` is empty, or past the last column
                 }
             }
-            return matched;
+
+            for (uint32 col = 0; col < GridColumns; ++col)
+            {
+                uint32 row = 0;
+                while (row < rows)
+                {
+                    if (!ItemAt(row, col))
+                    {
+                        ++row;
+                        continue;
+                    }
+                    uint32 end = row;
+                    while (end < rows && ItemAt(end, col))
+                        ++end;
+                    if (end - row >= 2)
+                        TryRun(false, row, col, end - row);
+                    row = end + 1;
+                }
+            }
         }
 
         // An add-on whisper to the player themselves, the same carrier
@@ -481,13 +525,14 @@ namespace Runewords
     {
         std::lock_guard<std::recursive_mutex> guard(StateMutex());
         g_words.clear();
+        g_lines.clear();
         g_runeEntries.clear();
         g_minRequiredLevel = 1;
         g_applied.clear();
 
         QueryResult result = WorldDatabase.Query(
             "SELECT `id`, `name`, `pattern`, `spell_1`, `spell_2`, `spell_3`, "
-            "`scale`, `min_pct`, `required_level` FROM `runeword_words` ORDER BY `id`");
+            "`scale`, `required_level` FROM `runeword_words` ORDER BY `id`");
         if (!result)
         {
             LOG_WARN("module", "Runewords: runeword_words is empty; no word can form. "
@@ -504,8 +549,8 @@ namespace Runewords
             word.name = fields[1].Get<std::string>();
             word.spells = {fields[3].Get<uint32>(), fields[4].Get<uint32>(), fields[5].Get<uint32>()};
             word.scale = fields[6].Get<uint16>();
-            word.minPct = fields[7].Get<uint8>();
-            word.requiredLevel = fields[8].Get<uint8>();
+
+            word.requiredLevel = fields[7].Get<uint8>();
 
             if (!ParsePattern(fields[2].Get<std::string>(), word.cells))
             {
@@ -520,6 +565,37 @@ namespace Runewords
                 continue;
             }
 
+            // A word is a straight line. Two runes on a diagonal are a guess, and a shape the
+            // player cannot read is one they cannot aim for, so anything that is not one row or
+            // one column, contiguous and in reading order, is refused here rather than matched
+            // as something else.
+            if (word.cells.size() < 2)
+            {
+                LOG_ERROR("module", "Runewords: word {} ('{}') has fewer than two runes and is skipped",
+                          word.id, word.name);
+                continue;
+            }
+            Cell const& first = word.cells[0];
+            bool const horizontal = first.row == word.cells[1].row;
+            bool straight = true;
+            for (size_t step = 0; step < word.cells.size() && straight; ++step)
+            {
+                Cell const& cell = word.cells[step];
+                straight = horizontal
+                    ? (cell.row == first.row && cell.col == first.col + step)
+                    : (cell.col == first.col && cell.row == first.row + step);
+            }
+            if (!straight)
+            {
+                LOG_ERROR("module", "Runewords: word {} ('{}') is not one line across or down and is skipped",
+                          word.id, word.name);
+                continue;
+            }
+            word.horizontal = horizontal;
+            word.entries.clear();
+            for (Cell const& cell : word.cells)
+                word.entries.push_back(cell.entry);
+
             for (Cell const& cell : word.cells)
                 g_runeEntries.insert(cell.entry);
 
@@ -527,6 +603,20 @@ namespace Runewords
             first = false;
             g_words.push_back(std::move(word));
         } while (result->NextRow());
+
+        // A second pass, because the map holds pointers into g_words and that vector must not grow
+        // again while they are in use. Words arrive in id order, so when two are somehow the same
+        // line the lower id keeps it.
+        for (Word const& word : g_words)
+        {
+            if (word.entries.empty())
+                continue;
+            auto const inserted = g_lines.emplace(LineKey(word.horizontal, word.entries), &word);
+            if (!inserted.second)
+                LOG_ERROR("module", "Runewords: words {} ('{}') and {} ('{}') are the same line of "
+                                    "runes; only the first is kept",
+                          inserted.first->second->id, inserted.first->second->name, word.id, word.name);
+        }
 
         LOG_INFO("module", "Runewords: loaded {} words over {} distinct rune items (minimum level {})",
                  g_words.size(), g_runeEntries.size(), uint32(g_minRequiredLevel));
@@ -561,21 +651,7 @@ namespace Runewords
         std::vector<RuneGrid> grids;
         CollectRuneGrids(player, grids);
         for (RuneGrid const& grid : grids)
-        {
-            for (Word const& word : g_words)
-            {
-                if (player->GetLevel() < word.requiredLevel)
-                    continue;
-
-                uint8 pct = 0;
-                if (!MatchWord(word, grid, pct))
-                    continue;
-
-                auto& slot = matched[word.id];
-                if (!slot.first || pct > slot.second)
-                    slot = {&word, pct};
-            }
-        }
+            ScanGrid(grid, player->GetLevel(), matched);
 
         // Which words were already up before this pass. A word whose roll changed is
         // removed and recast below, and that must not read as a formation: swapping one
@@ -731,9 +807,10 @@ namespace Runewords
                                              g_runeEntries.size());
         for (Word const& word : g_words)
         {
-            out += Acore::StringFormat("#{} {:<10} {:2} rune(s)  level {:>2}  scale {:>3}%  min {:>3}%  spells",
-                                      word.id, word.name, word.cells.size(), uint32(word.requiredLevel),
-                                      uint32(word.scale), uint32(word.minPct));
+            out += Acore::StringFormat("#{} {:<19} {:>2} rune(s) {:<6} level {:>2}  scale {:>3}%  spells",
+                                      word.id, word.name, word.entries.size(),
+                                      word.horizontal ? "across" : "down",
+                                      uint32(word.requiredLevel), uint32(word.scale));
             for (uint32 spellId : word.spells)
                 if (spellId)
                     out += Acore::StringFormat(" {}", spellId);
@@ -792,7 +869,152 @@ namespace Runewords
                   player->GetGUID().ToString(), item->GetEntry(), count, uint32(roll), bonus);
     }
 
-    std::string DescribePlayer(Player* player)
+    namespace
+    {
+        // ---------------------------------------------------------------------------------
+        // What a word is worth, in the words a player uses
+        // ---------------------------------------------------------------------------------
+        //
+        // '.runewords status' answers the same question the add-on panel draws, so it computes
+        // the same numbers the same way: the stock aura's amount scaled by the word's `scale`
+        // and the rune roll. None of this is state - a word's amount is a pure function of the
+        // spell, the word and the roll, which is exactly why ApplyWord can be recast safely.
+
+        char const* StatLabel(int32 misc)
+        {
+            switch (misc)
+            {
+                case 0: return "Strength";
+                case 1: return "Agility";
+                case 2: return "Stamina";
+                case 3: return "Intellect";
+                case 4: return "Spirit";
+                default: return nullptr;
+            }
+        }
+
+        char const* RatingLabel(int32 misc)
+        {
+            switch (misc)
+            {
+                case 1: case 4: return "Dodge";
+                case 2: return "Defense";
+                case 3: return "Parry";
+                case 16: return "Block";
+                default: return nullptr;
+            }
+        }
+
+        char const* SchoolLabel(int32 mask)
+        {
+            switch (mask)
+            {
+                case 2: return "Holy";
+                case 4: return "Fire";
+                case 8: return "Nature";
+                case 16: return "Frost";
+                case 32: return "Shadow";
+                case 64: return "Arcane";
+                default: return nullptr;
+            }
+        }
+
+        // The amount the aura ends up carrying at this word's scale and roll - the same
+        // arithmetic ApplyWord feeds to CastCustomSpell, read back for the report.
+        int32 GrantedAmount(SpellEffectInfo const& effect, double factor)
+        {
+            double const average = effect.DieSides == 0 ? 0.0 : (double(effect.DieSides) + 1.0) / 2.0;
+            return int32(std::lround((double(effect.BasePoints) + average) * factor));
+        }
+
+        // What to call an aura: the family comes from the aura type, the member from its misc
+        // value. Anything unnamed falls back to the stock spell's name, which is still the
+        // truth, just not a friendly one.
+        std::string AuraLabel(SpellEffectInfo const& effect, SpellInfo const* info)
+        {
+            switch (effect.ApplyAuraName)
+            {
+                case SPELL_AURA_MOD_RESISTANCE:
+                    if (effect.MiscValue > 64)
+                        return "All res";
+                    if (effect.MiscValue == 1)
+                        return "Armor";
+                    if (char const* school = SchoolLabel(effect.MiscValue))
+                        return Acore::StringFormat("{} res", school);
+                    break;
+                case SPELL_AURA_MOD_STAT:
+                    if (char const* stat = StatLabel(effect.MiscValue))
+                        return stat;
+                    break;
+                case SPELL_AURA_MOD_RATING:
+                    if (char const* rating = RatingLabel(effect.MiscValue))
+                        return rating;
+                    break;
+                case SPELL_AURA_MOD_DAMAGE_DONE:
+                    if (char const* school = SchoolLabel(effect.MiscValue))
+                        return Acore::StringFormat("{} damage", school);
+                    break;
+                case SPELL_AURA_DAMAGE_SHIELD:
+                    return "Damage shield";
+                case SPELL_AURA_MOD_POWER_REGEN:
+                    return "Mana regen";
+                case SPELL_AURA_MOD_ATTACK_POWER:
+                    return "Attack power";
+                case SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT:
+                    return "Health regen";
+                default:
+                    break;
+            }
+            return info->SpellName[0];
+        }
+
+        // A proc carries its payload in the spell it triggers, and the word cannot scale that,
+        // so the number to print lives in the trigger and not in the word.
+        std::string DescribeProc(SpellInfo const* info)
+        {
+            uint32 const chance = info->ProcChance;
+            SpellInfo const* trigger = sSpellMgr->GetSpellInfo(info->Effects[0].TriggerSpell);
+            if (!trigger)
+                return Acore::StringFormat("{} ({}%)", info->SpellName[0], chance);
+
+            SpellEffectInfo const& effect = trigger->Effects[0];
+            if (effect.BasePoints < 0)
+                return Acore::StringFormat("{} (weapon {}%)", trigger->SpellName[0], chance);
+            if (effect.Effect == SPELL_EFFECT_SCHOOL_DAMAGE && effect.BasePoints > 0)
+                return Acore::StringFormat("{} {} ({}%)", trigger->SpellName[0], effect.BasePoints, chance);
+            return Acore::StringFormat("{} ({}%)", trigger->SpellName[0], chance);
+        }
+
+        // One word as a player reads it: the name, the roll that set it, and the numbers it
+        // actually applies.
+        std::string DescribeWord(Word const& word, uint8 pct)
+        {
+            double const factor = double(word.scale) / 100.0 * double(pct) / 100.0;
+
+            std::string effects;
+            for (uint32 spellId : word.spells)
+            {
+                if (!spellId)
+                    continue;
+
+                SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+                if (!info)
+                    continue;
+
+                SpellEffectInfo const& effect = info->Effects[0];
+                std::string const part = effect.ApplyAuraName == SPELL_AURA_PROC_TRIGGER_SPELL
+                    ? DescribeProc(info)
+                    : Acore::StringFormat("{} {}", AuraLabel(effect, info), GrantedAmount(effect, factor));
+                effects += (effects.empty() ? "" : ", ") + part;
+            }
+
+            // Nineteen characters is the longest word in the table ("Breath of the Dying"), so
+            // the percentage column lines up for every row.
+            return Acore::StringFormat("{:<19} {:>3}%  {}", word.name, uint32(pct), effects);
+        }
+    }
+
+    std::string DescribePlayer(Player* player, bool detail)
     {
         std::lock_guard<std::recursive_mutex> guard(StateMutex());
         if (!player)
@@ -806,11 +1028,27 @@ namespace Runewords
         }
         else
         {
-            out = Acore::StringFormat("{} active runeword(s)\n", applied->second.size());
+            // Ascending id, the order the panel uses: the same bags read the same way twice.
+            std::vector<std::pair<uint32, uint8>> active;
+            active.reserve(applied->second.size());
             for (auto const& [wordId, record] : applied->second)
-                out += Acore::StringFormat("  word #{} at {}% with {} spell(s)\n", wordId,
-                                           uint32(record.pct), record.spells.size());
+                active.emplace_back(wordId, record.pct);
+            std::sort(active.begin(), active.end());
+
+            out = Acore::StringFormat("{} active runeword(s)\n", active.size());
+            for (auto const& [wordId, pct] : active)
+            {
+                auto const word = std::find_if(g_words.begin(), g_words.end(),
+                                               [wordId](Word const& candidate) { return candidate.id == wordId; });
+                if (word != g_words.end())
+                    out += "  " + DescribeWord(*word, pct) + "\n";
+            }
         }
+
+        // The per-cell dump is a diagnostic - which slot holds which rune, its roll and what a
+        // vendor pays - so only a game master asking for it sees it.
+        if (!detail)
+            return out;
 
         std::vector<RuneGrid> grids;
         CollectRuneGrids(player, grids);

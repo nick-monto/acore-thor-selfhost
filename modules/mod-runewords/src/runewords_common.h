@@ -6,10 +6,13 @@
  * container - the backpack, or one bag - is granted that word's spells, and
  * loses them the moment the pattern breaks.
  *
- *   - the pattern is geometry, not order in a list: a word is a set of
- *     (row, column) cells over the bag grid the client draws, which is four
- *     columns wide and row-major (FrameXML's NUM_CONTAINER_COLUMNS), so a word
- *     may run along a row, down a column, or around a corner;
+ *   - a word is a straight line of runes, across or down: the grid the client
+ *     draws is four columns wide, so a word reads left to right or top to
+ *     bottom and nothing else. A line must be a *maximal* run, so no rune of
+ *     that row or column may sit past either end of the word;
+ *   - one rune may stand in a word across and in a word down at the same time,
+ *     which is how two words are meant to be crossed: the shared rune costs a
+ *     slot once and pays in both;
  *   - a match is scoped to one container: bag windows have no stable order
  *     among themselves, so "in order" can only mean "inside the same grid";
  *   - the longest matching word wins, then the lowest word id, which makes the
@@ -117,9 +120,10 @@ namespace Runewords
     // price, so the sale itself is still the core's.
     void PayRollBonus(Player* player, Item* item);
 
-    // Diagnostics, for '.runewords'.
+    // Diagnostics, for '.runewords'. `detail` adds the per-cell dump (which slot holds which
+    // rune, its roll and its vendor value), which is a game master's question, not a player's.
     std::string DescribeWords();
-    std::string DescribePlayer(Player* player);
+    std::string DescribePlayer(Player* player, bool detail = false);
     size_t CountWords();
 }
 

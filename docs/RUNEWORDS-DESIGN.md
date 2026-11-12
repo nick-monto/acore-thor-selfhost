@@ -33,8 +33,7 @@ on its first line because of it (`Entities/Player/PlayerStorage.cpp:4416`). The
 call inside it is a no-op there; the loop covers item-set accounting and
 `ApplyItemEquipSpell`. **[V]** measured by the compile-time constants, not by a test.
 
-**The geometry has to be visible to the player.** The client draws every bag four columns
-wide and fills it row-major:
+**The geometry has to be visible to the player.** FrameXML states the shape of a container:
 
 ```lua
 NUM_CONTAINER_COLUMNS = 4;                     -- Interface\FrameXML\ContainerFrame.lua:8
@@ -42,11 +41,40 @@ local rows = ceil(size / columns);             -- :369
 if ( mod((i-1), columns) == 0 ) then ...       -- :525  a new row every fourth slot
 ```
 
-So a cell is `row = (n-1) div 4`, `col = (n-1) mod 4`, slot 1 is top-left, and adjacency is
-meaningful: `n±1` along a row, `n±4` down a column. A word can therefore be a shape, and the
-player can see the shape they built. `CONTAINER_FIELD_SLOT_1` is 72 fields
+but not which way round it is drawn, and the difference decides whether two runes are neighbours
+or strangers. So it was measured from the container frames' own buttons in the running client —
+`GetTop`/`GetLeft` of every `ContainerFrameNItemM` — and the answer is that a bag fills from the
+**bottom right**, leftwards and then upwards. In a 22-slot bag (six rows of four, the last two
+cells missing):
+
+| slot | cell (row from top, col from left) | left | top |
+|---|---|---|---|
+| 1 | 5, 3 | 2985 | 485 |
+| 2 | 5, 2 | 2943 | 485 |
+| 5 | 4, 3 | 2985 | 526 |
+| 19 | 1, 1 | 2901 | 648 |
+| 21 | 0, 3 | 2985 | 689 |
+| 22 | 0, 2 | 2943 | 689 |
+
+`GetTop` grows upward, so slot 21 is the *top* row and slot 1 the bottom one. A container whose
+slot count is not a multiple of four therefore keeps its short row at the **top**, right-aligned,
+which is why slots 1 and 2 are already two columns in. The whole layout is one expression:
+
+```
+rows        = ceil(size / 4)
+slot(row, col) = (rows - 1 - row) * 4 + (3 - col)        row 0 top, col 0 left
+```
+
+with a cell the container does not own answering with a slot past its end. **[V]** the six rows
+above are measured button positions, and the same expression maps the 16-slot backpack: slot 1 at
+(3, 3), slot 5 at (2, 3), slot 13 at (0, 3). `CONTAINER_FIELD_SLOT_1` is 72 fields
 (`Entities/Object/Updates/UpdateFields.h:80`), so eighteen rows of four is the tallest grid a
-pattern may address. **[V]** read from the client's own FrameXML and the core's field table.
+pattern may address.
+
+A word's pattern is written in that same orientation, so it reads the way the player's eye moves:
+across a row from the left, down a column from the top. A flat index would not do: slot 19 and
+slot 20 are one apart in the index and four columns apart on screen in a bag with a short row, and
+a matcher that trusted the index would grant a word drawn across that gap.
 
 The result: runes live in ordinary inventory slots, cost inventory slots, and the auras come
 from stock spells cast on the player. Nothing displaces a gem, an enchant or a suffix, and no
@@ -60,14 +88,24 @@ item field is spent to make room.
    coin that rises with its rarity. It occupies an inventory slot, not a bag slot. One rune per
    slot: the roll belongs to the item instance, and a stack would carry one roll for the whole
    pile.
-3. Holding a word's runes in the shape the word describes, inside **one** container, grants
-   the word. The longest match wins, then the lowest word id.
-4. Each rune instance rolls 1..100 when it is first seen. A word is worth the **average** of its
-   rune rolls, rounded half up and floored by the word's own minimum; the average scales the
-   borrowed spell's basepoints.
-5. Breaking the pattern removes the auras on the next scan. Death removes them too, unless
+3. A word is a **straight line**: its runes in order, across one row or down one column of a
+   single container. The line has to be a *maximal run* — no further rune of that row or column
+   past either end — so a player can always see that the word is the whole line and not a piece
+   of something longer. Anything else (a diagonal, a corner) forms nothing, because a shape the
+   player cannot read is one they cannot aim at.
+4. **One rune may serve two words.** A line across and a line down may meet on a rune that both
+   words name, and both then form: the two lines are matched independently and nothing consumes a
+   cell. That is the table's one piece of play — a rune worth crossing is worth more than a rune
+   on its own — and it is why the same rune appears in words on both axes (`Io` and `Shael`, for
+   two, are on both).
+5. One word, one grant: the strongest placement is the one that counts, and a word that forms in
+   two containers is still one word.
+6. Each rune instance rolls 1..100 when it is first seen. A word is worth the **average** of its
+   rune rolls, rounded half up — nothing floors it, so a badly rolled word is a weak one — and
+   that average scales the borrowed spell's basepoints.
+7. Breaking the line removes the auras on the next scan. Death removes them too, unless
    `Runewords.ApplyWhenDead = 1`.
-6. Nothing is announced when a word breaks; forming one sends a chat line naming the word and
+8. Nothing is announced when a word breaks; forming one sends a chat line naming the word and
    the percentage its runes averaged to.
 
 ## Mechanisms, with the evidence
@@ -83,7 +121,6 @@ custom SQL slot (`sql/custom/db_world/runewords_20_words.sql`). One row per word
 | `pattern` | ordered `row:col:entry` triples — the shape, and the rune expected in each cell |
 | `spell_1..3` | the stock spell ids granted while the word holds |
 | `scale` | percent of the stock spell's own basepoints |
-| `min_pct` | floor on the rune-roll average |
 | `required_level` | player level gate |
 
 Encoding the cells and the runes together in one column means the shape and its runes cannot
@@ -91,11 +128,25 @@ drift apart; there is no parallel array to keep in step.
 
 ### The words, and the spells they borrow
 
-Twenty-four words, 2 to 6 cells each, and **every one of the 33 runes is named by at least one
+Forty-six words, 2 to 6 runes each, and **every one of the 33 runes is named by at least one
 of them** — `gen_runewords.py` refuses to write a table that leaves a rune out, because a rune
 no word uses is an item whose only purpose is its price (the add-on says exactly that on its
-tooltip). The generator also refuses an unconnected path, a cell off the 4-wide grid, a rune
-outside the ladder, and a `min_pct` outside 1..100.
+tooltip). The generator also refuses a rune outside the ladder, a line that does not fit the axis
+it is written on, and two words that are the same runes on the same axis.
+
+Every word is declared by its **rune sequence** alone; the line follows. A word of four runes or
+fewer alternates axis with its id — ids are the ladder order, so neighbouring tiers always offer
+both an across word and a down word — and a word longer than four has no choice but to run down,
+because a bag is four columns wide. `line_cells` turns that into the pattern, and the pattern is
+the only place the axis is recorded, so the SQL, the module and the add-on read it from the same
+cells. Two words may be the same runes on *different* axes, which is a distinction the player can
+see; two words the same runes on the same axis are refused, because nothing could tell them apart.
+A word with no explicit `required_level` unlocks at the drop level of its rarest rune, which is
+the first level a player can hold it.
+
+Rune sequences are unique across the table, and the two shipped words that broke that rule were
+corrected to their D2 forms: Bulwark is Shael Io Sol (not Tal Eth, which is Stealth) and Insight
+is Ral Tir Tal Sol (not Ral Ort Tal, which is Ancients' Pledge).
 
 Effects are stock auras, never authored spells, and the palette is as wide as a bag-resident
 permanent aura gets — nine families, so a word can read like the D2 word it is named for rather
@@ -134,14 +185,16 @@ multiplier: Call to Arms, Doom and Breath of the Dying each grant three auras.
 
 ### Matching
 
-The matcher walks the rune cells of one container, and for each rune tries every cell of the
-word as the position that rune could occupy. Translating by `slot - offset(cell)` gives a
-candidate origin; the word holds if every cell of the pattern lands inside the container and
-holds the expected entry. This is position-independent — nothing anchors a shape to a corner —
-and it is a handful of comparisons per rune, so the scan is dominated by walking the bag, not
-by matching. Matching is scoped to one container because bag windows keep no order among
-themselves: the server sees `(bag, slot)` pairs, and the client floats each bag window
-wherever the player drags it, so "in order across bags" would be neither visible nor stable.
+The scan walks each row and each column of one container once and cuts it into **maximal runs**
+of rune cells; each run's entries in reading order are one lookup in a table keyed by axis and
+sequence. So a word costs one hash lookup rather than a search, a run that carries a rune past
+the word's ends forms nothing, and — the point of the whole arrangement — the same rune can be
+part of a run across and a run down, so two words sharing it both form and each is granted.
+
+Matching is scoped to one container because bag windows keep no order among themselves: the
+server sees `(bag, slot)` pairs, and the client floats each bag window wherever the player
+drags it, so "in order across bags" would be neither visible nor stable. The add-on runs the
+same scan over the same cells, so the words it lists are the words the module grants.
 
 **Every** word the bags form is granted, not the best one: the budget is bag slots, so a player
 who fills their bags with runes gets all of it. Two copies of the same word in different
@@ -172,9 +225,11 @@ The roll is assigned **lazily** — the first time a rune item is seen in a bag 
 again, so it survives the auction house, the mail and a reinstall of the module, and no
 item-creation hook is needed for drops, crafts, quest rewards or `.additem`.
 
-A word's percentage is `max(min_pct, round(mean(roll over its runes)))`: one poor rune costs
+A word's percentage is `round(mean(roll over its runes))` and nothing else: one poor rune costs
 its share of the word rather than the whole thing, two perfect runes are worth more than one
-perfect and one poor, and the floor keeps an all-1s word from being worthless.
+perfect and one poor, and a word whose runes all rolled badly is worth exactly what they rolled.
+There is no floor under the average — the grant is the number the panel prints, which is the
+reason the panel prints it.
 
 ### Rarity and value
 
@@ -281,8 +336,10 @@ add-on, not the item tooltip, is the surface that shows the real values.
 The add-on ships from `acore-thor-launcher` (`app/src/main/assets/runewords/`) and needs two
 things the client cannot get on its own.
 
-**The tables, generated.** `gen_runewords.py --lua <path>` writes `Runewords_Data.lua` — the
-same rune ladder and word table the SQL is built from. The add-on therefore matches patterns
+**The tables, generated.** `gen_runewords.py --lua <path> --spell-dbc <Spell.dbc>` writes
+`Runewords_Data.lua` — the same rune ladder and word table the SQL is built from, plus each
+word's effects with the amount the aura applies at a 100% roll (`--lua` refuses to run without
+the DBC, so a panel can never ship without its numbers). The add-on therefore matches patterns
 with the identical rule (four-wide grid, connected cells, longest then lowest id), so the
 cells it highlights are the cells the server grants, with no second convention to keep in
 step. Regenerating after a word changes is one flag; `--check` covers it like the SQL.
@@ -307,6 +364,35 @@ at login, which is the design's own model. It also means they may never reach th
 add-on's panel is the surface of record and its aura-tooltip rewrite is only a fallback for a word
 that borrows a non-passive spell.
 
+Each entry leads with the word's **line**: one square per rune, on a seven-unit pitch, drawn on
+the bag's own axes — across reads left to right, down reads top to bottom — and tinted with the
+rune's quality colour, so the diagram and the rune list beside it are the same thing twice: the
+green square in `Radiance`'s column is the `Sol`, and the column itself says the word is a
+vertical one. A list of names cannot say which axis a word is on, and that is exactly what a
+player arranging a crossing has to know. A word of five or six runes is a column that has to fit
+the row's height, so its squares sit two units closer together.
+
+The panel is drawn as a page rather than as a tooltip, out of textures the client already ships:
+`UI-Achievement-Parchment` for the paper, `UI-Achievement-Header` for the title strip,
+`UI-QuestLog-BookIcon` for the seal at its left, `UI-Quest-BulletPoint` for the entry bullets, and
+a one-pixel `Buttons\WHITE8X8` ruled line under each word — `Common\spacer` is not in this
+client's data, and a tinted fill that opens nothing draws nothing. Every face the panel sets text in carries
+the `OUTLINE` flag, so the panel writes light: an effect's label and number in a cream a shade
+under the names' white, and a proc's name in amber (`Runewords.lua`: `INK`) — the effect line set
+a size down from the names so an entry reads word first and arithmetic second — while the dark
+tooltip surfaces keep their own palette
+(`DARK`) — `EffectLine` and `RollColour` take a tint for exactly that reason. The heading and the
+word names are white in `Fonts\MORPHEUS.TTF`, and each rune's name wears its item quality
+(`RUNE_INK`, the five link colours), so a common rune stays legible as white on tan.
+
+A word's strength is the plain average of its runes' rolls, and the roll column prints exactly
+that: the panel's percentage *is* the multiplier the module casts the auras at, so a word reading
+`17%` grants 17% of its spells' amounts. The percentage is white-fonted with a black `OUTLINE`
+flag over a banded ink (`ROLL_INK`): green from 90, lighter green from 70, amber from 50, orange
+from 30, red below — centred on 50 because a rune rolls 1..100 and the mean of a word's runes is
+therefore a touch over 50. There is no footer line: the count on the heading reads `N held`, or
+`N held, M shown` when the page cannot show them all.
+
 ## Configuration
 
 | Key | Default | Meaning |
@@ -330,10 +416,10 @@ that borrows a non-passive spell.
 - **A stack of runes from before they stopped stacking**: the stack counts as one rune for the
   pattern and carries one roll; the count is not part of the identity, and the sale hook pays the
   roll's bonus per unit in the stack.
-- **A word whose pattern needs more rows than the container has**: the candidate origin is
-  rejected when any cell would land outside the grid, so a small bag simply cannot host a tall
-  word. A 4-wide container caps a horizontal run at four runes; longer words must turn a corner
-  or run down a column.
+- **A word longer than the container can hold**: a run can only be as long as the line it is
+  scanned from, so a small bag simply cannot host a tall word — a six-rune word needs six rows,
+  which is a 22-slot bag and not a 16-slot one. A four-wide container caps an across word at four
+  runes, which is why anything longer is written down a column.
 - **A bag addon that changes the grid width**: `NUM_CONTAINER_COLUMNS` is a mutable global in
   the client's Lua, so a custom bag frame can render a different lattice than the one a pattern
   assumes. The add-on should pin it or draw its own rune panel.

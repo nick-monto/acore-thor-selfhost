@@ -94,6 +94,7 @@ python3 scripts/loot-bags/gen_loot_bags.py --core <core>
 python3 scripts/loot-bags/gen_loot_bags.py --core <core> --check
 python3 scripts/runewords/gen_runewords.py --core <core>
 python3 scripts/runewords/gen_runewords.py --core <core> --check
+python3 scripts/runewords/gen_runewords.py --core <core> --lua <Runewords_Data.lua> --spell-dbc <Spell.dbc>
 python3 scripts/travel/gen_portals.py --core <core>
 python3 scripts/travel/gen_portals.py --core <core> --check
 ```
