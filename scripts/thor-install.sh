@@ -1003,23 +1003,27 @@ client_candidates() {   # one line per folder under shared storage that holds Da
     [ "$found" = 1 ]
 }
 
+set_client_data() {   # set_client_data DIR - store DIR/Data as the client pointer, or say why not
+    local dir="${1%/}"
+    # Either the client folder or its Data directory is accepted.
+    if [ "${dir##*/}" = Data ] && [ -d "$dir" ]; then dir="$(dirname "$dir")"; fi
+    if [ ! -d "$dir/Data" ] || ! ls "$dir/Data" 2>/dev/null | grep -qix 'common\.mpq'; then
+        warn "$dir holds no Data/common.MPQ, so it is not a 3.3.5a client; the client pointer was not changed"
+        return 1
+    fi
+    CLIENT_DATA="$dir/Data"
+    mkdir -p "$HOST_STATE"
+    printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
+    ok "client: $CLIENT_DATA"
+}
+
 choose_client_data() {   # --client-data, or the remembered choice, or ask once
     [ "$CHECK" = 1 ] && return 0
+    # An explicit --client-data is a request to move the pointer, not just to patch one client once:
+    # record it, so the next --repair uses it instead of the folder it remembered before.
     if [ -n "$CLIENT_DATA" ]; then
-        # An explicit --client-data is a request to move the pointer, not just for this run: prove it
-        # holds a client, normalize it to the Data directory the tools take, and record it, so the
-        # next --repair uses this client instead of the one it remembered before.
         [ "$CLIENT_DATA" = none ] && return 0
-        local chosen="${CLIENT_DATA%/}"
-        if [ "${chosen##*/}" = Data ] && [ -d "$chosen" ]; then chosen="$(dirname "$chosen")"; fi
-        if [ -d "$chosen/Data" ] && ls "$chosen/Data" 2>/dev/null | grep -qix 'common\.mpq'; then
-            CLIENT_DATA="$chosen/Data"
-            mkdir -p "$HOST_STATE"
-            printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
-            ok "client: $CLIENT_DATA"
-        else
-            warn "$chosen holds no Data/common.MPQ, so it is not a 3.3.5a client; the client pointer was not changed"
-        fi
+        set_client_data "$CLIENT_DATA" || CLIENT_DATA=none
         return 0
     fi
     local remembered="" found=() i answer chosen
@@ -1061,17 +1065,9 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
         warn "no such number; the client half is left alone (pass --client-data DIR next time)"
         return 0
     fi
-    # Either the client folder or its Data directory is accepted.
-    chosen="${chosen%/}"
-    if [ "${chosen##*/}" = Data ] && [ -d "$chosen" ]; then chosen="$(dirname "$chosen")"; fi
-    if [ ! -d "$chosen/Data" ] || ! ls "$chosen/Data" 2>/dev/null | grep -qix 'common\.mpq'; then
-        warn "$chosen holds no Data/common.MPQ, so it is not a 3.3.5a client; the client half is left alone (pass --client-data DIR next time)"
-        return 0
-    fi
-    CLIENT_DATA="$chosen/Data"
-    mkdir -p "$HOST_STATE"
-    printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
-    ok "client: $CLIENT_DATA"
+    # Either the client folder or its Data directory is accepted. A folder that is not a client is a
+    # warning, not a failure: the client half is left alone and the install carries on.
+    set_client_data "$chosen" || :
 }
 
 fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files the DBC patches need
