@@ -992,6 +992,9 @@ client_candidates() {   # one line per folder within 4 levels that holds Data/co
         root="$(cd "$root" && pwd -P)" || continue
         case " $seen " in *" $root "*) continue ;; esac
         seen="$seen $root"
+        # stdout carries the candidates and nothing else (mapfile captures it), so the scan line
+        # goes to stderr where it still explains an empty list and names a stale copy.
+        printf 'scanning %s, four folders deep\n' "$root" >&2
         # A client sits at the root, one, two, three or four folders down:
         # /sdcard/WrathSkate/client, /sdcard/WoW/WrathSkate/client. Each level is listed only after
         # its parent was accepted, so the walk prunes rather than globbing every depth at once.
