@@ -48,9 +48,10 @@
 #   --github-token TOKEN    token for a private repository (or set THOR_GH_TOKEN); also used
 #                           to fetch the server artifact and the script itself when private
 #   --data-zip URL|PATH|none  client data (dbc/maps/vmaps/mmaps)
-#   --client-data DIR       the client's Data directory, where the loot-bag Item.dbc patch archive is
+#   --client-data [DIR]     the client's Data directory, where the loot-bag Item.dbc patch archive is
 #                           written (default: the installer asks for the client folder when it starts;
-#                           "none" skips that half, and the answer is remembered)
+#                           "none" skips that half, and the answer is remembered). With no value it
+#                           asks again - the same numbered list - and records the answer.
 #   --boot-timeout SECS     first-boot wait for "World initialized" (default 1800)
 #   THOR_ROOTFS_DIR DIR     the rootfs directory, if proot-distro stores it somewhere this script
 #                           does not probe - a wrong rootfs puts the script's copy where the guest
@@ -116,6 +117,7 @@ ACCOUNT_PASS=""
 LAN_IP=""
 DATA_SRC="$DATA_URL"
 CLIENT_DATA=""
+CLIENT_PICK=0          # bare --client-data: ask again instead of reusing the pointer
 BOOT_TIMEOUT=1800
 MODE="host"            # host | inside
 ACTION="install"       # install | repair | uninstall | status
@@ -205,7 +207,10 @@ parse_args() {
             --release-url)  RELEASE_URL="${2:?}"; shift ;;
             --github-token) GH_TOKEN_OPT="${2:?}"; shift ;;
             --data-zip)     DATA_SRC="${2:?}"; shift ;;
-            --client-data)  CLIENT_DATA="${2:?--client-data needs a directory}"; shift ;;
+            --client-data)  case "${2:-}" in
+                                ''|--*) CLIENT_PICK=1 ;;
+                                *)      CLIENT_DATA="$2"; shift ;;
+                            esac ;;
             --boot-timeout) BOOT_TIMEOUT="${2:?}"; shift ;;
             -h|--help)      usage; exit 0 ;;
             *)              die "unknown argument: $1 (try --help)" ;;
@@ -1017,33 +1022,22 @@ set_client_data() {   # set_client_data DIR - store DIR/Data as the client point
     ok "client: $CLIENT_DATA"
 }
 
-choose_client_data() {   # --client-data, or the remembered choice, or ask once
-    [ "$CHECK" = 1 ] && return 0
-    # An explicit --client-data is a request to move the pointer, not just to patch one client once:
-    # record it, so the next --repair uses it instead of the folder it remembered before.
-    if [ -n "$CLIENT_DATA" ]; then
-        [ "$CLIENT_DATA" = none ] && return 0
-        set_client_data "$CLIENT_DATA" || CLIENT_DATA=none
-        return 0
-    fi
-    local remembered="" found=() i answer chosen
-    if [ -f "$(client_data_file)" ]; then
-        remembered="$(head -1 "$(client_data_file)")"
-        # "none" is an explicit --client-data none, and a path that is still there needs no question.
-        # A path that has gone (the client was moved or deleted) is asked about again, not written into.
-        if [ "$remembered" = none ] || [ -d "$remembered" ]; then
-            CLIENT_DATA="$remembered"
-            return 0
-        fi
-    fi
+pick_client_data() {   # the numbered list of the clients Termux can see, then an answer
     if ! { : </dev/tty; } 2>/dev/null; then
         log "no terminal to ask in, so no client folder was chosen (pass --client-data DIR)"
         return 0
     fi
+    local found=() i answer chosen root readable=0 remembered
     step "The 3.3.5a client"
     mapfile -t found < <(client_candidates)
     if [ "${#found[@]}" -eq 0 ]; then
         log "no folder under shared storage holds a Data/common.MPQ"
+        # Termux cannot list /sdcard until its storage permission is granted, and an empty list is
+        # what that looks like; say it here, at the prompt that came up empty.
+        for root in "${STORAGE_ROOTS[@]}"; do
+            ls "$root" >/dev/null 2>&1 && readable=1
+        done
+        [ "$readable" = 1 ] || warn "shared storage is not readable: run termux-setup-storage, then ask again"
     else
         for i in "${!found[@]}"; do printf '  %d) %s\n' "$((i + 1))" "${found[$i]}"; done
     fi
@@ -1051,7 +1045,11 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
     answer="$REPLY"
     chosen="$answer"
     case "$chosen" in
-        "") log "skipped: the client half of the Item.dbc patch is left alone (pass --client-data DIR to do it later)"
+        "") if remembered="$(client_data_dir)"; then
+                log "kept: $remembered (pass --client-data DIR to change it)"
+            else
+                log "skipped: the client half of the Item.dbc patch is left alone (pass --client-data DIR to do it later)"
+            fi
             return 0 ;;
         *[!0-9]*) : ;;
         *)
@@ -1068,6 +1066,33 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
     # Either the client folder or its Data directory is accepted. A folder that is not a client is a
     # warning, not a failure: the client half is left alone and the install carries on.
     set_client_data "$chosen" || :
+}
+
+choose_client_data() {   # --client-data, the remembered choice, or the picker
+    [ "$CHECK" = 1 ] && return 0
+    # --client-data DIR is a request to move the pointer, not just to patch one client once: record
+    # it, so the next --repair uses it instead of the folder it remembered before. Bare
+    # --client-data asks again, which is the same picker the first install used.
+    if [ -n "$CLIENT_DATA" ]; then
+        [ "$CLIENT_DATA" = none ] && return 0
+        set_client_data "$CLIENT_DATA" || CLIENT_DATA=none
+        return 0
+    fi
+    if [ "$CLIENT_PICK" = 1 ]; then
+        pick_client_data
+        return 0
+    fi
+    local remembered=""
+    if [ -f "$(client_data_file)" ]; then
+        remembered="$(head -1 "$(client_data_file)")"
+        # "none" is an explicit --client-data none, and a path that is still there needs no question.
+        # A path that has gone (the client was moved or deleted) is asked about again, not written into.
+        if [ "$remembered" = none ] || [ -d "$remembered" ]; then
+            CLIENT_DATA="$remembered"
+            return 0
+        fi
+    fi
+    pick_client_data
 }
 
 fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files the DBC patches need
