@@ -291,10 +291,10 @@ resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and 
     is_commit "$SELF_REF" && return 0
     if [ "$SELF_REF_GIVEN" = 0 ] && is_commit "$SELF_REF_SHA"; then
         FETCH_REF="$SELF_REF_SHA"
-        note "fetching from the commit this install is pinned to ($(short_commit "$SELF_REF_SHA"))"
+        log "fetching from the commit this install is pinned to ($(short_commit "$SELF_REF_SHA"))"
         # The pin is why a --repair after a push keeps running the old files. Say what moves it here,
         # where the confusion happens, and not only in the runbook.
-        note "  a newer $SELF_REF does not apply by itself: set SELF_REF=$SELF_REF to resolve and record it"
+        log "  a newer $SELF_REF does not apply by itself: set SELF_REF=$SELF_REF to resolve and record it"
         return 0
     fi
     if [ "$CHECK" = 1 ]; then
@@ -315,7 +315,7 @@ resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and 
     if is_commit "$sha"; then
         SELF_REF_SHA="$sha"
         FETCH_REF="$sha"
-        note "$SELF_REF pinned to commit $(short_commit "$sha")"
+        log "$SELF_REF pinned to commit $(short_commit "$sha")"
         # Persisted here as well as at the end of the install: the first fetch can run after that
         # save, and an unrecorded pin is a pin the next --repair does not use.
         state_save
@@ -2412,7 +2412,7 @@ run_checks() {   # run_checks FIX(0|1)
                             fi
                             ;;
                         *)
-                            note "playerbots.conf: $near_key is $near_now (set by hand; the installer default is $near_val)"
+                            log "playerbots.conf: $near_key is $near_now (set by hand; the installer default is $near_val)"
                             ;;
                     esac
                     continue
