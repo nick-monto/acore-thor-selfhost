@@ -984,25 +984,32 @@ ask() {   # ask PROMPT -> REPLY, from the terminal
     { read -r REPLY </dev/tty; } 2>/dev/null || true
 }
 
-client_candidates() {   # one line per folder under shared storage that holds Data/common.MPQ
-    local root dir seen="" found=0
+client_candidates() {   # one line per folder within 4 levels that holds Data/common.MPQ
+    local root dir seen="" found=0 depth next dirs d
     for root in "${STORAGE_ROOTS[@]}"; do
         [ -d "$root" ] || continue
         # $EXTERNAL_STORAGE, /storage/emulated/0 and /sdcard are usually one directory: scan it once.
         root="$(cd "$root" && pwd -P)" || continue
         case " $seen " in *" $root "*) continue ;; esac
         seen="$seen $root"
-        # Two levels deep is where a client sits (/sdcard/<name>/Data or /sdcard/<folder>/<name>/Data).
-        # Hidden directories are skipped by the glob, and a folder is only listed when its Data holds a
-        # common.MPQ, so a half-copied client or an unrelated folder never appears.
-        for dir in "$root"/*/ "$root"/*/*/; do
-            # Android/data is the biggest tree on the device, and scoped storage hides it from Termux
-            # anyway: walking it costs hundreds of failed reads and can never produce a client.
-            case "$dir" in */Android/*) continue ;; esac
-            [ -d "${dir}Data" ] || continue
-            ls "${dir}Data" 2>/dev/null | grep -qix 'common\.mpq' || continue
-            printf '%s\n' "${dir%/}"
-            found=1
+        # A client sits at the root, one, two, three or four folders down:
+        # /sdcard/WrathSkate/client, /sdcard/WoW/WrathSkate/client. Each level is listed only after
+        # its parent was accepted, so the walk prunes rather than globbing every depth at once.
+        # Hidden directories are skipped by the glob, and a folder is only listed when its Data holds
+        # a common.MPQ, so a half-copied client or an unrelated folder never appears.
+        next=("$root/")
+        for ((depth = 0; depth <= 4; depth++)); do
+            [ "${#next[@]}" -gt 0 ] || break
+            dirs=("${next[@]}")
+            next=()
+            for dir in "${dirs[@]}"; do
+                # Android/data is the biggest tree on the device, and scoped storage hides it from
+                # Termux anyway: it costs hundreds of failed reads and can never hold a client.
+                case "$dir" in */Android/|*/Android/*) continue ;; esac
+                [ -d "${dir}Data" ] && ls "${dir}Data" 2>/dev/null | grep -qix 'common\.mpq' &&
+                    { printf '%s\n' "${dir%/}"; found=1; }
+                for d in "${dir}"*/; do [ -d "$d" ] && next+=("$d"); done
+            done
         done
     done
     [ "$found" = 1 ]
