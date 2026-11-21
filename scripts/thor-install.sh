@@ -1004,8 +1004,24 @@ client_candidates() {   # one line per folder under shared storage that holds Da
 }
 
 choose_client_data() {   # --client-data, or the remembered choice, or ask once
-    [ -n "$CLIENT_DATA" ] && return 0
     [ "$CHECK" = 1 ] && return 0
+    if [ -n "$CLIENT_DATA" ]; then
+        # An explicit --client-data is a request to move the pointer, not just for this run: prove it
+        # holds a client, normalize it to the Data directory the tools take, and record it, so the
+        # next --repair uses this client instead of the one it remembered before.
+        [ "$CLIENT_DATA" = none ] && return 0
+        local chosen="${CLIENT_DATA%/}"
+        if [ "${chosen##*/}" = Data ] && [ -d "$chosen" ]; then chosen="$(dirname "$chosen")"; fi
+        if [ -d "$chosen/Data" ] && ls "$chosen/Data" 2>/dev/null | grep -qix 'common\.mpq'; then
+            CLIENT_DATA="$chosen/Data"
+            mkdir -p "$HOST_STATE"
+            printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
+            ok "client: $CLIENT_DATA"
+        else
+            warn "$chosen holds no Data/common.MPQ, so it is not a 3.3.5a client; the client pointer was not changed"
+        fi
+        return 0
+    fi
     local remembered="" found=() i answer chosen
     if [ -f "$(client_data_file)" ]; then
         remembered="$(head -1 "$(client_data_file)")"
