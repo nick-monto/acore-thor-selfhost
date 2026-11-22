@@ -105,7 +105,7 @@ Then `~/start-wow-server.sh`. `docs/RUNBOOK.md` explains each step and every fla
 
 ## Install on Windows
 
-The same realm builds for a Windows x64 host: the same core pin, the same seven modules and the same custom SQL, compiled with MSVC on `windows-2022` and published as a flat `acore-server-win64.zip` (both binaries, their DLLs, `configs\` and the SQL sources — no client data, the installer fetches and verifies that). Run this from an elevated Windows PowerShell 5.1 session:
+The same realm builds for a Windows x64 host: the same core pin, the same six modules and the same custom SQL, compiled with MSVC on `windows-2022` and published as a flat `acore-server-win64.zip` (both binaries, their DLLs, `configs\` and the SQL sources — no client data, the installer fetches and verifies that). Run this from an elevated Windows PowerShell 5.1 session:
 
 ```powershell
 Invoke-WebRequest -Uri https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/windows-install.ps1 -OutFile windows-install.ps1

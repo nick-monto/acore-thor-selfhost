@@ -18,14 +18,6 @@ license = "GPL-2.0-or-later"
 # release is allowed for fallen ghosts, and bot-controlled sessions cannot opt
 # in. Hardcore.DeathPolicy defaults to ghost.
 
-[module.e_interact]
-repo = "https://github.com/Rainblower/mod-e-interact"
-commit = "0d17e70622085877929c68d583b18f3b0156c81c"   # initial release, 2026-10
-path = "modules/mod-e-interact"
-license = "MIT"
-# Vendored; see modules/mod-e-interact/UPSTREAM.md. Local changes: a gameobject pass
-# (chests, herb/ore nodes, questgiver objects) behind EInteract.Use.
-
 [module.creature_gear]
 repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
 path = "modules/mod-creature-gear"                          # DBUpdater loads module SQL from this path
@@ -80,7 +72,7 @@ runner = "windows-2022"
 toolchain = "MSVC (Visual Studio 2022, x64)"
 prefix = "C:/acore"                                    # windows-install.ps1 -Root default
 installer = "scripts/windows-install.ps1"
-# Same core pin, same seven modules, same patches and same custom SQL as the arm64 artifact; the zip
+# Same core pin, same six modules, same patches and same custom SQL as the arm64 artifact; the zip
 # is flat (worldserver.exe and authserver.exe at the root, configs/, src/) because AzerothCore's
 # Windows install has no prefix layout: ConfigMgr::GetConfigPath() returns "configs/" under
 # AC_PLATFORM_WINDOWS (src/common/Configuration/Config.cpp:709) and it is CWD-relative.
@@ -117,7 +109,7 @@ release_tag = "server-build-x86_64"                    # deliberately NOT marked
 asset = "acore-server-x86_64.tar.zst"
 runner = "ubuntu-24.04"
 prefix = "/opt/acore"
-# Same core pin, same seven modules, same patches and same custom SQL as the other two artifacts:
+# Same core pin, same six modules, same patches and same custom SQL as the other two artifacts:
 # server-aarch64.yml with the platform swapped, on a native x86_64 runner so the sonames match the
 # arm64 artifact's generation. The tarball layout is the Docker image's (bin/ etc/ lib/ src/ under
 # /opt/acore), which is also what thor-install.sh expects from a tarball. This tag is not marked

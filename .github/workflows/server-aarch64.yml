@@ -111,7 +111,6 @@ jobs:
           cp -a playerbots core/modules/mod-playerbots    # this path is load-bearing: module SQL, confs
           cp -a "$GITHUB_WORKSPACE/modules/mod-creature-gear" core/modules/mod-creature-gear
           cp -a "$GITHUB_WORKSPACE/modules/mod-hardcore" core/modules/mod-hardcore
-          cp -a "$GITHUB_WORKSPACE/modules/mod-e-interact" core/modules/mod-e-interact
           cp -a "$GITHUB_WORKSPACE/modules/mod-survivor" core/modules/mod-survivor
           cp -a "$GITHUB_WORKSPACE/modules/mod-mercenaries" core/modules/mod-mercenaries
           cp -a "$GITHUB_WORKSPACE/modules/mod-runewords" core/modules/mod-runewords
@@ -189,10 +188,6 @@ jobs:
           # every module's conf/*.conf.dist into <prefix>/etc/modules.
           test -f "$PREFIX/etc/modules/mod_hardcore.conf.dist"
           grep -q '^Hardcore.DeathPolicy = ghost$' "$PREFIX/etc/modules/mod_hardcore.conf.dist"
-          # Same proof for the interact module: the conf is installed, and it carries the local
-          # gameobject option, so a build that silently dropped the vendored pass fails here.
-          test -f "$PREFIX/etc/modules/mod_e_interact.conf.dist"
-          grep -q '^EInteract.Use = 1$' "$PREFIX/etc/modules/mod_e_interact.conf.dist"
           # And for the survivor module: the conf is installed and its master switch is at the
           # shipped value, so a build that dropped the module is caught here rather than in game.
           test -f "$PREFIX/etc/modules/mod-survivor.conf.dist"
