@@ -108,11 +108,10 @@ is therefore paged, not listed.
 
 ### Two surfaces, one protocol
 
-The realm already ships custom client addons: the launcher installs `EInteract` and `Survivor`
-into `Interface/AddOns` on every launch (`acore-thor-launcher`, `installLocalAddons`,
-`app/src/main/java/app/gamenative/ui/screen/wow/WoWForeverScreen.kt:2029-2080`), and both talk to
-their server module over the addon channel — `SendAddonMessage(prefix, payload, "WHISPER", ownName)`
-(`app/src/main/assets/einteract/EInteract.lua:73`).
+The realm already ships a custom client addon: the launcher installs `Survivor` into
+`Interface/AddOns` on every launch (`acore-thor-launcher`, `installLocalAddons`,
+`app/src/main/java/app/gamenative/ui/screen/wow/WoWForeverScreen.kt:2029-2080`), and it talks to its
+server module over the addon channel.
 
 That gives two ways to present the picker, and the cheap plan is to build the small one first:
 
@@ -123,7 +122,7 @@ That gives two ways to present the picker, and the cheap plan is to build the sm
 
 Recommendation: server-side protocol first (`MERCENARY\tlist` → rows; `MERCENARY\trecruit <guid>`;
 `MERCENARY\tdismiss <guid>`), with the gossip menu as a thin renderer over the same calls. The addon then
-replaces the renderer without touching the model. This mirrors how `EInteract` is layered: the
+replaces the renderer without touching the model. This mirrors how `Survivor` is layered: the
 module answers whispers, the addon only presents them.
 
 ## The mercenary model
@@ -239,8 +238,8 @@ The patch is untouched by the mercenary work.
 
 ### Client side
 
-A `Mercenary` addon in the launcher's assets, installed by `installLocalAddons` like `EInteract` and
-`Survivor`, with `LOCAL_ADDON_VERSION` bumped so existing installs pick it up. It shows the offered
+A `Mercenary` addon in the launcher's assets, installed by `installLocalAddons` like `Survivor`,
+with `LOCAL_ADDON_VERSION` bumped so existing installs pick it up. It shows the offered
 mercenaries (name, class icon, level, role), the current party, and recruit/dismiss buttons.
 
 ### Wiring

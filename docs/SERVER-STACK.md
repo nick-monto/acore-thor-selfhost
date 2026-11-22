@@ -143,22 +143,7 @@ Regeneration is deterministic (same inputs, same bytes) and reads the pinned cor
 
 The admin escape hatch is the database: delete the character's `hardcore_flags` row (or set `fallen = 0`) and restart/reload the module's cache on next startup. There is no `.hardcore off` command by design.
 
-## 12. One interact key (`mod-e-interact`)
-
-`modules/mod-e-interact` is vendored from `Rainblower/mod-e-interact` at the commit in `pins.toml`; the local diff is recorded in `modules/mod-e-interact/UPSTREAM.md`, and the full mechanism plus the gameobject pass is in `docs/INTERACT-KEY-DESIGN.md`. The add-on half travels with the launcher, not this repository.
-
-| Item | Value | Evidence |
-|---|---|---|
-| Transport | self-addressed addon whisper (`LANG_ADDON`, whisper to self) swallowed by `PlayerScript::OnPlayerCanUseChat`; replies are addon whispers back | `modules/mod-e-interact/src/e_interact.cpp`, `Player.cpp:9694` [V] |
-| What it acts with | the client's own handlers: `HandleLoot*`, `HandleGameObjectUseOpcode`, and queued `CMSG_GOSSIP_HELLO` / `CMSG_LIST_INVENTORY` / … packets | same, `WorldSession.h:744-747`, `:791` [V] |
-| Order | target → corpse → chest/node → questgiver object → mailbox → NPC, at normal interaction distance | `HandleNear` [V] |
-| Chests and nodes (local) | `Player::SendLoot(guid, LOOT_CORPSE)` after a `CanOpenLock`-equivalent lock check; questgiver objects through `HandleGameObjectUseOpcode`; mailboxes through `HandleGetMailList` | `UPSTREAM.md`, `docs/INTERACT-KEY-DESIGN.md` [V] |
-| Config | `$PREFIX/etc/modules/mod_e_interact.conf`; the installer creates it and restores `Enable` / `Loot` / `Gather` / `Talk` / `Use` to 1 | `thor-install.sh`, `server-aarch64.yml` [V] |
-| Delivery | copied before configure in `server-aarch64.yml`, extracted by `thor-install.sh --from-source`, conf installed by CMake; no SQL tree, nothing in the artifact's `src/` | `server-aarch64.yml`, `thor-install.sh` [V] |
-| Client half | the launcher's EInteract add-on declares the click binding `CLICK EInteractButton:LeftButton`, binds E on its first run, and appends a named row to `ConsolePort:GetCustomBindings()` so `/cp` can assign any pad button to it | `ConsolePort/Frames/Atlas.lua:691`, `docs/INTERACT-KEY-DESIGN.md` [V] |
-| Verified | every core API it calls was checked against pin `8a4e76e`; `EInteract.Use = 1` presence is asserted in the build. No local compile (no Boost headers on the dev workstation) and no in-game press yet | dev-workstation check, **not a build or a Thor run** [V] |
-
-## 13. Survivor (`mod-survivor`)
+## 12. Survivor (`mod-survivor`)
 
 `modules/mod-survivor` is an in-repo module (pinned by this repository's own ref in `pins.toml`, like
 `mod-creature-gear`) and is compiled into the artifact as one target of `libmodules.a`. The generated
@@ -189,7 +174,7 @@ evidence are in [`SURVIVOR-DESIGN.md`](SURVIVOR-DESIGN.md).
 | Hardcore death container | a Hardcore-flagged death is caught in `Survivor::HandleDeath` before the Survivor flag: `DropGearAtDeath(..., noMail = true)` leaves the equipment and bags in a container at the death spot, announced when `Survivor.AnnounceDeaths = 1`; no revival is queued, `Hardcore.DeathPolicy` applies unchanged, and the `no_mail = 1` row rots at expiry instead of being mailed | `modules/mod-survivor/src/Survivor.cpp`, `docs/SURVIVOR-DESIGN.md` §5.9 [V] |
 | Verified | what was checked is what `docs/SURVIVOR-DESIGN.md` §Verification lists (the core APIs against pin `8a4e76e`, the gameobject entry against the base dump). The in-game behaviour - the container at the death spot, the loot window, the map pin, the enchanted item coming back, and waking alive at the closest graveyard at full health with bones where the corpse was - needs a client session on the Thor and was **not** run in a client or on the Thor | **not a build, client or Thor run** |
 
-## 14. Travel and death on a solo realm
+## 13. Travel and death on a solo realm
 
 Travel is three config keys plus the portal SQL patch, all of which ride the ordinary install; death needs nothing, because stock graveyard coverage on the two continents is already complete for open-world questing zones. The design and the per-row reasoning are in [`TRAVEL-PORTALS-DESIGN.md`](TRAVEL-PORTALS-DESIGN.md); [`GRAVEYARDS-DESIGN.md`](GRAVEYARDS-DESIGN.md) records the graveyard patch that was generated, reviewed and reverted before shipping — all 15 ids it would have added were sub-areas whose parent zone is already linked.
 
@@ -200,7 +185,7 @@ Travel is three config keys plus the portal SQL patch, all of which ride the ord
 | Delivery | This file (with the loot-bag ones) sits in the core's CUSTOM slot. The installer's `refresh_custom_sql()` fetches `sql/custom` from `SELF_REPO@SELF_REF` (default `main`) into `$SRC_DIR/data/sql` on every install and re-run, and `--from-source` extracts the same tree with the module sources, so a SQL change needs no rebuilt artifact — only a commit on the ref `SELF_REF` names. The updater keys `acore_world.updates` by `name` (columns `name, hash, state, timestamp, speed`) and, with the shipped `Updates.Redundancy = 1`, re-applies a CUSTOM file whose content changed. Every file begins with a `DELETE`, so re-application is idempotent; deleting the `updates` row or renaming the file is only needed with redundancy checking off. `--status` reports each family present or missing; `--check` does not run the checks at all | `scripts/thor-install.sh:1039-1132`, `:1831-1844`; `DBUpdater.cpp:98-195` [V] |
 | Verified | the portal generator reproduces the committed bytes under `--check`; an independent re-parse of the portal SQL against the base dumps confirmed the 16 guids are free and in range, every template exists and is type 22, the destination maps match and the positions are sane. **Not** exercised in a client or on the Thor, and nothing about graveyards is claimed: the patch that would have added them no longer exists | `scripts/travel/gen_portals.py --check` [V]; client/Thor runs unverified |
 
-## 15. Mercenaries (`mod-mercenaries`)
+## 14. Mercenaries (`mod-mercenaries`)
 
 `modules/mod-mercenaries` is an in-repo module (pinned by this repository's own ref in `pins.toml`, like
 `mod-creature-gear` and `mod-survivor`) and is compiled into the artifact as one target of
@@ -237,9 +222,9 @@ the mount and pet each mercenary ends up with on the roster. The study is
 | Offline checks | `python3 scripts/mercenaries/check_mercenaries.py`, run by the workflow before the build: conf keys read by the code are defined, the installer's `MERCENARY_CONF_DEFAULTS` and the shipped conf agree in both directions, the picker is a `CreatureScript` gated on the innkeeper flag with action codes clear of the core's option range, the pool reads the playerbots account table rather than the addclass cache, nothing still refers to `Mercenary.ObeliskEntry`, the roster schema matches the columns written, the loader symbol matches the folder name, every personality dial is a name playerbots registers as a *strategy* (read from the base, class, raid and dungeon `Strategy` contexts only, so a trigger, action or value of that name fails), and pins/workflow/installer mention the module | `scripts/mercenaries/check_mercenaries.py`, `server-aarch64.yml` "Check the mercenary module's files agree" [V] |
 | Verified | the offline checker passes and every module translation unit compiles (`scripts/syntax-check.sh`, `-fsyntax-only` against the pinned core's flags); the module has **not** been run on the Thor. The compile gate is `server-aarch64.yml`; the in-game steps are the plan's verification list | **not a build or Thor run** |
 
-## 16. The same stack for a Windows host
+## 15. The same stack for a Windows host
 
-The pins in §1 and the six modules of §10-§15 ride a second artifact as well: `server-win64.yml`
+The pins in §1 and the five modules of §10-§14 ride a second artifact as well: `server-win64.yml`
 builds the same core commit, the same module commits and the same custom SQL with MSVC on a
 Windows x64 host, and `scripts/windows-install.ps1` installs them. Nothing in this document changes
 for it; what changes is the host, and it is written up in [`WINDOWS-HOST.md`](WINDOWS-HOST.md).

@@ -444,23 +444,6 @@ wc_write_all() {
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-creature-gear.conf.dist - the artifact was built without the module, creatures keep their stock gear"
     fi
-    if [ -f "$WC_CONF_DIR/modules/mod_e_interact.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod_e_interact.conf" ]; then
-        ei="$(wc_conf_pair "$WC_CONF_DIR" modules/mod_e_interact)"
-        # One key for the whole interact loop (loot, gather, talk, chests and nodes). Every option
-        # defaults to on in the shipped .dist; a drifted key is put back, since a silent 0 here
-        # looks exactly like a broken key in game.
-        local ei_key ei_val
-        for ei_key in EInteract.Enable EInteract.Loot EInteract.Gather EInteract.Talk EInteract.Use; do
-            ei_val="$(wc_get_conf "$ei" "$ei_key")"
-            if [ "$ei_val" != "1" ]; then
-                wc_warn "mod_e_interact.conf: $ei_key is '$ei_val', restoring the shipped default 1"
-                wc_set_conf "$ei" "$ei_key" 1
-            fi
-        done
-        wc_log "mod_e_interact.conf: Enable=$(wc_get_conf "$ei" EInteract.Enable) Loot=$(wc_get_conf "$ei" EInteract.Loot) Gather=$(wc_get_conf "$ei" EInteract.Gather) Talk=$(wc_get_conf "$ei" EInteract.Talk) Use=$(wc_get_conf "$ei" EInteract.Use)"
-    else
-        wc_warn "no $WC_CONF_DIR/modules/mod_e_interact.conf.dist - the artifact was built without the module, the interact key will not work"
-    fi
     if [ -f "$WC_CONF_DIR/modules/mod_hardcore.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod_hardcore.conf" ]; then
         hc="$(wc_conf_pair "$WC_CONF_DIR" modules/mod_hardcore)"
         local hc_policy

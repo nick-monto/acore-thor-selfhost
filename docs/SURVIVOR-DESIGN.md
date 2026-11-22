@@ -243,9 +243,8 @@ player->SendDirectMessage(&data);
 ```
 
 (`Chat/Chat.h:43-45`, `Chat.cpp:273-275`; `Player::SendDirectMessage` `Player.h:2281`;
-`CHAT_MSG_ADDON` `SharedDefines.h:3384`, `LANG_ADDON` `SharedDefines.h:741`) [V]. The
-interact module ships the same pattern at `modules/mod-e-interact/src/e_interact.cpp:119-120`
-and its addon reads it back from `CHAT_MSG_ADDON` with `arg1` as the prefix [V].
+`CHAT_MSG_ADDON` `SharedDefines.h:3384`, `LANG_ADDON` `SharedDefines.h:741`) [V]. The addon reads
+it back from `CHAT_MSG_ADDON` with `arg1` as the prefix [V].
 
 Messages:
 

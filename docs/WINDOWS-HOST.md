@@ -17,8 +17,8 @@ One artifact, one installer, one host.
 - **Same core.** `github.com/mod-playerbots/azerothcore-wotlk` at the commit in `pins.toml`,
   branch `Playerbot`, with `patches/playerbots-player-centric.patch` applied before configure -
   the same pin and the same patch the arm64 build uses.
-- **Same six modules.** `mod-playerbots`, `mod-creature-gear`, `mod-hardcore`,
-  `mod-e-interact`, `mod-survivor` and `mod-mercenaries`, all pinned in `pins.toml`, all compiled
+- **Same five modules.** `mod-playerbots`, `mod-creature-gear`, `mod-hardcore`,
+  `mod-survivor` and `mod-mercenaries`, all pinned in `pins.toml`, all compiled
   statically into the server (`-DMODULES=static`), exactly as on the Thor.
 - **Same custom SQL.** The loot-bag and portal patches under `sql/custom/db_world/`, the
   creature-gear dataset, and `mod-survivor`'s container template ride the artifact's `src/` tree,
@@ -57,7 +57,7 @@ acore-server-win64.zip
 ├── configs/
 │   ├── worldserver.conf.dist
 │   ├── authserver.conf.dist
-│   └── modules/*.conf.dist        # playerbots, hardcore, e_interact, survivor, mercenaries, ...
+│   └── modules/*.conf.dist        # playerbots, hardcore, survivor, mercenaries, ...
 └── src/
     ├── data/sql/                  # base + custom SQL sources, the CUSTOM and MODULE slots
     ├── modules/mod-playerbots/data/sql/

@@ -1966,7 +1966,7 @@ function Write-Configs {
     Step 'Configuration'
     if ($script:DryRun) {
         Log "would write $script:ConfDir\{authserver,worldserver}.conf"
-        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-runewords,mod-mercenaries}.conf"
+        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-mercenaries}.conf"
         Log "would create $script:LogsDir"
         return
     }
@@ -2093,27 +2093,6 @@ function Write-Configs {
             (Get-Conf $cg 'CreatureGear.Appearance.Enable'), (Get-Conf $cg 'CreatureGear.Weapons.RerollOnRespawn'))
     } else {
         Warn "no $moduleConf\mod-creature-gear.conf.dist - the artifact was built without the module, creatures keep their stock gear"
-    }
-
-    if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod_e_interact.conf.dist')) -or
-        (Test-Path -LiteralPath (Join-Path $moduleConf 'mod_e_interact.conf'))) {
-        $ei = Get-ConfPair 'modules\mod_e_interact'
-        # One key for the whole interact loop (loot, gather, talk, chests and nodes). Every option
-        # defaults to on in the shipped .dist; a drifted key is put back, since a silent 0 here
-        # looks exactly like a broken key in game. EInteract.Roll is deliberately NOT in this list:
-        # it is an opt-out the player may have taken on purpose.
-        foreach ($key in @('EInteract.Enable', 'EInteract.Loot', 'EInteract.Gather', 'EInteract.Talk', 'EInteract.Use')) {
-            $value = Get-Conf $ei $key
-            if ($value -ne '1') {
-                Warn "mod_e_interact.conf: $key is '$value', restoring the shipped default 1"
-                Set-Conf -File $ei -Key $key -Value 1
-            }
-        }
-        Log ("mod_e_interact.conf: Enable={0} Loot={1} Gather={2} Talk={3} Use={4}" -f `
-            (Get-Conf $ei 'EInteract.Enable'), (Get-Conf $ei 'EInteract.Loot'), (Get-Conf $ei 'EInteract.Gather'), `
-            (Get-Conf $ei 'EInteract.Talk'), (Get-Conf $ei 'EInteract.Use'))
-    } else {
-        Warn "no $moduleConf\mod_e_interact.conf.dist - the artifact was built without the module, the interact key will not work"
     }
 
     if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod_hardcore.conf.dist')) -or
@@ -3250,17 +3229,16 @@ function Invoke-Checks {
     $pb = Join-Path $moduleConf 'playerbots.conf'
     $cg = Join-Path $moduleConf 'mod-creature-gear.conf'
     $hc = Join-Path $moduleConf 'mod_hardcore.conf'
-    $ei = Join-Path $moduleConf 'mod_e_interact.conf'
     $sv = Join-Path $moduleConf 'mod-survivor.conf'
     $rw = Join-Path $moduleConf 'mod-runewords.conf'
     $pw = Join-Path $moduleConf 'mod-mercenaries.conf'
-    $confFiles = @($ws, $as, $pb, $cg, $hc, $ei, $sv, $rw, $pw)
+    $confFiles = @($ws, $as, $pb, $cg, $hc, $sv, $rw, $pw)
     $confMissing = @()
     foreach ($file in $confFiles) {
         if (-not (Test-Path -LiteralPath $file)) { $confMissing += $file }
     }
     if ($confMissing.Count -eq 0) {
-        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod_e_interact.conf, modules\mod-survivor.conf, modules\mod-runewords.conf, modules\mod-mercenaries.conf'
+        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod-survivor.conf, modules\mod-runewords.conf, modules\mod-mercenaries.conf'
     } else {
         Bad ("configs incomplete, missing: {0}" -f ($confMissing -join ', '))
         if ($Fix) {
@@ -3474,25 +3452,6 @@ function Invoke-Checks {
                 $script:Fixes = $script:Fixes + 1
                 Set-ConfDefaults -File $pw -Check { param($k, $v) Test-MercenaryValueOk -Key $k -Value $v } `
                     -Label 'mod-mercenaries.conf' -Defaults $MercenaryConfDefaults
-            }
-        }
-    }
-
-    if (Test-Path -LiteralPath $ei) {
-        $off = @()
-        foreach ($key in @('Enable', 'Loot', 'Gather', 'Talk', 'Use')) {
-            # EInteract.Roll is not in this list: it is the one option a player may switch off on
-            # purpose, and restoring it would be the repair fighting the player.
-            if ((Get-Conf $ei ('EInteract.' + $key)) -ne '1') { $off += $key }
-        }
-        if ($off.Count -eq 0) {
-            Ok 'mod_e_interact.conf: Enable/Loot/Gather/Talk/Use = 1'
-        } else {
-            Bad ("mod_e_interact.conf: off: {0} (the key is on, those steps are not)" -f ($off -join ' '))
-            if ($Fix) {
-                foreach ($key in $off) { Set-Conf -File $ei -Key ('EInteract.' + $key) -Value 1 }
-                $script:Fixes = $script:Fixes + 1
-                Ok 'interact options set to 1'
             }
         }
     }
