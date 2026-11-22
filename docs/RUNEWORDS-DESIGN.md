@@ -315,6 +315,12 @@ collision.
 A rune becomes available at a level and stays in every later bracket. Within a bracket its
 weight falls as it ages — `weight = 1 + age/2`, capped at 40 — so the newest rune in a bracket
 is the rarest row in its table and the top of the ladder is a chase rather than a formality.
+`Chance` is not a weight, though: a loot group is one 0–100 roll walked down its rows
+(`LootGroup::Roll`), so the weights are scaled to total exactly 100 and each rune's row is the
+slice of that roll it occupies. A table totalling more than 100 loses its tail to an unreachable
+range; one totalling less (the first five brackets summed 5, 14, 29, 48 and 73) adds a second
+"no rune" roll on top of the creature's own chance. The generator now refuses either, and a
+world built from the old SQL logs the first at startup as `has total chance > 100%`.
 The bracket table is referenced from one `creature_loot_template` row per creature loot id,
 with a chance that rises with creature rank (2% normal, 15% boss).
 

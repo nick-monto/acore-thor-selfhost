@@ -713,6 +713,24 @@ def rune_ref(bracket_index: int) -> int:
     return RUNE_REF_BASE + bracket_index
 
 
+def bracket_chances(indexes, hi):
+    """Weights scaled onto the scale `Chance` is read on.
+
+    The core rolls a loot group as one 0-100 roll walked down the rows
+    (LootMgr.cpp, LootGroup::Roll), so `Chance` is a slice, not a weight: weights
+    summed past 100 make the tail of the table unreachable, and a sum short of 100
+    adds a second "no rune" roll on top of the creature's own chance. Scaling keeps
+    the ladder's ratios and makes every row reachable.
+    """
+    weights = [weight(index, hi) for index in indexes]
+    total = sum(weights)
+    chances = [round(100.0 * w / total, 2) for w in weights]
+    # Largest-remainder: two decimals leave the sum a hundredth or two short, and the row that
+    # carries the remainder is the heaviest one, where a hundredth is the least visible.
+    chances[max(range(len(weights)), key=lambda i: weights[i])] += round(100.0 - sum(chances), 2)
+    return chances
+
+
 def build_reference_tables(used_brackets):
     """One table per bracket a creature actually rolls.
 
@@ -724,14 +742,14 @@ def build_reference_tables(used_brackets):
     for bracket_index in sorted(used_brackets):
         lo, hi = BRACKETS[bracket_index - 1]
         ref_entry = rune_ref(bracket_index)
-        for index, name in enumerate(RUNES):
-            if available_at(index) > hi:
-                continue
+        indexes = [index for index in range(len(RUNES)) if available_at(index) <= hi]
+        for index, chance in zip(indexes, bracket_chances(indexes, hi)):
+            name = RUNES[index]
             rows.append([
                 ref_entry,
                 rune_entry(index),
                 0,
-                weight(index, hi),
+                chance,
                 0,
                 1,
                 RUNE_GROUP,
@@ -846,6 +864,14 @@ def validate_outputs(world: Path, item_rows, word_rows, ref_rows, creature_rows,
     for row in creature_rows:
         if row[1] not in refs:
             raise SystemExit(f"loot id {row[0]} points at reference {row[1]}, which is not written")
+    # A group is one 0-100 roll, so a table whose rows do not sum to 100 either loses its tail or
+    # hides a second no-drop roll. The core logs it as "has total chance > 100%" at every startup.
+    totals = {}
+    for row in ref_rows:
+        totals[(row[0], row[6])] = totals.get((row[0], row[6]), 0.0) + row[3]
+    for (entry, group), chance in totals.items():
+        if abs(chance - 100.0) > 0.011:
+            raise SystemExit(f"reference {entry} group {group} totals {chance:.2f}%, not 100")
 
     # Every rune must be *used*: a rune no word names is an item whose only purpose is
     # its price, and the add-on says exactly that on its tooltip. The ladder is the
