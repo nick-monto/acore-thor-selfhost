@@ -3667,6 +3667,7 @@ function Invoke-Checks {
         (Join-Path $script:SrcDir 'modules\mod-playerbots\data\sql')
         (Join-Path $script:SrcDir 'modules\mod-creature-gear\data\sql')
         (Join-Path $script:SrcDir 'modules\mod-survivor\data\sql')
+        (Join-Path $script:SrcDir 'modules\mod-creature-affixes\data\sql')
     )
     foreach ($path in $sqlSources) {
         if (Test-Path -LiteralPath $path) {

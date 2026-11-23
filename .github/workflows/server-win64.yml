@@ -8,7 +8,7 @@ name: server-win64
 #     configs/*.conf.dist               worldserver.conf.dist, authserver.conf.dist
 #     configs/modules/*.conf.dist       one per module, with the shipped values checked below
 #     src/data/sql/                     the core's SQL sources, plus src/data/sql/custom/db_world
-#     src/modules/<module>/data/sql/    mod-playerbots, mod-creature-gear, mod-survivor
+#     src/modules/<module>/data/sql/    mod-playerbots, mod-creature-gear, mod-survivor, mod-creature-affixes
 #
 # Three facts set that shape, and none of them is the arm64 shape:
 #   * src/server/apps/CMakeLists.txt:241-243 installs the apps into ${CMAKE_INSTALL_PREFIX} on
@@ -637,11 +637,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:PREFIX\src\data",
             "$env:PREFIX\src\modules\mod-playerbots\data",
             "$env:PREFIX\src\modules\mod-creature-gear\data",
-            "$env:PREFIX\src\modules\mod-survivor\data" | Out-Null
+            "$env:PREFIX\src\modules\mod-survivor\data",
+            "$env:PREFIX\src\modules\mod-creature-affixes\data" | Out-Null
           Copy-Item -Recurse -Force 'src/core/data/sql' "$env:PREFIX\src\data\sql"
           Copy-Item -Recurse -Force 'src/playerbots/data/sql' "$env:PREFIX\src\modules\mod-playerbots\data\sql"
           Copy-Item -Recurse -Force 'src/core/modules/mod-creature-gear/data/sql' "$env:PREFIX\src\modules\mod-creature-gear\data\sql"
           Copy-Item -Recurse -Force 'src/core/modules/mod-survivor/data/sql' "$env:PREFIX\src\modules\mod-survivor\data\sql"
+          Copy-Item -Recurse -Force 'src/core/modules/mod-creature-affixes/data/sql' "$env:PREFIX\src\modules\mod-creature-affixes\data\sql"
           # The CUSTOM slot is already registered in the base database
           # (data/sql/base/db_world/updates_include.sql), so the loot-bag and portal patches ride
           # in under the core's own data/sql/custom/db_world directory.
@@ -650,7 +652,7 @@ jobs:
 
           # Count instead of trusting the copies: one level wrong here and the DB updater finds
           # nothing to apply, on a host where the operator only sees an empty world.
-          foreach ($relative in @('data\sql', 'modules\mod-playerbots\data\sql', 'modules\mod-creature-gear\data\sql', 'modules\mod-survivor\data\sql', 'data\sql\custom\db_world')) {
+          foreach ($relative in @('data\sql', 'modules\mod-playerbots\data\sql', 'modules\mod-creature-gear\data\sql', 'modules\mod-survivor\data\sql', 'modules\mod-creature-affixes\data\sql', 'data\sql\custom\db_world')) {
             $dir = Join-Path $env:PREFIX "src\$relative"
             if (-not (Test-Path -LiteralPath $dir)) { Fail "$dir does not exist" }
             $count = @(Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object Name -like '*.sql').Count

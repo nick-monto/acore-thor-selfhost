@@ -2535,7 +2535,7 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); ensure_client_data || true; fi
         fi
     done
-    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql"; do
+    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql" "$SRC_DIR/modules/mod-creature-affixes/data/sql"; do
         if [ -d "$d" ]; then ok "sql sources: $d"; else
             bad "sql sources missing: $d (the DB updater cannot run)"
             if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi

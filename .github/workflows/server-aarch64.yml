@@ -8,7 +8,8 @@ name: server-aarch64
 #     bin/    authserver, worldserver (+ tools), stripped
 #     etc/    *.conf.dist and modules/*.conf.dist   (and the built-in _CONF_DIR is /opt/acore/etc)
 #     src/    data/sql/, modules/mod-playerbots/data/sql/,
-#             modules/mod-creature-gear/data/sql/, modules/mod-survivor/data/sql/ and
+#             modules/mod-creature-gear/data/sql/, modules/mod-survivor/data/sql/,
+#             modules/mod-creature-affixes/data/sql/ and
 #             data/sql/custom/db_world/ (the loot-bag and rune patches) - the DB updater reads these
 #             (mod-hardcore and mod-mercenaries create nothing in
 #             the database and have no SQL tree; mod-survivor ships one world file, the container
@@ -356,11 +357,13 @@ jobs:
           sudo mkdir -p "$PREFIX/src/data" \
                         "$PREFIX/src/modules/mod-playerbots/data" \
                         "$PREFIX/src/modules/mod-creature-gear/data" \
-                        "$PREFIX/src/modules/mod-survivor/data"
+                        "$PREFIX/src/modules/mod-survivor/data" \
+                        "$PREFIX/src/modules/mod-creature-affixes/data"
           sudo cp -a src/core/data/sql "$PREFIX/src/data/sql"
           sudo cp -a src/playerbots/data/sql "$PREFIX/src/modules/mod-playerbots/data/sql"
           sudo cp -a src/core/modules/mod-creature-gear/data/sql "$PREFIX/src/modules/mod-creature-gear/data/sql"
           sudo cp -a src/core/modules/mod-survivor/data/sql "$PREFIX/src/modules/mod-survivor/data/sql"
+          sudo cp -a src/core/modules/mod-creature-affixes/data/sql "$PREFIX/src/modules/mod-creature-affixes/data/sql"
           # The CUSTOM slot is already registered in the base database
           # (data/sql/base/db_world/updates_include.sql), so these files ride in
           # under the core's own data/sql/custom/db_world directory.
@@ -369,7 +372,7 @@ jobs:
 
           # check the layout instead of trusting the copies: one level wrong here and the DB
           # updater finds nothing to apply.
-          for d in data/sql modules/mod-playerbots/data/sql modules/mod-creature-gear/data/sql modules/mod-survivor/data/sql data/sql/custom/db_world; do
+          for d in data/sql modules/mod-playerbots/data/sql modules/mod-creature-gear/data/sql modules/mod-survivor/data/sql modules/mod-creature-affixes/data/sql data/sql/custom/db_world; do
             n=$(find "$PREFIX/src/$d" -name '*.sql' | wc -l)
             echo "$d: $n .sql files"
             if [ "$n" -eq 0 ]; then

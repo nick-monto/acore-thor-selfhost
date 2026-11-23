@@ -2,13 +2,31 @@
 
 The initial server slice for the creature prefix/affix system.
 
+## Definitions
+
+`mod_creature_affixes_modifier` is the static pool. The table and initial rows
+ship in:
+
+- `data/sql/world/base/creature_affixes_10_schema.sql`
+- `data/sql/world/base/creature_affixes_20_modifiers.sql`
+
+The worldserver loads the table once at startup (`Manager::LoadModifiers`) and
+keeps per-spawn rolls in memory. The table is not written on spawn, death or
+respawn; editing a row requires a restart. A row is only rollable when its
+`effect` value is implemented in `CreatureAffixes.cpp`.
+
 ## Initial rows
 
-| Modifier | Kind | Carrier spell | Effect |
+| Modifier | Kind | Hidden carrier | Effect |
 | --- | --- | --- | --- |
-| `Vicious` | Prefix | `2584` | +12% physical damage |
-| `Gilded` | Prefix | `5428` | one extra creature loot roll |
-| `of the Bear` | Affix | `5430` | +15% maximum health |
+| `Vicious` | Prefix | `52370` Periodic Despawn Check | +12% physical damage |
+| `Gilded` | Prefix | `44360` Racing Crop Aura | one extra creature loot roll |
+| `of the Bear` | Affix | `51047` Have Knotroot | +15% maximum health |
+
+The carriers are stock permanent dummy auras with Attributes `0x180`
+(`SPELL_ATTR0_DO_NOT_DISPLAY | SPELL_ATTR0_DO_NOT_LOG`). They are sent to the
+client but hidden from the aura bar and combat log; the add-on reads their
+names through `UnitAura`. The add-on data file must use the same names.
 
 The other design rows are intentionally absent until the first slice is proven.
 
@@ -31,6 +49,19 @@ the module re-applies the stored size factor from `OnDisplayIdChange` and
 
 Size rolls only on outdoor maps by default.
 
+## Client add-on
+
+The `CreatureAffixes` add-on composes the target name as
+`%prefix %name %affix`. It also attaches to TidyPlates' active theme and does
+the same for the target and mouseover nameplates only.
+
+Stock 3.3.5a has no `C_NamePlate` unit tokens, and TidyPlates resolves a GUID
+only for the target and mouseover plates. Other nameplates keep the stock name;
+all-nameplate affixes need a client nameplate API or a client patch.
+
+The add-on has no aura tooltip hooks: hidden carriers never appear in the aura
+bar, and the name is the only displayed surface.
+
 ## Eligibility
 
 Only world-spawned creatures (`creature.GetSpawnId() != 0`) are considered.
@@ -41,7 +72,9 @@ vehicles, pets, dungeon bosses and world bosses.
 
 `conf/mod-creature-affixes.conf.dist` is installed as
 `<prefix>/etc/modules/mod-creature-affixes.conf`. The world script reads it in
-`OnAfterConfigLoad`, so `.reload config` applies changes without a restart.
+`OnAfterConfigLoad`, so `.reload config` applies chance/size settings without a
+restart. Modifier rows are loaded once at world startup; restart after editing
+`mod_creature_affixes_modifier`.
 
 ## GM test command
 
