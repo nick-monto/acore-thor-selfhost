@@ -15,7 +15,9 @@
 # aura, no name, no tooltip. It scales the model, bounding radius and combat
 # reach together through Creature::SetObjectScale.
 #
-# Marker auras are stock client-known dummy spells. No client patch is needed.
+# Marker auras are stock client-known dummy spells with
+# SPELL_ATTR0_DO_NOT_DISPLAY. The client receives them but hides the aura bar
+# entry; the add-on reads the aura name. No client patch is needed.
 #
 #    CreatureAffixes.Enable
 #        Master switch. 0 = no rolls, no markers, no size changes.

@@ -64,8 +64,8 @@ path = "modules/mod-creature-affixes"                        # loader symbol Add
 ref = "main"                                                # SELF_REF in thor-install.sh (overridable)
 # The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-creature-affixes
 # out of its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a
-# tarball from SELF_REPO ($SELF_REF, default main). The module ships no SQL: its three proof rows and
-# hidden size layer are code-only, and its markers are stock client dummy auras.
+# tarball from SELF_REPO ($SELF_REF, default main). It ships its definition table and seed rows in
+# data/sql/world/base; each spawn's roll stays in memory and the carriers are stock client dummy auras.
 
 [data.client_data]
 url = "https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"

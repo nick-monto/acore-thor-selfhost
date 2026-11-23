@@ -8,7 +8,7 @@ name: server-win64
 #     configs/*.conf.dist               worldserver.conf.dist, authserver.conf.dist
 #     configs/modules/*.conf.dist       one per module, with the shipped values checked below
 #     src/data/sql/                     the core's SQL sources, plus src/data/sql/custom/db_world
-#     src/modules/<module>/data/sql/    mod-playerbots, mod-creature-gear, mod-survivor
+#     src/modules/<module>/data/sql/    mod-playerbots, mod-creature-gear, mod-survivor, mod-creature-affixes
 #
 # Three facts set that shape, and none of them is the arm64 shape:
 #   * src/server/apps/CMakeLists.txt:241-243 installs the apps into ${CMAKE_INSTALL_PREFIX} on
@@ -350,11 +350,11 @@ jobs:
           Copy-Item -Recurse -Force 'src/playerbots' 'src/core/modules/mod-playerbots'
           Copy-Item -Recurse -Force 'modules/mod-creature-gear' 'src/core/modules/mod-creature-gear'
           Copy-Item -Recurse -Force 'modules/mod-hardcore' 'src/core/modules/mod-hardcore'
+          Copy-Item -Recurse -Force 'modules/mod-e-interact' 'src/core/modules/mod-e-interact'
           Copy-Item -Recurse -Force 'modules/mod-survivor' 'src/core/modules/mod-survivor'
           Copy-Item -Recurse -Force 'modules/mod-mercenaries' 'src/core/modules/mod-mercenaries'
-          Copy-Item -Recurse -Force 'modules/mod-runewords' 'src/core/modules/mod-runewords'
           Copy-Item -Recurse -Force 'modules/mod-creature-affixes' 'src/core/modules/mod-creature-affixes'
-          foreach ($module in @('mod-playerbots', 'mod-creature-gear', 'mod-hardcore', 'mod-survivor', 'mod-mercenaries', 'mod-runewords', 'mod-creature-affixes')) {
+          foreach ($module in @('mod-playerbots', 'mod-creature-gear', 'mod-hardcore', 'mod-e-interact', 'mod-survivor', 'mod-mercenaries', 'mod-creature-affixes')) {
             if (-not (Test-Path "src/core/modules/$module/src")) { Fail "$module has no src/ directory under src/core/modules; the core would not discover it" }
           }
 
@@ -483,10 +483,10 @@ jobs:
           $moduleConfs = @(
             @{ File = 'mod-creature-gear.conf.dist'; Keys = @('CreatureGear.Enable = 1') },
             @{ File = 'mod_hardcore.conf.dist'; Keys = @('Hardcore.DeathPolicy = ghost') },
+            @{ File = 'mod_e_interact.conf.dist'; Keys = @('EInteract.Use = 1', 'EInteract.Roll = 1') },
             @{ File = 'mod-survivor.conf.dist'; Keys = @('Survivor.Enable = 1') },
-            @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
-            @{ File = 'mod-runewords.conf.dist'; Keys = @('Runewords.Enable = 1', 'Runewords.SweepIntervalMs = 1000') },
             @{ File = 'mod-creature-affixes.conf.dist'; Keys = @('CreatureAffixes.Enable = 1') },
+            @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
             @{ File = 'playerbots.conf.dist'; Keys = @('Playerbots.RandomBotNearPlayers = 0') }
           )
           foreach ($conf in $moduleConfs) {
@@ -494,12 +494,12 @@ jobs:
             Assert-File $path "the $($conf.File) module config"
             foreach ($key in $conf.Keys) { Assert-Key $path $key "'$key' in $($conf.File)" }
           }
-          # Cheap census beside the named files: exactly the six modules above are expected, and a
-          # seventh conf means a module was vendored in without this list being extended.
+          # Cheap census beside the named files: exactly the seven modules above are expected, and an
+          # eighth conf means a module was vendored in without this list being extended.
           $installedConfs = @(Get-ChildItem -LiteralPath "$env:PREFIX\configs\modules" -File | Where-Object Name -like '*.conf.dist')
           Write-Host "module confs installed: $($installedConfs.Count)"
           $installedConfs | ForEach-Object { Write-Host "  $($_.Name)" }
-          if ($installedConfs.Count -lt 6) { Fail "only $($installedConfs.Count) module conf(s) installed under $env:PREFIX\configs\modules; a module was not discovered" }
+          if ($installedConfs.Count -lt 7) { Fail "only $($installedConfs.Count) module conf(s) installed under $env:PREFIX\configs\modules; a module was not discovered" }
 
           Get-ChildItem -LiteralPath $env:PREFIX | Select-Object Name, Length | Format-Table | Out-String | Write-Host
           $totalMb = ((Get-ChildItem -LiteralPath $env:PREFIX -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB
@@ -637,11 +637,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:PREFIX\src\data",
             "$env:PREFIX\src\modules\mod-playerbots\data",
             "$env:PREFIX\src\modules\mod-creature-gear\data",
-            "$env:PREFIX\src\modules\mod-survivor\data" | Out-Null
+            "$env:PREFIX\src\modules\mod-survivor\data",
+            "$env:PREFIX\src\modules\mod-creature-affixes\data" | Out-Null
           Copy-Item -Recurse -Force 'src/core/data/sql' "$env:PREFIX\src\data\sql"
           Copy-Item -Recurse -Force 'src/playerbots/data/sql' "$env:PREFIX\src\modules\mod-playerbots\data\sql"
           Copy-Item -Recurse -Force 'src/core/modules/mod-creature-gear/data/sql' "$env:PREFIX\src\modules\mod-creature-gear\data\sql"
           Copy-Item -Recurse -Force 'src/core/modules/mod-survivor/data/sql' "$env:PREFIX\src\modules\mod-survivor\data\sql"
+          Copy-Item -Recurse -Force 'src/core/modules/mod-creature-affixes/data/sql' "$env:PREFIX\src\modules\mod-creature-affixes\data\sql"
           # The CUSTOM slot is already registered in the base database
           # (data/sql/base/db_world/updates_include.sql), so the loot-bag and portal patches ride
           # in under the core's own data/sql/custom/db_world directory.
@@ -650,7 +652,7 @@ jobs:
 
           # Count instead of trusting the copies: one level wrong here and the DB updater finds
           # nothing to apply, on a host where the operator only sees an empty world.
-          foreach ($relative in @('data\sql', 'modules\mod-playerbots\data\sql', 'modules\mod-creature-gear\data\sql', 'modules\mod-survivor\data\sql', 'data\sql\custom\db_world')) {
+          foreach ($relative in @('data\sql', 'modules\mod-playerbots\data\sql', 'modules\mod-creature-gear\data\sql', 'modules\mod-survivor\data\sql', 'modules\mod-creature-affixes\data\sql', 'data\sql\custom\db_world')) {
             $dir = Join-Path $env:PREFIX "src\$relative"
             if (-not (Test-Path -LiteralPath $dir)) { Fail "$dir does not exist" }
             $count = @(Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object Name -like '*.sql').Count
@@ -713,7 +715,7 @@ jobs:
           $notes = (@(
             "Rolling windows/x64 server build: AzerothCore core $($env:CORE_COMMIT) + mod-playerbots $($env:PB_COMMIT), this repository at $shortSha (run $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)). Compiled with MSVC (Visual Studio 2022) on windows-2022."
             "Artifact sha256: $hash. Compare it with the downloaded acore-server-win64.zip before unpacking; acore-server-win64.zip.sha256 beside the asset carries the same value in sha256sum form."
-            "Modules: mod-playerbots (the bot population, with the player-centric distribution patch that keeps random bots in the zones real players are in), mod-creature-gear (humanoids visibly wear the gear they can drop), mod-hardcore (opt-in one-death ruleset, ghost by default), mod-survivor (death drops everything carried into a lootable container), mod-mercenaries (named bots recruited at any innkeeper, levelling with you inside a two-level window), mod-runewords (rune items drop on a level ladder from El to Zod and a word's pattern held in one container grants its auras), mod-creature-affixes (prefix, affix and hidden size rolls on world spawns)."
+            "Modules: mod-playerbots (the bot population, with the player-centric distribution patch that keeps random bots in the zones real players are in), mod-creature-gear (humanoids visibly wear the gear they can drop), mod-hardcore (opt-in one-death ruleset, ghost by default), mod-e-interact (one interact key, including the local gameobject pass), mod-survivor (death drops everything carried into a lootable container), mod-mercenaries (named bots recruited at any innkeeper, levelling with you inside a two-level window)."
             "No PDBs and no client data ride the artifact: the installer downloads the pinned wowgaming/client-data zip and verifies its sha256 itself. Install with scripts/windows-install.ps1 from an elevated PowerShell session; its default -ReleaseUrl points at this release's tag rather than at releases/latest, which stays the arm64 build."
           ) -join "`n`n")
           Set-Content -Path (Join-Path $env:GITHUB_WORKSPACE 'release-notes-win64.md') -Value $notes -Encoding utf8
@@ -761,10 +763,10 @@ jobs:
           $moduleConfs = @(
             @{ File = 'mod-creature-gear.conf.dist'; Keys = @('CreatureGear.Enable = 1') },
             @{ File = 'mod_hardcore.conf.dist'; Keys = @('Hardcore.DeathPolicy = ghost') },
+            @{ File = 'mod_e_interact.conf.dist'; Keys = @('EInteract.Use = 1', 'EInteract.Roll = 1') },
             @{ File = 'mod-survivor.conf.dist'; Keys = @('Survivor.Enable = 1') },
-            @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
-            @{ File = 'mod-runewords.conf.dist'; Keys = @('Runewords.Enable = 1', 'Runewords.SweepIntervalMs = 1000') },
             @{ File = 'mod-creature-affixes.conf.dist'; Keys = @('CreatureAffixes.Enable = 1') },
+            @{ File = 'mod-mercenaries.conf.dist'; Keys = @('Mercenary.Enable = 1', 'Mercenary.FeaturedMin = 10') },
             @{ File = 'playerbots.conf.dist'; Keys = @('Playerbots.RandomBotNearPlayers = 0') }
           )
           foreach ($conf in $moduleConfs) {
