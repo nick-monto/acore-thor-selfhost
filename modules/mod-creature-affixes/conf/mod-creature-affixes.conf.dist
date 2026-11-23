@@ -15,9 +15,11 @@
 # aura, no name, no tooltip. It scales the model, bounding radius and combat
 # reach together through Creature::SetObjectScale.
 #
-# Marker auras are stock client-visible permanent dummy spells with no visual
-# or database references. The add-on reads the aura name and hides its
-# target-frame button. No client patch is needed.
+# The server writes the prefix and affix labels into the creature's name, so
+# the target frame and every nameplate show them. Marker auras are stock
+# client-visible permanent dummy spells with no visual or database references;
+# the add-on uses their names only to hide their target-frame buttons. No client
+# patch is needed.
 #
 #    CreatureAffixes.Enable
 #        Master switch. 0 = no rolls, no markers, no size changes.

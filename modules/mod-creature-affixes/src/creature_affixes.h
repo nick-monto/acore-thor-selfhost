@@ -7,10 +7,11 @@
  *   - Gilded (prefix)        one extra creature loot roll
  *   - Tiny / Giant           hidden size layer, outdoor world only
  *
- * The marker auras are stock client-visible permanent dummy spells with no
- * visual or database references. The client add-on maps their spell names to
- * the modifier labels and hides their target-frame buttons. No client patch is
- * involved. Size never gets a marker or add-on data.
+ * The server writes the configured prefix and affix labels into the creature's
+ * name, so the target frame and every nameplate carry them without a client
+ * patch. The marker auras are stock client-visible permanent dummy spells with
+ * no visual or database references; the client add-on uses their names only to
+ * hide their target-frame buttons. Size never gets a marker or add-on data.
  *
  * Modifier definitions live in `mod_creature_affixes_modifier` and are loaded
  * once at world startup. Per-spawn state stays in memory.
@@ -98,6 +99,7 @@ namespace CreatureAffixes
         Size size = Size::None;
         float sizeFactor = 1.0f;
         uint32 baseMaxHealth = 0;
+        std::string baseName;
         bool selectLevelApplied = false;
         bool markersApplied = false;
         bool markersPending = false;
@@ -144,6 +146,7 @@ namespace CreatureAffixes
         bool RollAffix(State& state) const;
         void RollSize(State& state) const;
         void Apply(Creature* creature, State& state);
+        void ApplyName(Creature* creature, State& state);
         void ApplyStats(Creature* creature, State const& state);
         void ApplySize(Creature* creature, State const& state) const;
         void ApplyMarkers(Creature* creature, State& state);

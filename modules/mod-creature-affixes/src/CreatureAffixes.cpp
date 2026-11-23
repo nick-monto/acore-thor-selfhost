@@ -399,6 +399,12 @@ namespace CreatureAffixes
             if (old.size != Size::None)
                 creature->SetObjectScale(creature->GetNativeObjectScale());
             RemoveMarkers(creature, old);
+            if (!old.baseName.empty())
+            {
+                State cleared;
+                cleared.baseName = old.baseName;
+                ApplyName(creature, cleared);
+            }
             EraseState(creature->GetGUID());
             return;
         }
@@ -418,6 +424,7 @@ namespace CreatureAffixes
         }
 
         State state;
+        state.baseName = old.baseName.empty() ? creature->GetName() : old.baseName;
         state.baseMaxHealth = creature->GetMaxHealth();
         state.selectLevelApplied = true;
 
@@ -470,6 +477,7 @@ namespace CreatureAffixes
         // UpdateEntry can run UpdateAllStats after SelectLevel, which recomputes
         // health from the unmodified base; reapply here as the final word for a
         // freshly loaded creature.
+        ApplyName(creature, state);
         ApplyStats(creature, state);
         state.statsPending = false;
         if (state.size != Size::None)
@@ -488,6 +496,9 @@ namespace CreatureAffixes
     {
         if (!creature)
             return;
+        State state = GetState(creature->GetGUID());
+        if (!state.baseName.empty() && creature->GetName() != state.baseName)
+            creature->SetName(state.baseName);
         std::lock_guard<std::mutex> lock(_mutex);
         _states.erase(creature->GetGUID().GetRawValue());
         if (_pendingUpdates.erase(creature->GetGUID().GetRawValue()))
@@ -569,6 +580,7 @@ namespace CreatureAffixes
 
     void Manager::Apply(Creature* creature, State& state)
     {
+        ApplyName(creature, state);
         ApplyStats(creature, state);
         if (state.size != Size::None)
             ApplySize(creature, state);
@@ -576,6 +588,37 @@ namespace CreatureAffixes
             ApplyMarkers(creature, state);
         else
             MarkPending(creature->GetGUID(), state);
+    }
+
+    void Manager::ApplyName(Creature* creature, State& state)
+    {
+        if (!creature)
+            return;
+
+        if (state.baseName.empty())
+            state.baseName = creature->GetName();
+
+        std::string name = state.baseName;
+        if (Modifier const* prefix = PrefixAt(state.prefix))
+            name = prefix->label + " " + name;
+        if (Modifier const* affix = AffixAt(state.affix))
+            name += " " + affix->label;
+
+        if (name == creature->GetName())
+            return;
+
+        // Nameplates are built from the creature's create block, not a unit
+        // field. A respawn picks the composed name up before the object is sent;
+        // a GM-forced reroll after spawn needs the create block sent again.
+        creature->SetName(name);
+        if (!creature->IsInWorld())
+            return;
+        for (auto const& ref : creature->GetMap()->GetPlayers())
+        {
+            Player* player = ref.GetSource();
+            if (player && player->IsInWorld() && player->CanSeeOrDetect(creature))
+                creature->SendUpdateToPlayer(player);
+        }
     }
 
     void Manager::ApplyStats(Creature* creature, State const& state)
@@ -726,6 +769,7 @@ namespace CreatureAffixes
 
         State old = GetState(creature->GetGUID());
         State state;
+        state.baseName = old.baseName.empty() ? creature->GetName() : old.baseName;
         state.baseMaxHealth = old.baseMaxHealth ? old.baseMaxHealth : creature->GetMaxHealth();
         state.prefix = prefix ? static_cast<int8>(prefix - _modifiers.data()) : -1;
         state.affix = affix ? static_cast<int8>(affix - _modifiers.data()) : -1;
