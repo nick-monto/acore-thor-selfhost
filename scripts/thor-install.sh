@@ -67,8 +67,8 @@ CORE_REPO="https://github.com/mod-playerbots/azerothcore-wotlk"
 CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
 PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
-# mod-creature-gear, mod-hardcore, mod-survivor, mod-mercenaries and mod-runewords
-# live in *this* repository (modules/), not in repositories of their own, so
+# mod-creature-gear, mod-hardcore, mod-survivor, mod-mercenaries, mod-runewords and
+# mod-creature-affixes live in *this* repository (modules/), not in repositories of their own, so
 # --from-source has to fetch this one's tarball as well when the script is installed from a copy of
 # the repo. --github-token (THOR_GH_TOKEN) is what makes that work while private.
 SELF_REPO="nick-monto/acore-thor-selfhost"
@@ -1544,7 +1544,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords, modules/mod-creature-affixes, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -1654,7 +1654,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
         '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' \
         '*/modules/mod-survivor*' '*/modules/mod-mercenaries*' '*/modules/mod-runewords*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries and modules/mod-runewords out of $SELF_REPO@$SELF_REF"; }
+        '*/modules/mod-creature-affixes*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords and modules/mod-creature-affixes out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -1687,7 +1688,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-mercenaries (wrong SELF_REF?)"
     [ -d "$parent/mod-runewords" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-runewords (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-survivor, $parent/mod-mercenaries and $parent/mod-runewords"
+    [ -d "$parent/mod-creature-affixes" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-affixes (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-survivor, $parent/mod-mercenaries, $parent/mod-runewords and $parent/mod-creature-affixes"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1864,7 +1867,7 @@ SQL
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-mercenaries}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-creature-affixes,mod-mercenaries}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -2216,11 +2219,12 @@ run_checks() {   # run_checks FIX(0|1)
     local cg="$CONF_DIR/modules/mod-creature-gear.conf" hc="$CONF_DIR/modules/mod_hardcore.conf"
     local sv="$CONF_DIR/modules/mod-survivor.conf"
     local rw="$CONF_DIR/modules/mod-runewords.conf"
+    local ca="$CONF_DIR/modules/mod-creature-affixes.conf"
     local pw="$CONF_DIR/modules/mod-mercenaries.conf"
-    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$sv" ] && [ -f "$rw" ] && [ -f "$pw" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod-survivor.conf, modules/mod-runewords.conf, modules/mod-mercenaries.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$sv" ] && [ -f "$rw" ] && [ -f "$ca" ] && [ -f "$pw" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod-survivor.conf, modules/mod-runewords.conf, modules/mod-creature-affixes.conf, modules/mod-mercenaries.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod-survivor.conf/modules/mod-runewords.conf/modules/mod-mercenaries.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod-survivor.conf/modules/mod-runewords.conf/modules/mod-creature-affixes.conf/modules/mod-mercenaries.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -2362,6 +2366,25 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then
                 FIXES=$((FIXES + 1))
                 conf_defaults "$rw" runeword_value_ok mod-runewords.conf "${RUNEWORD_CONF_DEFAULTS[@]}"
+            fi
+        fi
+    fi
+    if [ -f "$ca" ] && load_conf_lib 1; then
+        local ca_default ca_key ca_val ca_bad="" ca_absent=""
+        for ca_default in "${CREATURE_AFFIXES_CONF_DEFAULTS[@]}"; do
+            ca_key="${ca_default%%=*}"
+            ca_val="$(conf_get "$ca" "$ca_key")"
+            if [ -z "$ca_val" ]; then ca_absent="$ca_absent $ca_key"
+            elif ! creature_affixes_value_ok "$ca_key" "$ca_val"; then ca_bad="$ca_bad $ca_key=$ca_val"; fi
+        done
+        if [ -z "$ca_bad" ] && [ -z "$ca_absent" ]; then
+            ok "mod-creature-affixes.conf: Enable=$(conf_get "$ca" CreatureAffixes.Enable) Prefix=$(conf_get "$ca" CreatureAffixes.PrefixChance)% Affix=$(conf_get "$ca" CreatureAffixes.AffixChance)% Size=$(conf_get "$ca" CreatureAffixes.SizeChance)%"
+        else
+            if [ -n "$ca_bad" ]; then bad "mod-creature-affixes.conf: unusable value(s):$ca_bad"; fi
+            if [ -n "$ca_absent" ]; then bad "mod-creature-affixes.conf: key(s) the live file predates:$ca_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                conf_defaults "$ca" creature_affixes_value_ok mod-creature-affixes.conf "${CREATURE_AFFIXES_CONF_DEFAULTS[@]}"
             fi
         fi
     fi

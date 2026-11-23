@@ -1,0 +1,80 @@
+[worldserver]
+
+########################################
+# mod-creature-affixes configuration
+########################################
+#
+# Every world spawn can carry one prefix and one affix, plus an independent
+# hidden size layer. The initial slice ships three proof modifiers:
+#
+#   Vicious      prefix   +12% physical damage
+#   Gilded       prefix   one extra creature loot roll
+#   of the Bear  affix    +15% maximum health
+#
+# The size layer is deliberately invisible to the client add-on: no marker
+# aura, no name, no tooltip. It scales the model, bounding radius and combat
+# reach together through Creature::SetObjectScale.
+#
+# Marker auras are stock client-known dummy spells. No client patch is needed.
+#
+#    CreatureAffixes.Enable
+#        Master switch. 0 = no rolls, no markers, no size changes.
+#        Default: 1
+#
+CreatureAffixes.Enable = 1
+
+#    CreatureAffixes.Debug
+#        Log each spawn roll at debug level. The server logger must also be at
+#        debug level for these lines to reach the console.
+#        Default: 0
+#
+CreatureAffixes.Debug = 0
+
+#    CreatureAffixes.PrefixChance
+#        Percent chance that an eligible spawn receives one prefix.
+#        Default: 10
+#
+CreatureAffixes.PrefixChance = 10
+
+#    CreatureAffixes.AffixChance
+#        Percent chance that an eligible spawn receives one affix.
+#        Default: 10
+#
+CreatureAffixes.AffixChance = 10
+
+#    CreatureAffixes.SizeChance
+#        Percent chance for the independent hidden size layer. Tiny and Giant
+#        are equally likely once this roll succeeds.
+#        Default: 10
+#
+CreatureAffixes.SizeChance = 10
+
+#    CreatureAffixes.MaxCombinedInfluence
+#        Safety cap for a prefix + affix combination. The initial three rows
+#        never reach it; the remaining design rows use the same budget.
+#        Default: 6
+#
+CreatureAffixes.MaxCombinedInfluence = 6
+
+#    CreatureAffixes.Size.OutdoorOnly
+#        1 = the size layer rolls only on outdoor world maps. A giant inside a
+#        dungeon doorway is a pathing bug, not content.
+#        Default: 1
+#
+CreatureAffixes.Size.OutdoorOnly = 1
+
+#    CreatureAffixes.Size.TinyMin / TinyMax
+#        Tiny scale factor range, applied to the creature's native scale.
+#        -30% to -15% is 0.70 to 0.85.
+#        Defaults: 0.70 / 0.85
+#
+CreatureAffixes.Size.TinyMin = 0.70
+CreatureAffixes.Size.TinyMax = 0.85
+
+#    CreatureAffixes.Size.GiantMin / GiantMax
+#        Giant scale factor range, applied to the creature's native scale.
+#        +15% to +30% is 1.15 to 1.30.
+#        Defaults: 1.15 / 1.30
+#
+CreatureAffixes.Size.GiantMin = 1.15
+CreatureAffixes.Size.GiantMax = 1.30

@@ -58,6 +58,15 @@ ref = "main"                                                # SELF_REF in thor-i
 # by scripts/runewords/gen_runewords.py, and its one characters table (character_runeword_rune) is
 # created programmatically at startup, the way mod-survivor's three are.
 
+[module.creature_affixes]
+repo = "https://github.com/nick-monto/acore-thor-selfhost"   # in-repo module, not a clone of its own
+path = "modules/mod-creature-affixes"                        # loader symbol Addmod_creature_affixesScripts()
+ref = "main"                                                # SELF_REF in thor-install.sh (overridable)
+# The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-creature-affixes
+# out of its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a
+# tarball from SELF_REPO ($SELF_REF, default main). The module ships no SQL: its three proof rows and
+# hidden size layer are code-only, and its markers are stock client dummy auras.
+
 [data.client_data]
 url = "https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
 size = 1196168257

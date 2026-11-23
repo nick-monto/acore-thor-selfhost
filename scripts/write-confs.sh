@@ -52,6 +52,20 @@ RUNEWORD_CONF_DEFAULTS=(
     "Runewords.ApplyWhenDead=0"
     "Runewords.Announce=1"
 )
+# mod-creature-affixes's conf keys with the values its shipped .dist carries.
+CREATURE_AFFIXES_CONF_DEFAULTS=(
+    "CreatureAffixes.Enable=1"
+    "CreatureAffixes.Debug=0"
+    "CreatureAffixes.PrefixChance=10"
+    "CreatureAffixes.AffixChance=10"
+    "CreatureAffixes.SizeChance=10"
+    "CreatureAffixes.MaxCombinedInfluence=6"
+    "CreatureAffixes.Size.OutdoorOnly=1"
+    "CreatureAffixes.Size.TinyMin=0.70"
+    "CreatureAffixes.Size.TinyMax=0.85"
+    "CreatureAffixes.Size.GiantMin=1.15"
+    "CreatureAffixes.Size.GiantMax=1.30"
+)
 # mod-mercenaries's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. Same
 # contract as the survivor list: a key outside its range is silently replaced by the module's own
 # fallback, so wc_write_all() restores it from here.
@@ -224,6 +238,27 @@ runeword_value_ok() {   # runeword_value_ok KEY VALUE - true when VALUE is one t
     esac
 }
 
+creature_affixes_value_ok() {   # creature_affixes_value_ok KEY VALUE - true when VALUE is one the module accepts
+    local key="$1" val="$2"
+    case "$key" in
+        CreatureAffixes.Enable|CreatureAffixes.Debug|CreatureAffixes.Size.OutdoorOnly)
+            case "$val" in 0|1) return 0 ;; *) return 1 ;; esac ;;
+        CreatureAffixes.PrefixChance|CreatureAffixes.AffixChance|CreatureAffixes.SizeChance)
+            case "$val" in ''|*[!0-9.]*) return 1 ;; esac
+            awk -v v="$val" 'BEGIN { exit !(v >= 0 && v <= 100) }' ;;
+        CreatureAffixes.MaxCombinedInfluence)
+            case "$val" in ''|*[!0-9]*) return 1 ;; esac
+            [ "$val" -ge 0 ] && [ "$val" -le 20 ] ;;
+        CreatureAffixes.Size.TinyMin|CreatureAffixes.Size.TinyMax)
+            case "$val" in ''|*[!0-9.]*) return 1 ;; esac
+            awk -v v="$val" 'BEGIN { exit !(v >= 0.05 && v <= 1) }' ;;
+        CreatureAffixes.Size.GiantMin|CreatureAffixes.Size.GiantMax)
+            case "$val" in ''|*[!0-9.]*) return 1 ;; esac
+            awk -v v="$val" 'BEGIN { exit !(v >= 1 && v <= 2) }' ;;
+        *) return 1 ;;
+    esac
+}
+
 mercenary_append_missing_conf() {   # mercenary_append_missing_conf LIVE DIST - append the shipped keys LIVE lacks
     # The pool keys are lists, not scalars, so they stay out of MERCENARY_CONF_DEFAULTS: the checker
     # asserts that array and the conf agree key for key, and wc_set_conf would overwrite a pool the
@@ -316,7 +351,7 @@ conf_defaults() {
 # real failure: a missing module conf is a warning, because an artifact built without that module is
 # still a usable realm.
 wc_write_all() {
-    local ws as pb cg hc ei sv rw pw horde
+    local ws as pb cg hc ei sv rw ca pw horde
     [ -n "${WC_DATA_DIR:-}" ] || WC_DATA_DIR="$WC_ROOT/data"
     # The database is local to the install on the Thor and on Windows, but a container reaches it
     # through the compose network, so the host and port are inputs like the credentials are.
@@ -484,6 +519,13 @@ wc_write_all() {
         wc_log "mod-runewords.conf: Enable=$(wc_get_conf "$rw" Runewords.Enable) SweepIntervalMs=$(wc_get_conf "$rw" Runewords.SweepIntervalMs) ApplyWhenDead=$(wc_get_conf "$rw" Runewords.ApplyWhenDead) Announce=$(wc_get_conf "$rw" Runewords.Announce)"
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-runewords.conf.dist - the artifact was built without the module, runewords are unavailable"
+    fi
+    if [ -f "$WC_CONF_DIR/modules/mod-creature-affixes.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-creature-affixes.conf" ]; then
+        ca="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-creature-affixes)"
+        conf_defaults "$ca" creature_affixes_value_ok mod-creature-affixes.conf "${CREATURE_AFFIXES_CONF_DEFAULTS[@]}"
+        wc_log "mod-creature-affixes.conf: Enable=$(wc_get_conf "$ca" CreatureAffixes.Enable) Prefix=$(wc_get_conf "$ca" CreatureAffixes.PrefixChance)% Affix=$(wc_get_conf "$ca" CreatureAffixes.AffixChance)% Size=$(wc_get_conf "$ca" CreatureAffixes.SizeChance)%"
+    else
+        wc_warn "no $WC_CONF_DIR/modules/mod-creature-affixes.conf.dist - the artifact was built without the module, creature affixes are unavailable"
     fi
     if [ -f "$WC_CONF_DIR/modules/mod-mercenaries.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-mercenaries.conf" ]; then
         pw="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-mercenaries)"

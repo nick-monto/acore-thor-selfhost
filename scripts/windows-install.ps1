@@ -289,6 +289,23 @@ $RunewordConfDefaults = @(
     'Runewords.Announce=1'
 )
 
+# mod-creature-affixes's conf keys with the values its shipped .dist carries. Same contract as the
+# survivor list: a key absent from the file or outside its range is silently replaced by the
+# module's own fallback, so Write-Configs() and Invoke-Checks() restore it from here.
+$CreatureAffixesConfDefaults = @(
+    'CreatureAffixes.Enable=1'
+    'CreatureAffixes.Debug=0'
+    'CreatureAffixes.PrefixChance=10'
+    'CreatureAffixes.AffixChance=10'
+    'CreatureAffixes.SizeChance=10'
+    'CreatureAffixes.MaxCombinedInfluence=6'
+    'CreatureAffixes.Size.OutdoorOnly=1'
+    'CreatureAffixes.Size.TinyMin=0.70'
+    'CreatureAffixes.Size.TinyMax=0.85'
+    'CreatureAffixes.Size.GiantMin=1.15'
+    'CreatureAffixes.Size.GiantMax=1.30'
+)
+
 # mod-mercenaries's conf keys with the values its shipped .dist carries. Same contract as the
 # survivor list: a key outside its range is silently replaced by the module's own fallback, so
 # Write-Configs() restores it from here. The pool lists (Mercenary.Voice, Mercenary.VoiceLine.*,
@@ -1307,6 +1324,40 @@ function Test-RunewordValueOk {
     }
 }
 
+function Test-CreatureAffixesValueOk {
+    <# Test-CreatureAffixesValueOk KEY VALUE - true when mod-creature-affixes accepts VALUE. #>
+    param(
+        [string]$Key,
+        [string]$Value
+    )
+    switch -CaseSensitive ($Key) {
+        { $_ -in @('CreatureAffixes.Enable', 'CreatureAffixes.Debug', 'CreatureAffixes.Size.OutdoorOnly') } {
+            return ($Value -ceq '0' -or $Value -ceq '1')
+        }
+        { $_ -in @('CreatureAffixes.PrefixChance', 'CreatureAffixes.AffixChance', 'CreatureAffixes.SizeChance') } {
+            if ($Value -notmatch '^[0-9]+(\.[0-9]+)?$') { return $false }
+            $n = [double]$Value
+            return ($n -ge 0 -and $n -le 100)
+        }
+        'CreatureAffixes.MaxCombinedInfluence' {
+            if ($Value -notmatch '^[0-9]+$') { return $false }
+            $n = [int64]$Value
+            return ($n -ge 0 -and $n -le 20)
+        }
+        { $_ -in @('CreatureAffixes.Size.TinyMin', 'CreatureAffixes.Size.TinyMax') } {
+            if ($Value -notmatch '^[0-9]+(\.[0-9]+)?$') { return $false }
+            $n = [double]$Value
+            return ($n -ge 0.05 -and $n -le 1)
+        }
+        { $_ -in @('CreatureAffixes.Size.GiantMin', 'CreatureAffixes.Size.GiantMax') } {
+            if ($Value -notmatch '^[0-9]+(\.[0-9]+)?$') { return $false }
+            $n = [double]$Value
+            return ($n -ge 1 -and $n -le 2)
+        }
+        default { return $false }
+    }
+}
+
 function Add-MercenaryPoolKeys {
     <# Add-MercenaryPoolKeys -Live F -Dist F - append the shipped pool keys the live file lacks. #>
     # The pool keys are lists, not scalars, so they stay out of the defaults list: Set-Conf would
@@ -1966,7 +2017,7 @@ function Write-Configs {
     Step 'Configuration'
     if ($script:DryRun) {
         Log "would write $script:ConfDir\{authserver,worldserver}.conf"
-        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-mercenaries}.conf"
+        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-creature-affixes,mod-mercenaries}.conf"
         Log "would create $script:LogsDir"
         return
     }
@@ -2142,6 +2193,18 @@ function Write-Configs {
             (Get-Conf $rw 'Runewords.ApplyWhenDead'), (Get-Conf $rw 'Runewords.Announce'))
     } else {
         Warn "no $moduleConf\mod-runewords.conf.dist - the artifact was built without the module, runewords are unavailable"
+    }
+
+    if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-creature-affixes.conf.dist')) -or
+        (Test-Path -LiteralPath (Join-Path $moduleConf 'mod-creature-affixes.conf'))) {
+        $ca = Get-ConfPair 'modules\mod-creature-affixes'
+        Set-ConfDefaults -File $ca -Check { param($k, $v) Test-CreatureAffixesValueOk -Key $k -Value $v } `
+            -Label 'mod-creature-affixes.conf' -Defaults $CreatureAffixesConfDefaults
+        Log ("mod-creature-affixes.conf: Enable={0} Prefix={1}% Affix={2}% Size={3}%" -f `
+            (Get-Conf $ca 'CreatureAffixes.Enable'), (Get-Conf $ca 'CreatureAffixes.PrefixChance'), `
+            (Get-Conf $ca 'CreatureAffixes.AffixChance'), (Get-Conf $ca 'CreatureAffixes.SizeChance'))
+    } else {
+        Warn "no $moduleConf\mod-creature-affixes.conf.dist - the artifact was built without the module, creature affixes are unavailable"
     }
 
     if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-mercenaries.conf.dist')) -or
@@ -3231,14 +3294,15 @@ function Invoke-Checks {
     $hc = Join-Path $moduleConf 'mod_hardcore.conf'
     $sv = Join-Path $moduleConf 'mod-survivor.conf'
     $rw = Join-Path $moduleConf 'mod-runewords.conf'
+    $ca = Join-Path $moduleConf 'mod-creature-affixes.conf'
     $pw = Join-Path $moduleConf 'mod-mercenaries.conf'
-    $confFiles = @($ws, $as, $pb, $cg, $hc, $sv, $rw, $pw)
+    $confFiles = @($ws, $as, $pb, $cg, $hc, $sv, $rw, $ca, $pw)
     $confMissing = @()
     foreach ($file in $confFiles) {
         if (-not (Test-Path -LiteralPath $file)) { $confMissing += $file }
     }
     if ($confMissing.Count -eq 0) {
-        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod-survivor.conf, modules\mod-runewords.conf, modules\mod-mercenaries.conf'
+        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod-survivor.conf, modules\mod-runewords.conf, modules\mod-creature-affixes.conf, modules\mod-mercenaries.conf'
     } else {
         Bad ("configs incomplete, missing: {0}" -f ($confMissing -join ', '))
         if ($Fix) {
@@ -3393,6 +3457,31 @@ function Invoke-Checks {
                 $script:Fixes = $script:Fixes + 1
                 Set-ConfDefaults -File $rw -Check { param($k, $v) Test-RunewordValueOk -Key $k -Value $v } `
                     -Label 'mod-runewords.conf' -Defaults $RunewordConfDefaults
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $ca) {
+        $caAbsent = @()
+        $caBad = @()
+        foreach ($default in $CreatureAffixesConfDefaults) {
+            $eq = $default.IndexOf('=')
+            $key = $default.Substring(0, $eq)
+            $value = Get-Conf $ca $key
+            if ($value -eq '') { $caAbsent += $key }
+            elseif (-not (Test-CreatureAffixesValueOk -Key $key -Value $value)) { $caBad += ("{0}={1}" -f $key, $value) }
+        }
+        if ($caAbsent.Count -eq 0 -and $caBad.Count -eq 0) {
+            Ok ("mod-creature-affixes.conf: Enable={0} Prefix={1}% Affix={2}% Size={3}%" -f `
+                (Get-Conf $ca 'CreatureAffixes.Enable'), (Get-Conf $ca 'CreatureAffixes.PrefixChance'), `
+                (Get-Conf $ca 'CreatureAffixes.AffixChance'), (Get-Conf $ca 'CreatureAffixes.SizeChance'))
+        } else {
+            if ($caBad.Count -gt 0) { Bad ("mod-creature-affixes.conf: unusable value(s): {0}" -f ($caBad -join ' ')) }
+            if ($caAbsent.Count -gt 0) { Bad ("mod-creature-affixes.conf: key(s) the live file predates: {0} (--Repair appends the shipped defaults)" -f ($caAbsent -join ' ')) }
+            if ($Fix) {
+                $script:Fixes = $script:Fixes + 1
+                Set-ConfDefaults -File $ca -Check { param($k, $v) Test-CreatureAffixesValueOk -Key $k -Value $v } `
+                    -Label 'mod-creature-affixes.conf' -Defaults $CreatureAffixesConfDefaults
             }
         }
     }
