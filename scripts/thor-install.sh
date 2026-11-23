@@ -48,9 +48,10 @@
 #   --github-token TOKEN    token for a private repository (or set THOR_GH_TOKEN); also used
 #                           to fetch the server artifact and the script itself when private
 #   --data-zip URL|PATH|none  client data (dbc/maps/vmaps/mmaps)
-#   --client-data DIR       the client's Data directory, where the loot-bag Item.dbc patch archive is
+#   --client-data [DIR]     the client's Data directory, where the loot-bag Item.dbc patch archive is
 #                           written (default: the installer asks for the client folder when it starts;
-#                           "none" skips that half, and the answer is remembered)
+#                           "none" skips that half, and the answer is remembered). With no value it
+#                           asks again - the same numbered list - and records the answer.
 #   --boot-timeout SECS     first-boot wait for "World initialized" (default 1800)
 #   THOR_ROOTFS_DIR DIR     the rootfs directory, if proot-distro stores it somewhere this script
 #                           does not probe - a wrong rootfs puts the script's copy where the guest
@@ -66,12 +67,12 @@ CORE_REPO="https://github.com/mod-playerbots/azerothcore-wotlk"
 CORE_COMMIT="8a4e76eac8c4ccebf547113afe7b51d6c3e91641"
 PB_REPO="https://github.com/mod-playerbots/mod-playerbots"
 PB_COMMIT="d750b4b3a50effdf22bedc8032f0e8e5f7cb8091"
-# mod-creature-gear, mod-hardcore, mod-e-interact, mod-survivor, mod-mercenaries and
-# mod-skateboard live in *this* repository (modules/), not in repositories of their own, so
+# mod-creature-gear, mod-hardcore, mod-survivor, mod-mercenaries, mod-runewords and
+# mod-creature-affixes live in *this* repository (modules/), not in repositories of their own, so
 # --from-source has to fetch this one's tarball as well when the script is installed from a copy of
 # the repo. --github-token (THOR_GH_TOKEN) is what makes that work while private.
 SELF_REPO="nick-monto/acore-thor-selfhost"
-# A branch is a moving pointer: the two python files this script runs, and the tarball it extracts the
+# A branch is a moving pointer: the python files this script runs, and the tarball it extracts the
 # modules and the SQL from, are whatever that branch holds at that moment. A commit is content
 # addressed, so SELF_REF is resolved to one on the first fetch and recorded in the state; a --repair
 # then fetches from the recorded commit. Setting SELF_REF yourself asks for that ref, so it is
@@ -96,10 +97,10 @@ read -r -a STORAGE_ROOTS <<< "${THOR_STORAGE_ROOTS:-${EXTERNAL_STORAGE:-/storage
 DB_PROBE_TIMEOUT="${DB_PROBE_TIMEOUT:-30}"              # seconds a write probe may take (tests shorten it)
 
 ROOT="$ROOT_DEFAULT"
-BOTS=300
+BOTS=50
 # Horde share of the randombot accounts, as last set through the start script's --horde-ratio (or the
 # installer's own value). Empty on installs that never used it, so nothing is compared or rewritten.
-HORDE_RATIO=70
+HORDE_RATIO=""
 # Solo default: only a handful of the random bots stay in the real player's zone; the rest keep the
 # normal world-wide distribution, so the total population is unchanged without crowding the player.
 # The zone group also churns: bots visit for 15-40 minutes, then leave for 4-10 and come back.
@@ -116,6 +117,7 @@ ACCOUNT_PASS=""
 LAN_IP=""
 DATA_SRC="$DATA_URL"
 CLIENT_DATA=""
+CLIENT_PICK=0          # bare --client-data: ask again instead of reusing the pointer
 BOOT_TIMEOUT=1800
 MODE="host"            # host | inside
 ACTION="install"       # install | repair | uninstall | status
@@ -205,7 +207,10 @@ parse_args() {
             --release-url)  RELEASE_URL="${2:?}"; shift ;;
             --github-token) GH_TOKEN_OPT="${2:?}"; shift ;;
             --data-zip)     DATA_SRC="${2:?}"; shift ;;
-            --client-data)  CLIENT_DATA="${2:?--client-data needs a directory}"; shift ;;
+            --client-data)  case "${2:-}" in
+                                ''|--*) CLIENT_PICK=1 ;;
+                                *)      CLIENT_DATA="$2"; shift ;;
+                            esac ;;
             --boot-timeout) BOOT_TIMEOUT="${2:?}"; shift ;;
             -h|--help)      usage; exit 0 ;;
             *)              die "unknown argument: $1 (try --help)" ;;
@@ -291,10 +296,10 @@ resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and 
     is_commit "$SELF_REF" && return 0
     if [ "$SELF_REF_GIVEN" = 0 ] && is_commit "$SELF_REF_SHA"; then
         FETCH_REF="$SELF_REF_SHA"
-        note "fetching from the commit this install is pinned to ($(short_commit "$SELF_REF_SHA"))"
+        log "fetching from the commit this install is pinned to ($(short_commit "$SELF_REF_SHA"))"
         # The pin is why a --repair after a push keeps running the old files. Say what moves it here,
         # where the confusion happens, and not only in the runbook.
-        note "  a newer $SELF_REF does not apply by itself: set SELF_REF=$SELF_REF to resolve and record it"
+        log "  a newer $SELF_REF does not apply by itself: set SELF_REF=$SELF_REF to resolve and record it"
         return 0
     fi
     if [ "$CHECK" = 1 ]; then
@@ -315,7 +320,7 @@ resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and 
     if is_commit "$sha"; then
         SELF_REF_SHA="$sha"
         FETCH_REF="$sha"
-        note "$SELF_REF pinned to commit $(short_commit "$sha")"
+        log "$SELF_REF pinned to commit $(short_commit "$sha")"
         # Persisted here as well as at the end of the install: the first fetch can run after that
         # save, and an unrecorded pin is a pin the next --repair does not use.
         state_save
@@ -328,7 +333,7 @@ resolve_self_ref() {   # resolve_self_ref - pin SELF_REF to a commit, once, and 
 
 refresh_self_ref() {   # refresh_self_ref - drop a recorded pin and resolve SELF_REF again
     # A recorded pin is content-addressed, not immortal: a file that a newer artifact ships (for
-    # example scripts/lib/dbc_mpq.py, which came after the deck tool that imports it) does not exist
+    # example scripts/lib/dbc_mpq.py, which came after the tool that imports it) does not exist
     # at the commit an older install pinned. The pin is then stale rather than the network, and the
     # newest fetchable set is what this realm should be running.
     FETCH_REF=""
@@ -926,7 +931,7 @@ host_packages() {
 # from its own Item.dbc: with no record there the bag shows the red question mark once it is in the
 # player's bags, even though the loot window draws it from the packet. Two halves close that:
 #
-#   * the server's data/dbc/Item.dbc gets the 64 records, so sItemStore agrees with item_template and
+#   * the server's data/dbc/Item.dbc gets the bag and rune records, so sItemStore agrees with item_template and
 #     the DBC attribute checks run instead of the debug line "does not exist in item.dbc!";
 #   * the client gets the same file inside a patch archive - the half that fixes the icon.
 #
@@ -979,51 +984,70 @@ ask() {   # ask PROMPT -> REPLY, from the terminal
     { read -r REPLY </dev/tty; } 2>/dev/null || true
 }
 
-client_candidates() {   # one line per folder under shared storage that holds Data/common.MPQ
-    local root dir seen="" found=0
+client_candidates() {   # one line per folder within 4 levels that holds Data/common.MPQ
+    local root dir seen="" found=0 depth next dirs d
     for root in "${STORAGE_ROOTS[@]}"; do
         [ -d "$root" ] || continue
         # $EXTERNAL_STORAGE, /storage/emulated/0 and /sdcard are usually one directory: scan it once.
         root="$(cd "$root" && pwd -P)" || continue
         case " $seen " in *" $root "*) continue ;; esac
         seen="$seen $root"
-        # Two levels deep is where a client sits (/sdcard/<name>/Data or /sdcard/<folder>/<name>/Data).
-        # Hidden directories are skipped by the glob, and a folder is only listed when its Data holds a
-        # common.MPQ, so a half-copied client or an unrelated folder never appears.
-        for dir in "$root"/*/ "$root"/*/*/; do
-            # Android/data is the biggest tree on the device, and scoped storage hides it from Termux
-            # anyway: walking it costs hundreds of failed reads and can never produce a client.
-            case "$dir" in */Android/*) continue ;; esac
-            [ -d "${dir}Data" ] || continue
-            ls "${dir}Data" 2>/dev/null | grep -qix 'common\.mpq' || continue
-            printf '%s\n' "${dir%/}"
-            found=1
+        # stdout carries the candidates and nothing else (mapfile captures it), so the scan line
+        # goes to stderr where it still explains an empty list and names a stale copy.
+        printf 'scanning %s, four folders deep\n' "$root" >&2
+        # A client sits at the root, one, two, three or four folders down:
+        # /sdcard/WrathSkate/client, /sdcard/WoW/WrathSkate/client. Each level is listed only after
+        # its parent was accepted, so the walk prunes rather than globbing every depth at once.
+        # Hidden directories are skipped by the glob, and a folder is only listed when its Data holds
+        # a common.MPQ, so a half-copied client or an unrelated folder never appears.
+        next=("$root/")
+        for ((depth = 0; depth <= 4; depth++)); do
+            [ "${#next[@]}" -gt 0 ] || break
+            dirs=("${next[@]}")
+            next=()
+            for dir in "${dirs[@]}"; do
+                # Android/data is the biggest tree on the device, and scoped storage hides it from
+                # Termux anyway: it costs hundreds of failed reads and can never hold a client.
+                case "$dir" in */Android/|*/Android/*) continue ;; esac
+                [ -d "${dir}Data" ] && ls "${dir}Data" 2>/dev/null | grep -qix 'common\.mpq' &&
+                    { printf '%s\n' "${dir%/}"; found=1; }
+                for d in "${dir}"*/; do [ -d "$d" ] && next+=("$d"); done
+            done
         done
     done
     [ "$found" = 1 ]
 }
 
-choose_client_data() {   # --client-data, or the remembered choice, or ask once
-    [ -n "$CLIENT_DATA" ] && return 0
-    [ "$CHECK" = 1 ] && return 0
-    local remembered="" found=() i answer chosen
-    if [ -f "$(client_data_file)" ]; then
-        remembered="$(head -1 "$(client_data_file)")"
-        # "none" is an explicit --client-data none, and a path that is still there needs no question.
-        # A path that has gone (the client was moved or deleted) is asked about again, not written into.
-        if [ "$remembered" = none ] || [ -d "$remembered" ]; then
-            CLIENT_DATA="$remembered"
-            return 0
-        fi
+set_client_data() {   # set_client_data DIR - store DIR/Data as the client pointer, or say why not
+    local dir="${1%/}"
+    # Either the client folder or its Data directory is accepted.
+    if [ "${dir##*/}" = Data ] && [ -d "$dir" ]; then dir="$(dirname "$dir")"; fi
+    if [ ! -d "$dir/Data" ] || ! ls "$dir/Data" 2>/dev/null | grep -qix 'common\.mpq'; then
+        warn "$dir holds no Data/common.MPQ, so it is not a 3.3.5a client; the client pointer was not changed"
+        return 1
     fi
+    CLIENT_DATA="$dir/Data"
+    mkdir -p "$HOST_STATE"
+    printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
+    ok "client: $CLIENT_DATA"
+}
+
+pick_client_data() {   # the numbered list of the clients Termux can see, then an answer
     if ! { : </dev/tty; } 2>/dev/null; then
         log "no terminal to ask in, so no client folder was chosen (pass --client-data DIR)"
         return 0
     fi
+    local found=() i answer chosen root readable=0 remembered
     step "The 3.3.5a client"
     mapfile -t found < <(client_candidates)
     if [ "${#found[@]}" -eq 0 ]; then
         log "no folder under shared storage holds a Data/common.MPQ"
+        # Termux cannot list /sdcard until its storage permission is granted, and an empty list is
+        # what that looks like; say it here, at the prompt that came up empty.
+        for root in "${STORAGE_ROOTS[@]}"; do
+            ls "$root" >/dev/null 2>&1 && readable=1
+        done
+        [ "$readable" = 1 ] || warn "shared storage is not readable: run termux-setup-storage, then ask again"
     else
         for i in "${!found[@]}"; do printf '  %d) %s\n' "$((i + 1))" "${found[$i]}"; done
     fi
@@ -1031,7 +1055,11 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
     answer="$REPLY"
     chosen="$answer"
     case "$chosen" in
-        "") log "skipped: the client half of the Item.dbc patch is left alone (pass --client-data DIR to do it later)"
+        "") if remembered="$(client_data_dir)"; then
+                log "kept: $remembered (pass --client-data DIR to change it)"
+            else
+                log "skipped: the client half of the Item.dbc patch is left alone (pass --client-data DIR to do it later)"
+            fi
             return 0 ;;
         *[!0-9]*) : ;;
         *)
@@ -1045,26 +1073,47 @@ choose_client_data() {   # --client-data, or the remembered choice, or ask once
         warn "no such number; the client half is left alone (pass --client-data DIR next time)"
         return 0
     fi
-    # Either the client folder or its Data directory is accepted.
-    chosen="${chosen%/}"
-    if [ "${chosen##*/}" = Data ] && [ -d "$chosen" ]; then chosen="$(dirname "$chosen")"; fi
-    if [ ! -d "$chosen/Data" ] || ! ls "$chosen/Data" 2>/dev/null | grep -qix 'common\.mpq'; then
-        warn "$chosen holds no Data/common.MPQ, so it is not a 3.3.5a client; the client half is left alone (pass --client-data DIR next time)"
+    # Either the client folder or its Data directory is accepted. A folder that is not a client is a
+    # warning, not a failure: the client half is left alone and the install carries on.
+    set_client_data "$chosen" || :
+}
+
+choose_client_data() {   # --client-data, the remembered choice, or the picker
+    [ "$CHECK" = 1 ] && return 0
+    # --client-data DIR is a request to move the pointer, not just to patch one client once: record
+    # it, so the next --repair uses it instead of the folder it remembered before. Bare
+    # --client-data asks again, which is the same picker the first install used.
+    if [ -n "$CLIENT_DATA" ]; then
+        [ "$CLIENT_DATA" = none ] && return 0
+        set_client_data "$CLIENT_DATA" || CLIENT_DATA=none
         return 0
     fi
-    CLIENT_DATA="$chosen/Data"
-    mkdir -p "$HOST_STATE"
-    printf '%s\n' "$CLIENT_DATA" > "$(client_data_file)"
-    ok "client: $CLIENT_DATA"
+    if [ "$CLIENT_PICK" = 1 ]; then
+        pick_client_data
+        return 0
+    fi
+    local remembered=""
+    if [ -f "$(client_data_file)" ]; then
+        remembered="$(head -1 "$(client_data_file)")"
+        # "none" is an explicit --client-data none, and a path that is still there needs no question.
+        # A path that has gone (the client was moved or deleted) is asked about again, not written into.
+        if [ "$remembered" = none ] || [ -d "$remembered" ]; then
+            CLIENT_DATA="$remembered"
+            return 0
+        fi
+    fi
+    pick_client_data
 }
 
 fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files the DBC patches need
     local base="$1" rel dest rc pass stale
     resolve_self_ref
-    # The list is the tools plus what they load by path: the bag generator, and scripts/lib's DBC
-    # container both tools import. A missing lib breaks patch_item_dbc too, so it is fetched here
-    # rather than only by the deck tool's stage.
-    local files="scripts/item-dbc/patch_item_dbc.py scripts/loot-bags/gen_loot_bags.py scripts/lib/dbc_mpq.py scripts/skateboard/patch_deck_dbc.py"
+    # The list is the tool plus what it loads by path: the bag generator patch_item_dbc imports for
+    # the bag records, scripts/lib's DBC container, and the committed rune SQL the same tool reads
+    # for the runes' records. The rune generator rides the list too, because regenerating that SQL
+    # is a host-side step and the pinned checkout it needs is not on the device. A missing lib or
+    # SQL breaks the patch, so they are fetched here rather than only by the item-dbc stage.
+    local files="scripts/item-dbc/patch_item_dbc.py scripts/loot-bags/gen_loot_bags.py scripts/lib/dbc_mpq.py scripts/runewords/gen_runewords.py sql/custom/db_world/runewords_10_items.sql"
     if [ "$CHECK" = 1 ]; then
         note "fetch $files from $SELF_REPO@$SELF_REF into $base"
         return 0
@@ -1074,12 +1123,12 @@ fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files
         [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ]
         return
     fi
-    # Two raw files rather than the repository tarball: small enough to fetch on every run, which is
+    # Raw files rather than the repository tarball: small enough to fetch on every run, which is
     # the point. Keeping a copy just because one exists is how a fixed tool never reaches a device
     # that was installed before the fix - a --repair then rewrote the same broken archive.
     #
     # Two passes at most. A recorded pin is content-addressed, not immortal: scripts/lib/dbc_mpq.py
-    # shipped after scripts/skateboard/patch_deck_dbc.py, so a realm installed before the lib existed
+    # shipped after the tool that imports it, so a realm installed before the lib existed
     # pins a commit that cannot serve it - a 404, which used to be reported as a network problem. The
     # pin is dropped and the ref resolved again, then the whole list is fetched from the new commit,
     # because the files fetched before the failure came from the stale one too.
@@ -1110,7 +1159,8 @@ fetch_item_dbc_tools() {   # fetch_item_dbc_tools DIR - refresh the python files
         refresh_self_ref
     done
     [ -f "$base/item-dbc/patch_item_dbc.py" ] && [ -f "$base/loot-bags/gen_loot_bags.py" ] &&
-        [ -f "$base/lib/dbc_mpq.py" ]
+        [ -f "$base/lib/dbc_mpq.py" ] && [ -f "$base/runewords/gen_runewords.py" ] &&
+        [ -f "$base/sql/custom/db_world/runewords_10_items.sql" ]
 }
 
 apply_item_dbc_patch() {   # the server's Item.dbc, then the client's, if a client can be found
@@ -1121,7 +1171,7 @@ apply_item_dbc_patch() {   # the server's Item.dbc, then the client's, if a clie
     step "Loot-bag items in Item.dbc"
     if [ ! -f "$dbc" ]; then
         if [ "$CHECK" = 1 ]; then
-            note "add the 64 bag records to $ROOT/data/dbc/Item.dbc once the client data is installed"
+            note "add the bag and rune records to $ROOT/data/dbc/Item.dbc once the client data is installed"
         else
             warn "no $ROOT/data/dbc/Item.dbc yet, so the bag records were not added (install the client data first)"
         fi
@@ -1130,7 +1180,7 @@ apply_item_dbc_patch() {   # the server's Item.dbc, then the client's, if a clie
     py="$(item_dbc_python)"
     if [ -z "$py" ]; then
         if [ "$CHECK" = 1 ]; then
-            note "pkg install python, then add the 64 bag records to $ROOT/data/dbc/Item.dbc"
+            note "pkg install python, then add the bag and rune records to $ROOT/data/dbc/Item.dbc"
         else
             warn "python is missing, so the loot-bag Item.dbc patch is skipped: pkg install python, then re-run --repair"
         fi
@@ -1162,7 +1212,7 @@ apply_item_dbc_patch() {   # the server's Item.dbc, then the client's, if a clie
         warn "the Item.dbc patch failed (exit $rc); the bags keep the red question mark until it runs"
         return 0
     fi
-    ok "server Item.dbc: the 64 bag records are in $ROOT/data/dbc/Item.dbc"
+    ok "server Item.dbc: the bag and rune records are in $ROOT/data/dbc/Item.dbc"
 
     if [ -z "$data" ]; then
         warn "no client folder was chosen, so the client half was not written: pass --client-data DIR, or re-run --repair to be asked"
@@ -1193,7 +1243,7 @@ item_dbc_status() {   # the status line: is the server's copy patched, and will 
         return 0
     fi
     if [ -f "$staged" ] && cmp -s "$dbc" "$staged"; then
-        ok "Item.dbc: the server's copy carries the 64 bag records"
+        ok "Item.dbc: the server's copy carries the bag and rune records"
     else
         bad "Item.dbc: the server's copy has no bag records (--repair adds them)"
     fi
@@ -1214,82 +1264,6 @@ item_dbc_status() {   # the status line: is the server's copy patched, and will 
         ok "Item.dbc: the client at $data reads the patched file"
     else
         warn "Item.dbc: the client at $data does not read the patched file (--repair writes it)"
-    fi
-    return 0
-}
-
-# ---------------------------------------------------------------- the shield deck rows in the DBCs
-#
-# Skateboard.Deck ships as `engravedwall` (90001): a shield item model registered as a creature
-# display, which the stock DBCs do not have - 0 of the Item\ObjectComponents\Shield models appear in
-# CreatureModelData.dbc. scripts/skateboard/patch_deck_dbc.py appends the two rows per deck
-# (CreatureModelData + CreatureDisplayInfo), writes both DBCs back for the server, and ships them in
-# a patch archive for the client. Without it the module warns once at startup and draws the stock
-# log (26609) instead, which is why this is a warning and not a failure.
-#
-# It runs in the same place as the Item.dbc stage and for the same reason: the client's Data
-# directory is only visible from Termux, and it is one more archive in the same directory.
-
-apply_deck_dbc_patch() {   # the server's two DBCs, then the client's, if a client can be found
-    local base="$ROOTFS$ROOT/$ITEM_DBC_TOOLS_REL"
-    local tools="$base/skateboard/patch_deck_dbc.py"
-    local dbcs="$ROOTFS$ROOT/data/dbc"
-    local out="$ROOTFS$ROOT/.thor-state/deck-dbc" py data rc=0
-    step "Shield deck rows in CreatureDisplayInfo.dbc"
-    if [ ! -f "$dbcs/CreatureDisplayInfo.dbc" ] || [ ! -f "$dbcs/CreatureModelData.dbc" ]; then
-        if [ "$CHECK" = 1 ]; then
-            note "add the two shield deck rows to $ROOT/data/dbc once the client data is installed"
-        else
-            warn "no $ROOT/data/dbc/CreatureDisplayInfo.dbc or CreatureModelData.dbc yet, so the shield decks were not added"
-        fi
-        return 0
-    fi
-    py="$(item_dbc_python)"
-    if [ -z "$py" ]; then
-        if [ "$CHECK" = 1 ]; then
-            note "pkg install python, then add the two shield deck rows to $ROOT/data/dbc"
-        else
-            warn "python is missing, so the shield deck rows are skipped: pkg install python, then re-run --repair"
-        fi
-        return 0
-    fi
-    if [ "$CHECK" = 1 ]; then
-        fetch_item_dbc_tools "$base"
-        note "$py $tools --dbcs $dbcs --server-dbc $dbcs"
-        if data="$(client_data_dir)"; then note "$py $tools --client-data $data"; fi
-        return 0
-    fi
-    if ! fetch_item_dbc_tools "$base"; then
-        warn "the DBC tools are missing, so the shield decks keep the stock log"
-        return 0
-    fi
-
-    local args=(--dbcs "$dbcs" --server-dbc "$dbcs" --out "$out")
-    if data="$(client_data_dir)"; then
-        args+=(--client-data "$data")
-    else
-        data=""
-    fi
-    "$py" "$tools" "${args[@]}" || rc=$?
-    if [ "$rc" != 0 ]; then
-        warn "the deck patch failed (exit $rc); the board keeps the stock log until it runs"
-        return 0
-    fi
-    ok "server DBCs: the shield decks (90001, 90002) are in $ROOT/data/dbc"
-
-    if [ -z "$data" ]; then
-        warn "no client folder was chosen, so the client half was not written: pass --client-data DIR, or re-run --repair to be asked"
-        warn "  (or copy $ROOT/.thor-state/deck-dbc/deck-dbc.MPQ into the client's Data as patch-9.MPQ)"
-        return 0
-    fi
-    if ! item_dbc_verify_supported "$tools" "$py"; then
-        warn "the deck tools at $SELF_REF are older than this script and cannot verify the archive; restart the client and look at the board"
-        return 0
-    fi
-    if "$py" "$tools" --verify --client-data "$data" >/dev/null 2>&1; then
-        ok "client CreatureDisplayInfo.dbc: $data reads the patched file"
-    else
-        bad "client CreatureDisplayInfo.dbc: $data does not read the patched file (run the patch by hand to see why)"
     fi
     return 0
 }
@@ -1370,7 +1344,6 @@ host_install() {
 
     state_save
     apply_item_dbc_patch
-    apply_deck_dbc_patch
     step "Host side finished"
     log "start with: ~/start-wow-server.sh   |   inspect with: bash thor-install.sh --status"
 }
@@ -1445,7 +1418,6 @@ host_repair() {
         warn "the inside repair exited $rc: the report above says why (it could not start, or problems remain)"
     fi
     apply_item_dbc_patch
-    apply_deck_dbc_patch
     log "re-run --status to see the result"
 }
 
@@ -1572,7 +1544,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-mercenaries, modules/mod-creature-affixes, modules/mod-skateboard, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords, modules/mod-creature-affixes, sql/custom/db_world and patches/playerbots-player-centric.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -1680,9 +1652,10 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     # --strip-components=2 removes "<repo>-<ref>/modules/" so each tree lands as
     # $parent/<module-name>.
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
-        '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' '*/modules/mod-e-interact*' \
-        '*/modules/mod-survivor*' '*/modules/mod-mercenaries*' '*/modules/mod-creature-affixes*' '*/modules/mod-skateboard*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-e-interact, modules/mod-survivor, modules/mod-mercenaries, modules/mod-creature-affixes and modules/mod-skateboard out of $SELF_REPO@$SELF_REF"; }
+        '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' \
+        '*/modules/mod-survivor*' '*/modules/mod-mercenaries*' '*/modules/mod-runewords*' \
+        '*/modules/mod-creature-affixes*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords and modules/mod-creature-affixes out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -1709,17 +1682,15 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-gear (wrong SELF_REF?)"
     [ -d "$parent/mod-hardcore" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-hardcore (wrong SELF_REF?)"
-    [ -d "$parent/mod-e-interact" ] \
-        || die "$SELF_REPO@$SELF_REF carries no modules/mod-e-interact (wrong SELF_REF?)"
     [ -d "$parent/mod-survivor" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-survivor (wrong SELF_REF?)"
-    [ -d "$parent/mod-creature-affixes" ] \
-        || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-affixes (wrong SELF_REF?)"
     [ -d "$parent/mod-mercenaries" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-mercenaries (wrong SELF_REF?)"
-    [ -d "$parent/mod-skateboard" ] \
-        || die "$SELF_REPO@$SELF_REF carries no modules/mod-skateboard (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-e-interact, $parent/mod-survivor, $parent/mod-mercenaries and $parent/mod-skateboard"
+    [ -d "$parent/mod-runewords" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-runewords (wrong SELF_REF?)"
+    [ -d "$parent/mod-creature-affixes" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-affixes (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-survivor, $parent/mod-mercenaries, $parent/mod-runewords and $parent/mod-creature-affixes"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1896,7 +1867,7 @@ SQL
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-creature-affixes,mod-mercenaries,mod-skateboard}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-creature-affixes,mod-mercenaries}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -2246,14 +2217,14 @@ run_checks() {   # run_checks FIX(0|1)
     # 2. configs
     local ws="$CONF_DIR/worldserver.conf" as="$CONF_DIR/authserver.conf" pb="$CONF_DIR/modules/playerbots.conf"
     local cg="$CONF_DIR/modules/mod-creature-gear.conf" hc="$CONF_DIR/modules/mod_hardcore.conf"
-    local ei="$CONF_DIR/modules/mod_e_interact.conf" sv="$CONF_DIR/modules/mod-survivor.conf"
+    local sv="$CONF_DIR/modules/mod-survivor.conf"
+    local rw="$CONF_DIR/modules/mod-runewords.conf"
     local ca="$CONF_DIR/modules/mod-creature-affixes.conf"
     local pw="$CONF_DIR/modules/mod-mercenaries.conf"
-    local sb="$CONF_DIR/modules/mod-skateboard.conf"
-    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$ei" ] && [ -f "$sv" ] && [ -f "$ca" ] && [ -f "$pw" ] && [ -f "$sb" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod_e_interact.conf, modules/mod-survivor.conf, modules/mod-creature-affixes.conf, modules/mod-mercenaries.conf, modules/mod-skateboard.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$sv" ] && [ -f "$rw" ] && [ -f "$ca" ] && [ -f "$pw" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod-survivor.conf, modules/mod-runewords.conf, modules/mod-creature-affixes.conf, modules/mod-mercenaries.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod_e_interact.conf/modules/mod-survivor.conf/modules/mod-mercenaries.conf/modules/mod-skateboard.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod-survivor.conf/modules/mod-runewords.conf/modules/mod-creature-affixes.conf/modules/mod-mercenaries.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -2376,17 +2347,45 @@ run_checks() {   # run_checks FIX(0|1)
             fi
         fi
     fi
-    if [ -f "$ca" ] && load_conf_lib 1; then
-        local ca_key ca_val ca_bad=""
-        for ca_key in CreatureAffixes.Enable CreatureAffixes.PrefixChance CreatureAffixes.AffixChance CreatureAffixes.SizeChance; do
-            ca_val="$(conf_get "$ca" "$ca_key")"
-            if [ -z "$ca_val" ] || ! creature_affixes_value_ok "$ca_key" "$ca_val"; then ca_bad="$ca_bad $ca_key=${ca_val:-<missing>}"; fi
+    if [ -f "$rw" ] && load_conf_lib 1; then
+        # Same contract as the survivor block above: one key per line the module reads, with the
+        # range it accepts. A sweep interval under the module's 200 ms floor is raised, not refused,
+        # so an out-of-range value here is a conf that says something the module will not take.
+        local rw_default rw_key rw_val rw_bad="" rw_absent=""
+        for rw_default in "${RUNEWORD_CONF_DEFAULTS[@]}"; do
+            rw_key="${rw_default%%=*}"
+            rw_val="$(conf_get "$rw" "$rw_key")"
+            if [ -z "$rw_val" ]; then rw_absent="$rw_absent $rw_key"
+            elif ! runeword_value_ok "$rw_key" "$rw_val"; then rw_bad="$rw_bad $rw_key=$rw_val"; fi
         done
-        if [ -z "$ca_bad" ]; then
+        if [ -z "$rw_bad" ] && [ -z "$rw_absent" ]; then
+            ok "mod-runewords.conf: Enable=$(conf_get "$rw" Runewords.Enable) SweepIntervalMs=$(conf_get "$rw" Runewords.SweepIntervalMs) ApplyWhenDead=$(conf_get "$rw" Runewords.ApplyWhenDead) Announce=$(conf_get "$rw" Runewords.Announce)"
+        else
+            if [ -n "$rw_bad" ]; then bad "mod-runewords.conf: unusable value(s):$rw_bad"; fi
+            if [ -n "$rw_absent" ]; then bad "mod-runewords.conf: key(s) the live file predates:$rw_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                conf_defaults "$rw" runeword_value_ok mod-runewords.conf "${RUNEWORD_CONF_DEFAULTS[@]}"
+            fi
+        fi
+    fi
+    if [ -f "$ca" ] && load_conf_lib 1; then
+        local ca_default ca_key ca_val ca_bad="" ca_absent=""
+        for ca_default in "${CREATURE_AFFIXES_CONF_DEFAULTS[@]}"; do
+            ca_key="${ca_default%%=*}"
+            ca_val="$(conf_get "$ca" "$ca_key")"
+            if [ -z "$ca_val" ]; then ca_absent="$ca_absent $ca_key"
+            elif ! creature_affixes_value_ok "$ca_key" "$ca_val"; then ca_bad="$ca_bad $ca_key=$ca_val"; fi
+        done
+        if [ -z "$ca_bad" ] && [ -z "$ca_absent" ]; then
             ok "mod-creature-affixes.conf: Enable=$(conf_get "$ca" CreatureAffixes.Enable) Prefix=$(conf_get "$ca" CreatureAffixes.PrefixChance)% Affix=$(conf_get "$ca" CreatureAffixes.AffixChance)% Size=$(conf_get "$ca" CreatureAffixes.SizeChance)%"
         else
-            bad "mod-creature-affixes.conf: unusable value(s):$ca_bad"
-            if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); conf_defaults "$ca" creature_affixes_value_ok mod-creature-affixes.conf "${CREATURE_AFFIXES_CONF_DEFAULTS[@]}"; fi
+            if [ -n "$ca_bad" ]; then bad "mod-creature-affixes.conf: unusable value(s):$ca_bad"; fi
+            if [ -n "$ca_absent" ]; then bad "mod-creature-affixes.conf: key(s) the live file predates:$ca_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                conf_defaults "$ca" creature_affixes_value_ok mod-creature-affixes.conf "${CREATURE_AFFIXES_CONF_DEFAULTS[@]}"
+            fi
         fi
     fi
     if [ -f "$CONF_DIR/modules/mod-mercenaries.conf" ] &&
@@ -2422,45 +2421,6 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then
                 FIXES=$((FIXES + 1))
                 conf_defaults "$pw" mercenary_value_ok mod-mercenaries.conf "${MERCENARY_CONF_DEFAULTS[@]}"
-            fi
-        fi
-    fi
-    if [ -f "$sb" ] && load_conf_lib 1; then
-        # Every key the module reads, with the range it accepts. A missing key is filled with the
-        # module's own fallback at load and a bad one is ignored the same way, so a config that
-        # still starts the server can be wrong here without saying so. The two are reported apart:
-        # an absent key means the live conf is older than the artifact, a bad one means it says
-        # something the module will not take.
-        local sb_default sb_key sb_val sb_bad="" sb_absent=""
-        for sb_default in "${SKATEBOARD_CONF_DEFAULTS[@]}"; do
-            sb_key="${sb_default%%=*}"
-            sb_val="$(conf_get "$sb" "$sb_key")"
-            if [ -z "$sb_val" ]; then sb_absent="$sb_absent $sb_key"
-            elif ! skateboard_value_ok "$sb_key" "$sb_val"; then sb_bad="$sb_bad $sb_key=$sb_val"; fi
-        done
-        if [ -z "$sb_bad" ] && [ -z "$sb_absent" ]; then
-            ok "mod-skateboard.conf: Enable=$(conf_get "$sb" Skateboard.Enable) Deck=$(conf_get "$sb" Skateboard.Deck) Render=$(conf_get "$sb" Skateboard.Deck.Render) MaxSpeed=$(conf_get "$sb" Skateboard.MaxSpeed) Crash.Enable=$(conf_get "$sb" Skateboard.Crash.Enable)"
-        else
-            if [ -n "$sb_bad" ]; then bad "mod-skateboard.conf: unusable value(s):$sb_bad"; fi
-            if [ -n "$sb_absent" ]; then bad "mod-skateboard.conf: key(s) the live file predates:$sb_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
-            if [ "$fix" = 1 ]; then
-                FIXES=$((FIXES + 1))
-                conf_defaults "$sb" skateboard_value_ok mod-skateboard.conf "${SKATEBOARD_CONF_DEFAULTS[@]}"
-            fi
-        fi
-    fi
-    if [ -f "$ei" ]; then
-        local ei_off="" ei_key
-        for ei_key in Enable Loot Gather Talk Use; do
-            if [ "$(conf_get "$ei" "EInteract.$ei_key")" != "1" ]; then ei_off="$ei_off $ei_key"; fi
-        done
-        if [ -z "$ei_off" ]; then
-            ok "mod_e_interact.conf: Enable/Loot/Gather/Talk/Use = 1"
-        else
-            bad "mod_e_interact.conf: off:$ei_off (the key is on, those steps are not)"
-            if [ "$fix" = 1 ]; then
-                for ei_key in $ei_off; do set_conf "$ei" "EInteract.$ei_key" 1; done
-                ok "interact options set to 1"
             fi
         fi
     fi
@@ -2505,7 +2465,7 @@ run_checks() {   # run_checks FIX(0|1)
                             fi
                             ;;
                         *)
-                            note "playerbots.conf: $near_key is $near_now (set by hand; the installer default is $near_val)"
+                            log "playerbots.conf: $near_key is $near_now (set by hand; the installer default is $near_val)"
                             ;;
                     esac
                     continue
@@ -2575,7 +2535,7 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); ensure_client_data || true; fi
         fi
     done
-    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql" "$SRC_DIR/modules/mod-creature-affixes/data/sql"; do
+    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql"; do
         if [ -d "$d" ]; then ok "sql sources: $d"; else
             bad "sql sources missing: $d (the DB updater cannot run)"
             if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi
@@ -2584,9 +2544,10 @@ run_checks() {   # run_checks FIX(0|1)
     local sql_name sql_label sql_file
     # Only the families that ship. The graveyard patch was generated, reviewed and reverted
     # (docs/GRAVEYARDS-DESIGN.md), so probing for it would report a permanent failure.
-    for sql_name in loot_bags travel_portals; do
+    for sql_name in loot_bags runewords travel_portals; do
         case "$sql_name" in
             loot_bags)      sql_label="loot-bag patch" ;;
+            runewords)      sql_label="runeword patch" ;;
             travel_portals) sql_label="travel-portal patch" ;;
         esac
         sql_file="$(find "$SRC_DIR/data/sql/custom/db_world" -maxdepth 1 -name "${sql_name}_*.sql" -print -quit 2>/dev/null || true)"

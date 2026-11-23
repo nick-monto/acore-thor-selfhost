@@ -3,7 +3,7 @@
  *
  * This file deliberately contains only the three proof modifiers plus the
  * hidden size layer. The remaining modifiers from the design are not listed
- * here yet; adding a row to the modifier table and implementing its Effect is the
+ * here yet; adding a row to Modifiers[] and implementing its Effect is the
  * extension point.
  */
 
@@ -18,7 +18,6 @@
 #include "CommandScript.h"
 #include "Config.h"
 #include "Creature.h"
-#include "DatabaseEnv.h"
 #include "LootMgr.h"
 #include "Log.h"
 #include "Map.h"
@@ -26,7 +25,6 @@
 #include "Player.h"
 #include "Random.h"
 #include "SpellInfo.h"
-#include "SpellMgr.h"
 #include "Unit.h"
 
 using namespace Acore::ChatCommands;
@@ -48,22 +46,8 @@ namespace
 
     bool IsGilded(CreatureAffixes::State const& state)
     {
-        CreatureAffixes::Manager const& manager = CreatureAffixes::Manager::instance();
-        CreatureAffixes::Modifier const* modifier = manager.PrefixAt(state.prefix);
+        CreatureAffixes::Modifier const* modifier = CreatureAffixes::Manager::PrefixAt(state.prefix);
         return modifier && modifier->effect == CreatureAffixes::Effect::Gilded;
-    }
-
-    bool ParseEffect(std::string const& text, CreatureAffixes::Effect& effect)
-    {
-        if (text == "vicious")
-            effect = CreatureAffixes::Effect::Vicious;
-        else if (text == "gilded")
-            effect = CreatureAffixes::Effect::Gilded;
-        else if (text == "bear")
-            effect = CreatureAffixes::Effect::Bear;
-        else
-            return false;
-        return true;
     }
 
     std::string Lower(std::string text)
@@ -107,136 +91,35 @@ namespace CreatureAffixes
         _settings.giantMin = std::clamp(_settings.giantMin, 1.0f, 2.0f);
         _settings.giantMax = std::clamp(_settings.giantMax, 1.0f, 2.0f);
 
-        LOG_INFO("module", "mod-creature-affixes: enabled={} prefix={}% affix={}% size={}%",
-                 _settings.enabled, _settings.prefixChance, _settings.affixChance, _settings.sizeChance);
+        LOG_INFO("module", "mod-creature-affixes: enabled={} prefix={}% affix={}% size={}% rows={}",
+                 _settings.enabled, _settings.prefixChance, _settings.affixChance, _settings.sizeChance,
+                 sizeof(Modifiers) / sizeof(Modifiers[0]));
     }
 
-    void Manager::LoadModifiers()
+    Modifier const* Manager::Find(char const* key, Kind kind)
     {
-        std::vector<Modifier> loaded;
-        QueryResult result = WorldDatabase.Query(
-            "SELECT `modifier_key`, `kind`, `label`, `carrier_spell`, `influence`, `effect`, `amount` "
-            "FROM `mod_creature_affixes_modifier` ORDER BY `id`");
-        if (!result)
-        {
-            _modifiers.clear();
-            LOG_ERROR("module", "mod-creature-affixes: `mod_creature_affixes_modifier` is missing or empty; "
-                                "apply `data/sql/world/base/creature_affixes_10_schema.sql` and "
-                                "`creature_affixes_20_modifiers.sql`.");
-            return;
-        }
-
-        do
-        {
-            Field* fields = result->Fetch();
-
-            Modifier modifier;
-            modifier.key = fields[0].Get<std::string>();
-            std::string kind = fields[1].Get<std::string>();
-            modifier.label = fields[2].Get<std::string>();
-            modifier.carrierSpell = fields[3].Get<uint32>();
-            modifier.influence = static_cast<uint8>(std::clamp<uint32>(fields[4].Get<uint32>(), 1, 5));
-            modifier.effect = Effect::None;
-            modifier.amount = fields[6].Get<float>();
-
-            if (kind == "prefix")
-                modifier.kind = Kind::Prefix;
-            else if (kind == "affix")
-                modifier.kind = Kind::Affix;
-            else
-            {
-                LOG_ERROR("module", "mod-creature-affixes: modifier '{}' has unknown kind '{}'; skipped",
-                          modifier.key, kind);
-                continue;
-            }
-
-            std::string effect = fields[5].Get<std::string>();
-            if (!ParseEffect(effect, modifier.effect))
-            {
-                LOG_ERROR("module", "mod-creature-affixes: modifier '{}' has unknown effect '{}'; skipped",
-                          modifier.key, effect);
-                continue;
-            }
-
-            if (modifier.key.empty() || modifier.label.empty() || !modifier.carrierSpell)
-            {
-                LOG_ERROR("module", "mod-creature-affixes: modifier row has an empty key/label or no carrier spell; skipped");
-                continue;
-            }
-
-            SpellInfo const* carrier = sSpellMgr->GetSpellInfo(modifier.carrierSpell);
-            if (!carrier)
-            {
-                LOG_ERROR("module", "mod-creature-affixes: modifier '{}' carrier spell {} does not exist; skipped",
-                          modifier.key, modifier.carrierSpell);
-                continue;
-            }
-
-            if (!(carrier->Attributes & SPELL_ATTR0_DO_NOT_DISPLAY))
-            {
-                LOG_ERROR("module", "mod-creature-affixes: modifier '{}' carrier spell {} is not hidden; "
-                                    "a hidden marker is required, row skipped",
-                          modifier.key, modifier.carrierSpell);
-                continue;
-            }
-
-            loaded.push_back(std::move(modifier));
-        } while (result->NextRow());
-
-        if (loaded.empty())
-        {
-            _modifiers.clear();
-            LOG_ERROR("module", "mod-creature-affixes: no usable modifier rows loaded; no affixes will roll.");
-            return;
-        }
-
-        size_t prefixes = std::count_if(loaded.begin(), loaded.end(), [](Modifier const& modifier)
-        {
-            return modifier.kind == Kind::Prefix;
-        });
-        size_t affixes = loaded.size() - prefixes;
-
-        _modifiers = std::move(loaded);
-        LOG_INFO("module", "mod-creature-affixes: loaded {} modifier(s): {} prefix, {} affix",
-                 _modifiers.size(), prefixes, affixes);
-    }
-
-    Modifier const* Manager::Find(std::string const& key, Kind kind) const
-    {
-        for (Modifier const& modifier : _modifiers)
-            if (modifier.kind == kind && modifier.key == key)
+        if (!key)
+            return nullptr;
+        for (Modifier const& modifier : Modifiers)
+            if (modifier.kind == kind && std::string(modifier.key) == key)
                 return &modifier;
         return nullptr;
     }
 
-    Modifier const* Manager::PrefixAt(int8 index) const
+    Modifier const* Manager::PrefixAt(int8 index)
     {
-        if (index < 0 || static_cast<size_t>(index) >= _modifiers.size())
+        uint32 count = sizeof(Modifiers) / sizeof(Modifiers[0]);
+        if (index < 0 || static_cast<uint32>(index) >= count || Modifiers[index].kind != Kind::Prefix)
             return nullptr;
-        Modifier const& modifier = _modifiers[index];
-        return modifier.kind == Kind::Prefix ? &modifier : nullptr;
+        return &Modifiers[index];
     }
 
-    Modifier const* Manager::AffixAt(int8 index) const
+    Modifier const* Manager::AffixAt(int8 index)
     {
-        if (index < 0 || static_cast<size_t>(index) >= _modifiers.size())
+        uint32 count = sizeof(Modifiers) / sizeof(Modifiers[0]);
+        if (index < 0 || static_cast<uint32>(index) >= count || Modifiers[index].kind != Kind::Affix)
             return nullptr;
-        Modifier const& modifier = _modifiers[index];
-        return modifier.kind == Kind::Affix ? &modifier : nullptr;
-    }
-
-    std::string Manager::KeyList(Kind kind) const
-    {
-        std::string keys;
-        for (Modifier const& modifier : _modifiers)
-        {
-            if (modifier.kind != kind)
-                continue;
-            if (!keys.empty())
-                keys += ", ";
-            keys += modifier.key;
-        }
-        return keys.empty() ? "none" : keys;
+        return &Modifiers[index];
     }
 
     bool Manager::Eligible(Creature const* creature) const
@@ -271,7 +154,7 @@ namespace CreatureAffixes
             return false;
 
         uint32 total = 0;
-        for (Modifier const& modifier : _modifiers)
+        for (Modifier const& modifier : Modifiers)
             if (modifier.kind == Kind::Prefix)
                 total += Weight(modifier.influence);
         if (!total)
@@ -279,15 +162,14 @@ namespace CreatureAffixes
 
         uint32 roll = urand(1, total);
         uint32 seen = 0;
-        for (size_t i = 0; i < _modifiers.size(); ++i)
+        for (Modifier const& modifier : Modifiers)
         {
-            Modifier const& modifier = _modifiers[i];
             if (modifier.kind != Kind::Prefix)
                 continue;
             seen += Weight(modifier.influence);
             if (roll <= seen)
             {
-                state.prefix = static_cast<int8>(i);
+                state.prefix = static_cast<int8>(&modifier - Modifiers);
                 return true;
             }
         }
@@ -300,7 +182,7 @@ namespace CreatureAffixes
             return false;
 
         uint32 total = 0;
-        for (Modifier const& modifier : _modifiers)
+        for (Modifier const& modifier : Modifiers)
             if (modifier.kind == Kind::Affix)
                 total += Weight(modifier.influence);
         if (!total)
@@ -308,15 +190,14 @@ namespace CreatureAffixes
 
         uint32 roll = urand(1, total);
         uint32 seen = 0;
-        for (size_t i = 0; i < _modifiers.size(); ++i)
+        for (Modifier const& modifier : Modifiers)
         {
-            Modifier const& modifier = _modifiers[i];
             if (modifier.kind != Kind::Affix)
                 continue;
             seen += Weight(modifier.influence);
             if (roll <= seen)
             {
-                state.affix = static_cast<int8>(i);
+                state.affix = static_cast<int8>(&modifier - Modifiers);
                 return true;
             }
         }
@@ -432,8 +313,8 @@ namespace CreatureAffixes
         if (_settings.debug)
             LOG_DEBUG("module", "mod-creature-affixes: spawn {} entry {} prefix={} affix={} size={:.2f}",
                       creature->GetGUID().ToString(), creature->GetEntry(),
-                      PrefixAt(state.prefix) ? PrefixAt(state.prefix)->label : "none",
-                      AffixAt(state.affix) ? AffixAt(state.affix)->label : "none",
+                      PrefixAt(state.prefix) ? PrefixAt(state.prefix)->name : "none",
+                      AffixAt(state.affix) ? AffixAt(state.affix)->name : "none",
                       state.sizeFactor);
     }
 
@@ -589,19 +470,10 @@ namespace CreatureAffixes
     {
         if (!creature)
             return;
-        bool applied = true;
         if (Modifier const* prefix = PrefixAt(state.prefix))
-            applied = creature->AddAura(prefix->carrierSpell, creature) != nullptr;
+            creature->AddAura(prefix->carrierSpell, creature);
         if (Modifier const* affix = AffixAt(state.affix))
-            applied = creature->AddAura(affix->carrierSpell, creature) != nullptr;
-        if (!applied)
-        {
-            LOG_WARN("module", "mod-creature-affixes: could not apply hidden markers to {} ({})",
-                     creature->GetName(), creature->GetGUID().ToString());
-            state.markersApplied = false;
-            state.markersPending = false;
-            return;
-        }
+            creature->AddAura(affix->carrierSpell, creature);
         state.markersApplied = true;
         state.markersPending = false;
     }
@@ -611,9 +483,9 @@ namespace CreatureAffixes
         if (!creature)
             return;
         // Remove only the aura this creature cast as our carrier. A natural
-        // aura with the same spell id on an NPC has another caster and must
-        // survive. The caster check is also sufficient after death: a carrier
-        // that survives the corpse is still ours to remove.
+        // "Mind Whispers" or "Out of Rockets" on an NPC has another caster and
+        // must survive. The caster check is also sufficient after death: a
+        // carrier that survives the corpse is still ours to remove.
         if (Modifier const* prefix = PrefixAt(state.prefix))
             creature->RemoveAura(prefix->carrierSpell, creature->GetGUID());
         if (Modifier const* affix = AffixAt(state.affix))
@@ -685,19 +557,19 @@ namespace CreatureAffixes
         Modifier const* affix = nullptr;
         if (Lower(prefixKey) != "none")
         {
-            prefix = Find(Lower(prefixKey), Kind::Prefix);
+            prefix = Find(Lower(prefixKey).c_str(), Kind::Prefix);
             if (!prefix)
             {
-                message = "Unknown prefix '" + prefixKey + "'. Configured prefixes: " + KeyList(Kind::Prefix) + ", or none.";
+                message = "Unknown prefix '" + prefixKey + "'. Use vicious, gilded or none.";
                 return false;
             }
         }
         if (Lower(affixKey) != "none")
         {
-            affix = Find(Lower(affixKey), Kind::Affix);
+            affix = Find(Lower(affixKey).c_str(), Kind::Affix);
             if (!affix)
             {
-                message = "Unknown affix '" + affixKey + "'. Configured affixes: " + KeyList(Kind::Affix) + ", or none.";
+                message = "Unknown affix '" + affixKey + "'. Use bear or none.";
                 return false;
             }
         }
@@ -705,8 +577,8 @@ namespace CreatureAffixes
         State old = GetState(creature->GetGUID());
         State state;
         state.baseMaxHealth = old.baseMaxHealth ? old.baseMaxHealth : creature->GetMaxHealth();
-        state.prefix = prefix ? static_cast<int8>(prefix - _modifiers.data()) : -1;
-        state.affix = affix ? static_cast<int8>(affix - _modifiers.data()) : -1;
+        state.prefix = prefix ? static_cast<int8>(prefix - Modifiers) : -1;
+        state.affix = affix ? static_cast<int8>(affix - Modifiers) : -1;
         state.selectLevelApplied = true;
 
         std::string size = Lower(sizeKey);
@@ -750,8 +622,8 @@ namespace CreatureAffixes
         State state = GetState(creature->GetGUID());
         std::ostringstream out;
         out << "entry=" << creature->GetEntry()
-            << " prefix=" << (PrefixAt(state.prefix) ? PrefixAt(state.prefix)->label : "none")
-            << " affix=" << (AffixAt(state.affix) ? AffixAt(state.affix)->label : "none")
+            << " prefix=" << (PrefixAt(state.prefix) ? PrefixAt(state.prefix)->name : "none")
+            << " affix=" << (AffixAt(state.affix) ? AffixAt(state.affix)->name : "none")
             << " size=" << (state.size == Size::Tiny ? "tiny" : state.size == Size::Giant ? "giant" : "none")
             << " factor=" << state.sizeFactor
             << " baseMaxHealth=" << state.baseMaxHealth
@@ -771,20 +643,13 @@ namespace CreatureAffixes
 namespace CreatureAffixes
 {
     WorldScriptImpl::WorldScriptImpl()
-        : WorldScript("mod-creature-affixes", { WORLDHOOK_ON_AFTER_CONFIG_LOAD, WORLDHOOK_ON_BEFORE_WORLD_INITIALIZED })
+        : WorldScript("mod-creature-affixes", { WORLDHOOK_ON_AFTER_CONFIG_LOAD })
     {
     }
 
     void WorldScriptImpl::OnAfterConfigLoad(bool /*reload*/)
     {
         Manager::instance().LoadConfig();
-    }
-
-    void WorldScriptImpl::OnBeforeWorldInitialized()
-    {
-        // The grid preload runs after this hook; loading in OnStartup would leave
-        // every preloaded spawn with an empty modifier pool and no affix roll.
-        Manager::instance().LoadModifiers();
     }
 
     SpawnScript::SpawnScript()
@@ -893,14 +758,14 @@ public:
 
         if (command != "set")
         {
-            handler->SendSysMessage("usage: .affix show | .affix set <prefix-key|none> <affix-key|none> <tiny|giant|none>");
+            handler->SendSysMessage("usage: .affix show | .affix set <vicious|gilded|none> <bear|none> <tiny|giant|none>");
             return false;
         }
 
         std::string prefix, affix, size;
         if (!(input >> prefix >> affix >> size))
         {
-            handler->SendSysMessage("usage: .affix set <prefix-key|none> <affix-key|none> <tiny|giant|none>");
+            handler->SendSysMessage("usage: .affix set <vicious|gilded|none> <bear|none> <tiny|giant|none>");
             return false;
         }
 

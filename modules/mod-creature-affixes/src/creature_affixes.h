@@ -7,13 +7,9 @@
  *   - Gilded (prefix)        one extra creature loot roll
  *   - Tiny / Giant           hidden size layer, outdoor world only
  *
- * The marker auras are stock client-known dummy spells with
- * SPELL_ATTR0_DO_NOT_DISPLAY. The client receives them but hides the aura bar
- * entry; the client add-on maps their spell names to the modifier labels. No
+ * The marker auras are stock client-known dummy spells. The client add-on maps
+ * their stock spell names to the Vicious / of the Bear / Gilded labels; no
  * client patch is involved. Size never gets a marker or add-on data.
- *
- * Modifier definitions live in `mod_creature_affixes_modifier` and are loaded
- * once at world startup. Per-spawn state stays in memory.
  */
 
 #ifndef MOD_CREATURE_AFFIXES_H
@@ -25,7 +21,6 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 #include "AllCreatureScript.h"
 #include "ObjectGuid.h"
@@ -52,7 +47,6 @@ namespace CreatureAffixes
 
     enum class Effect : uint8
     {
-        None,
         Vicious,
         Bear,
         Gilded,
@@ -67,13 +61,23 @@ namespace CreatureAffixes
 
     struct Modifier
     {
-        std::string key;
+        char const* key;
         Kind kind;
-        std::string label;
+        char const* name;
+        char const* tooltip;
         uint32 carrierSpell;
         uint8 influence;
         Effect effect;
         float amount;
+    };
+
+    // The only modifier rows this initial slice implements. The remaining rows
+    // from the design stay absent rather than being silently stubbed.
+    inline constexpr Modifier Modifiers[] =
+    {
+        { "vicious", Kind::Prefix, "Vicious",       "Vicious: +12% physical damage.",       2584, 2, Effect::Vicious, 0.12f },
+        { "gilded",  Kind::Prefix, "Gilded",        "Gilded: one extra loot roll.",         5428, 1, Effect::Gilded,  1.00f },
+        { "bear",    Kind::Affix,  "of the Bear",   "of the Bear: +15% maximum health.",    5430, 2, Effect::Bear,    0.15f },
     };
 
     struct Settings
@@ -111,7 +115,6 @@ namespace CreatureAffixes
         static Manager& instance();
 
         void LoadConfig();
-        void LoadModifiers();
 
         void OnCreatureSelectLevel(Creature* creature);
         void OnCreatureAddWorld(Creature* creature);
@@ -132,8 +135,8 @@ namespace CreatureAffixes
                    std::string const& sizeKey, std::string& message);
         std::string Describe(Creature* creature) const;
 
-        Modifier const* PrefixAt(int8 index) const;
-        Modifier const* AffixAt(int8 index) const;
+        static Modifier const* PrefixAt(int8 index);
+        static Modifier const* AffixAt(int8 index);
 
     private:
         Manager() = default;
@@ -153,11 +156,9 @@ namespace CreatureAffixes
         void QueueUpdate(ObjectGuid guid);
         void MarkPending(ObjectGuid guid, State& state);
         void EraseState(ObjectGuid guid);
-        Modifier const* Find(std::string const& key, Kind kind) const;
-        std::string KeyList(Kind kind) const;
+        static Modifier const* Find(char const* key, Kind kind);
 
         Settings _settings;
-        std::vector<Modifier> _modifiers;
         mutable std::mutex _mutex;
         std::unordered_map<uint64, State> _states;
         std::unordered_set<uint64> _pendingUpdates;
@@ -170,7 +171,6 @@ namespace CreatureAffixes
     public:
         WorldScriptImpl();
         void OnAfterConfigLoad(bool reload) override;
-        void OnBeforeWorldInitialized() override;
     };
 
     class SpawnScript : public AllCreatureScript

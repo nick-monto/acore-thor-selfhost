@@ -69,11 +69,11 @@
     overwrites a working server with a different one.
 
 .PARAMETER Bots
-    Random bots to enable (default 300). Written to Playerbots.MinRandomBots and
+    Random bots to enable (default 50). Written to Playerbots.MinRandomBots and
     Playerbots.MaxRandomBots; set-bots.ps1 changes it later without a full re-run.
 
 .PARAMETER HordeRatio
-    Percentage of the random bots on the Horde side, 0-100 (default 70). Alliance is the
+    Percentage of the random bots on the Horde side, 0-100 (default 50). Alliance is the
     remainder, so the pair always sums to 100 - the same rule the Thor's start-wow-server.sh
     --horde-ratio applies. In Docker mode it is the container's HORDE_RATIO and is rendered into
     playerbots.conf at every start; in native mode it is written into the conf directly.
@@ -113,9 +113,9 @@
     The 3.3.5a client folder - the World of Warcraft folder itself, the one holding
     Data\common.MPQ - or "none". Its Data folder is accepted instead of the parent, a quoted path
     is accepted as-is (Explorer's Copy as path adds the quotes), and the value is stored absolute.
-    The loot bags are
-    custom items, and a client draws an inventory item from its own Item.dbc, so this folder
-    gets a patch archive with the 64 bag records and the server's data\dbc\Item.dbc gets the
+    The loot bags and the
+    runes are custom items, and a client draws an inventory item from its own Item.dbc, so this
+    folder gets a patch archive with their records and the server's data\dbc\Item.dbc gets the
     same records. The client lives outside the install root and outside the container, so this
     half always runs on the host, for both modes. Default: the remembered folder, or one
     question when the install starts; the answer is kept in %USERPROFILE%\.win-wow\client-data.
@@ -186,8 +186,8 @@ param(
     [switch]$Uninstall,
     [switch]$KeepDb,
     [switch]$Force,
-    [int]$Bots = 300,
-    [int]$HordeRatio = 70,
+    [int]$Bots = 50,
+    [int]$HordeRatio = 50,
     [string]$DbUser = 'acore',
     [string]$DbPass = '',
     [string]$Account = 'admin',
@@ -257,7 +257,6 @@ $DockerFiles = @(
     'scripts/item-dbc/patch_item_dbc.py'
     'scripts/loot-bags/gen_loot_bags.py'
     'scripts/lib/dbc_mpq.py'
-    'scripts/skateboard/patch_deck_dbc.py'
 )
 $SelfRefDefault = 'main'
 $DockerRepoBase = 'https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/'
@@ -278,6 +277,21 @@ $SurvivorConfDefaults = @(
     'Survivor.BotRegenOnDeath=1'
     'Survivor.BotDropContainer=1'
 )
+
+# mod-runewords's conf keys with the values its shipped .dist carries. Same contract as the survivor
+# list: a key absent from the file or outside its range is silently replaced by the module's own
+# fallback, so Write-Configs() and Invoke-Checks() restore it from here. SweepIntervalMs is the
+# interval one player's bags are rescanned at, and the module floors it at 200 ms.
+$RunewordConfDefaults = @(
+    'Runewords.Enable=1'
+    'Runewords.SweepIntervalMs=1000'
+    'Runewords.ApplyWhenDead=0'
+    'Runewords.Announce=1'
+)
+
+# mod-creature-affixes's conf keys with the values its shipped .dist carries. Same contract as the
+# survivor list: a key absent from the file or outside its range is silently replaced by the
+# module's own fallback, so Write-Configs() and Invoke-Checks() restore it from here.
 $CreatureAffixesConfDefaults = @(
     'CreatureAffixes.Enable=1'
     'CreatureAffixes.Debug=0'
@@ -323,48 +337,6 @@ $MercenaryConfDefaults = @(
     'Mercenary.PoolRefreshMinMinutes=40'
     'Mercenary.PoolRefreshMaxMinutes=60'
     'Mercenary.Debug=0'
-)
-
-# mod-skateboard's conf keys with the values its shipped .dist carries. Same contract as the
-# survivor list: a key absent from the file or outside its range is silently replaced by the
-# module's own fallback, so Write-Configs() and Invoke-Checks() restore it from here. These are the
-# module's whole conf - nineteen scalars, no lists - and Skateboard.Enable ships as 1.
-$SkateboardConfDefaults = @(
-    'Skateboard.Enable=0'
-    'Skateboard.Deck=plank'
-    'Skateboard.Deck.Render=unit'
-    'Skateboard.Deck.Carrier=29443'
-    'Skateboard.Deck.FollowMs=40'
-    'Skateboard.MaxSpeed=21.0'
-    'Skateboard.Cruise=4.0'
-    'Skateboard.PushImpulse=4.0'
-    'Skateboard.Push.Mode=0'
-    'Skateboard.Push.IntervalMs=500'
-    'Skateboard.Push.MaxHoldMs=2000'
-    'Skateboard.Friction.Static=1.5'
-    'Skateboard.Friction.Rolling=0.004'
-    'Skateboard.SlopeGain=30.0'
-    'Skateboard.Drive=1'
-    'Skateboard.Drive.Mode=1'
-    'Skateboard.Drive.ImpulseMs=350'
-    'Skateboard.Drive.ArcMs=0'
-    'Skateboard.Drive.SplineMs=400'
-    'Skateboard.Drive.GroundMs=100'
-    'Skateboard.Drive.MinSpeed=3.0'
-    'Skateboard.Brake=6.0'
-    'Skateboard.LandingBonus=2.0'
-    'Skateboard.Tricks=1'
-    'Skateboard.Trick.VisualKit=5036'
-    'Skateboard.Trick.List=kickflip:399:5036, ollie:394:5036, grind:388:5036'
-    'Skateboard.Crash.Enable=1'
-    'Skateboard.Crash.DamagePct=8'
-    'Skateboard.Crash.StaggerMs=1500'
-    'Skateboard.HardcoreSafe=1'
-    'Skateboard.OffOnHit=1'
-    'Skateboard.BoardCastMs=2000'
-    'Skateboard.AckTimeoutMs=500'
-    'Skateboard.Vehicle.Probe=0'
-    'Skateboard.Debug=0'
 )
 
 # ---------------------------------------------------------------- mutable state
@@ -597,8 +569,8 @@ function Get-FetchRef {
 function Resolve-SelfRef {
     <# Resolve-SelfRef - pin -SelfRef to a commit, once, and fetch from that commit from then on. #>
     # -SelfRef defaults to a branch, and a branch is a moving pointer: the entrypoint.sh this installer
-    # fetches and runs as root inside the acore container, the compose file, and the two python files
-    # it runs as the user are whatever main holds at that moment. A commit is content-addressed -
+    # fetches and runs as root inside the acore container, the compose file, and the python files it
+    # runs as the user are whatever main holds at that moment. A commit is content-addressed -
     # GitHub cannot serve different bytes for the same commit - so the first run resolves the ref once
     # and records the commit in the state file; every later -Repair fetches from the recorded commit,
     # and a branch or tag that moves afterwards cannot change what an installed realm runs.
@@ -643,7 +615,7 @@ function Resolve-SelfRef {
 function Reset-SelfRefPin {
     <# Reset-SelfRefPin - forget a recorded pin and resolve -SelfRef again. #>
     # A recorded pin is content-addressed, not immortal: a file a newer artifact ships (for example
-    # scripts/lib/dbc_mpq.py, which came after the deck tool that imports it) does not exist at the
+    # scripts/lib/dbc_mpq.py, which came after the tool that imports it) does not exist at the
     # commit an older install pinned. Dropping both the pin and the state copy is what stops
     # Save-State from writing the stale commit back.
     $script:SelfRefSha = ''
@@ -1332,6 +1304,26 @@ function Test-SurvivorValueOk {
     }
 }
 
+function Test-RunewordValueOk {
+    <# Test-RunewordValueOk KEY VALUE - true when mod-runewords accepts VALUE. #>
+    param(
+        [string]$Key,
+        [string]$Value
+    )
+    # The ranges are the ones mod-runewords's own conf comments state: three 0|1 switches, and a
+    # rescan interval from the module's own 200 ms floor up to a minute, so a typo pasted in ms
+    # cannot turn the per-tick scan into a busy loop.
+    if ($Value -notmatch '^[0-9]+$') { return $false }
+    $n = [int64]$Value
+    switch -CaseSensitive ($Key) {
+        'Runewords.Enable' { return ($n -eq 0 -or $n -eq 1) }
+        'Runewords.ApplyWhenDead' { return ($n -eq 0 -or $n -eq 1) }
+        'Runewords.Announce' { return ($n -eq 0 -or $n -eq 1) }
+        'Runewords.SweepIntervalMs' { return ($n -ge 200 -and $n -le 60000) }
+        default { return $false }
+    }
+}
+
 function Test-CreatureAffixesValueOk {
     <# Test-CreatureAffixesValueOk KEY VALUE - true when mod-creature-affixes accepts VALUE. #>
     param(
@@ -1362,71 +1354,6 @@ function Test-CreatureAffixesValueOk {
             $n = [double]$Value
             return ($n -ge 1 -and $n -le 2)
         }
-        default { return $false }
-    }
-}
-
-function Test-SkateboardValueOk {
-    <# Test-SkateboardValueOk KEY VALUE - true when mod-skateboard accepts VALUE. #>
-    param(
-        [string]$Key,
-        [string]$Value
-    )
-    # The ranges are the ones the contract states: the 0|1 switches, MaxSpeed 1-40 yd/s,
-    # PushImpulse and LandingBonus 0-20 yd/s, the static/rolling friction 0-20 and 0-1, SlopeGain
-    # 0-90, the visual kit 0-100000 (0 = no flair), crash damage 0-99 percent, the stagger 0-10000
-    # ms and the ACK timeout 50-5000 ms. Deck and Deck.Render are names, not ranges, so both are
-    # settled before the numeric guard can see them; the momentum keys carry decimals, so the
-    # comparison is a double, not an int64.
-    if ($Key -ceq 'Skateboard.Deck') {
-        if ($Value -ceq 'log' -or $Value -ceq 'plank' -or $Value -ceq 'engravedwall' -or $Value -ceq 'coffinlid') { return $true }
-        if ($Value -notmatch '^[0-9]{1,12}$') { return $false }
-        return ([int64]$Value -gt 0)
-    }
-    if ($Key -ceq 'Skateboard.Deck.Render') { return ($Value -ceq 'unit' -or $Value -ceq 'mount') }
-    if ($Key -ceq 'Skateboard.Trick.List') {
-        # A list, not a number: `name:emote[:kit]` entries separated by commas, settled here so the
-        # numeric guard below never sees it. The module drops an entry it cannot use, so anything
-        # with a colon is accepted - without this branch the shipped list was "unusable" and was
-        # rewritten on every -Repair.
-        return ($Value -cmatch ':')
-    }
-    # The switches are checked as text first: an integer-only guard would accept 1.0, which the
-    # core's sConfigMgr does not read as a switch.
-    if (@('Skateboard.Enable', 'Skateboard.Tricks', 'Skateboard.Crash.Enable',
-          'Skateboard.HardcoreSafe', 'Skateboard.OffOnHit', 'Skateboard.Debug',
-          'Skateboard.Drive') -ccontains $Key) {
-        return ($Value -ceq '0' -or $Value -ceq '1')
-    }
-    # Bounded digits, so a value pasted out of a log cannot hand an unbounded string to Parse (and
-    # to the $ErrorActionPreference = 'Stop' abort that follows a throw).
-    if ($Value -notmatch '^[0-9]{1,12}(\.[0-9]{1,6})?$') { return $false }
-    $n = [double]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture)
-    if ($Key -ceq 'Skateboard.Deck.Carrier') { return ($n -ge 1 -and $n -le 4294967295) }
-    if ($Key -ceq 'Skateboard.Push.Mode') { return ($n -eq 0 -or $n -eq 1) }
-    switch -CaseSensitive ($Key) {
-        'Skateboard.BoardCastMs' { return ($n -ge 0 -and $n -le 10000) }
-        'Skateboard.MaxSpeed' { return ($n -ge 1 -and $n -le 40) }
-        'Skateboard.Cruise' { return ($n -ge 0 -and $n -le 20) }
-        'Skateboard.Deck.FollowMs' { return ($n -ge 20 -and $n -le 1000) }
-        'Skateboard.PushImpulse' { return ($n -ge 0 -and $n -le 20) }
-        'Skateboard.Push.IntervalMs' { return ($n -ge 100 -and $n -le 2000) }
-        'Skateboard.Push.MaxHoldMs' { return ($n -ge 100 -and $n -le 5000) }
-        'Skateboard.Friction.Static' { return ($n -ge 0 -and $n -le 20) }
-        'Skateboard.Friction.Rolling' { return ($n -ge 0 -and $n -le 1) }
-        'Skateboard.SlopeGain' { return ($n -ge 0 -and $n -le 90) }
-        'Skateboard.Drive.ImpulseMs' { return ($n -ge 100 -and $n -le 2000) }
-        'Skateboard.Drive.Mode' { return ($n -eq 0 -or $n -eq 1) }
-        'Skateboard.Drive.ArcMs' { return ($n -ge 0 -and $n -le 2000) }
-        'Skateboard.Drive.SplineMs' { return ($n -ge 50 -and $n -le 1000) }
-        'Skateboard.Drive.GroundMs' { return ($n -ge 0 -and $n -le 1000) }
-        'Skateboard.Drive.MinSpeed' { return ($n -ge 0 -and $n -le 40) }
-        'Skateboard.Brake' { return ($n -ge 0 -and $n -le 50) }
-        'Skateboard.LandingBonus' { return ($n -ge 0 -and $n -le 20) }
-        'Skateboard.Trick.VisualKit' { return ($n -ge 0 -and $n -le 100000) }
-        'Skateboard.Crash.DamagePct' { return ($n -ge 0 -and $n -le 99) }
-        'Skateboard.Crash.StaggerMs' { return ($n -ge 0 -and $n -le 10000) }
-        'Skateboard.AckTimeoutMs' { return ($n -ge 50 -and $n -le 5000) }
         default { return $false }
     }
 }
@@ -2090,7 +2017,7 @@ function Write-Configs {
     Step 'Configuration'
     if ($script:DryRun) {
         Log "would write $script:ConfDir\{authserver,worldserver}.conf"
-        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod_e_interact,mod-survivor,mod-creature-affixes,mod-mercenaries,mod-skateboard}.conf"
+        Log "would write $script:ConfDir\modules\{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-creature-affixes,mod-mercenaries}.conf"
         Log "would create $script:LogsDir"
         return
     }
@@ -2219,27 +2146,6 @@ function Write-Configs {
         Warn "no $moduleConf\mod-creature-gear.conf.dist - the artifact was built without the module, creatures keep their stock gear"
     }
 
-    if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod_e_interact.conf.dist')) -or
-        (Test-Path -LiteralPath (Join-Path $moduleConf 'mod_e_interact.conf'))) {
-        $ei = Get-ConfPair 'modules\mod_e_interact'
-        # One key for the whole interact loop (loot, gather, talk, chests and nodes). Every option
-        # defaults to on in the shipped .dist; a drifted key is put back, since a silent 0 here
-        # looks exactly like a broken key in game. EInteract.Roll is deliberately NOT in this list:
-        # it is an opt-out the player may have taken on purpose.
-        foreach ($key in @('EInteract.Enable', 'EInteract.Loot', 'EInteract.Gather', 'EInteract.Talk', 'EInteract.Use')) {
-            $value = Get-Conf $ei $key
-            if ($value -ne '1') {
-                Warn "mod_e_interact.conf: $key is '$value', restoring the shipped default 1"
-                Set-Conf -File $ei -Key $key -Value 1
-            }
-        }
-        Log ("mod_e_interact.conf: Enable={0} Loot={1} Gather={2} Talk={3} Use={4}" -f `
-            (Get-Conf $ei 'EInteract.Enable'), (Get-Conf $ei 'EInteract.Loot'), (Get-Conf $ei 'EInteract.Gather'), `
-            (Get-Conf $ei 'EInteract.Talk'), (Get-Conf $ei 'EInteract.Use'))
-    } else {
-        Warn "no $moduleConf\mod_e_interact.conf.dist - the artifact was built without the module, the interact key will not work"
-    }
-
     if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod_hardcore.conf.dist')) -or
         (Test-Path -LiteralPath (Join-Path $moduleConf 'mod_hardcore.conf'))) {
         $hc = Get-ConfPair 'modules\mod_hardcore'
@@ -2271,6 +2177,22 @@ function Write-Configs {
             (Get-Conf $sv 'Survivor.DropBags'), (Get-Conf $sv 'Survivor.ApplyToBots'))
     } else {
         Warn "no $moduleConf\mod-survivor.conf.dist - the artifact was built without the module, survivor mode is unavailable"
+    }
+
+    if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-runewords.conf.dist')) -or
+        (Test-Path -LiteralPath (Join-Path $moduleConf 'mod-runewords.conf'))) {
+        $rw = Get-ConfPair 'modules\mod-runewords'
+        # The shipped .dist already holds these values; each one is still read back, because a key
+        # the module cannot use is silently replaced by the module's own default - a sweep interval
+        # below the floor is raised to it, and a switch that is not 0|1 leaves the feature where it
+        # was. Only a value outside its range is rewritten, so a deliberate Enable=0 survives.
+        Set-ConfDefaults -File $rw -Check { param($k, $v) Test-RunewordValueOk -Key $k -Value $v } `
+            -Label 'mod-runewords.conf' -Defaults $RunewordConfDefaults
+        Log ("mod-runewords.conf: Enable={0} SweepIntervalMs={1} ApplyWhenDead={2} Announce={3}" -f `
+            (Get-Conf $rw 'Runewords.Enable'), (Get-Conf $rw 'Runewords.SweepIntervalMs'), `
+            (Get-Conf $rw 'Runewords.ApplyWhenDead'), (Get-Conf $rw 'Runewords.Announce'))
+    } else {
+        Warn "no $moduleConf\mod-runewords.conf.dist - the artifact was built without the module, runewords are unavailable"
     }
 
     if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-creature-affixes.conf.dist')) -or
@@ -2313,36 +2235,6 @@ function Write-Configs {
         Warn "no $moduleConf\mod-mercenaries.conf.dist - the artifact was built without the module, the innkeeper picker is unavailable"
     }
 
-    if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-skateboard.conf.dist')) -or
-        (Test-Path -LiteralPath (Join-Path $moduleConf 'mod-skateboard.conf'))) {
-        $sb = Get-ConfPair 'modules\mod-skateboard'
-        # The shipped .dist already holds these values, and Skateboard.Enable ships as 1: the board
-        # is available, and nobody is on it until the player boards. Each key is still read back,
-        # because a key the module cannot use is silently replaced by its own fallback and a deck
-        # id the DBC does not carry falls back to the stock display. Only a value outside its range
-        # is rewritten - a deliberate Enable=0 is left alone.
-        # Skateboard.OffInCombat is gone: the start of a fight leaves the deck alone and a hit takes
-        # it (Skateboard.OffOnHit). Nothing reads the old key, so it is deleted rather than left
-        # looking live.
-        Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.OffInCombat$'
-        # MountedPose was the mount render's seat switch, folded into Render = mount.
-        Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.MountedPose$'
-        # 16386 was the shipped carrier until it turned out to carry ScriptName npc_necropolis_relay,
-        # which marks every summoned deck active. The module refuses a scripted row, so an upgraded
-        # conf that still names it is migrated instead of boarding an invisible deck.
-        if ((Get-Conf $sb 'Skateboard.Deck.Carrier') -eq '16386') {
-            Warn 'mod-skateboard.conf: Skateboard.Deck.Carrier 16386 is scripted (npc_necropolis_relay), using 29443'
-            Set-Conf -File $sb -Key 'Skateboard.Deck.Carrier' -Value '29443'
-        }
-        Set-ConfDefaults -File $sb -Check { param($k, $v) Test-SkateboardValueOk -Key $k -Value $v } `
-            -Label 'mod-skateboard.conf' -Defaults $SkateboardConfDefaults
-        Log ("mod-skateboard.conf: Enable={0} Deck={1} Render={2} MaxSpeed={3} Crash.Enable={4}" -f `
-            (Get-Conf $sb 'Skateboard.Enable'), (Get-Conf $sb 'Skateboard.Deck'), `
-            (Get-Conf $sb 'Skateboard.Deck.Render'), (Get-Conf $sb 'Skateboard.MaxSpeed'), `
-            (Get-Conf $sb 'Skateboard.Crash.Enable'))
-    } else {
-        Warn "no $moduleConf\mod-skateboard.conf.dist - the artifact was built without the module, the skateboard is unavailable"
-    }
     Log ("worldserver.conf: DataDir={0} BindIP={1}" -f (Get-Conf $ws 'DataDir'), (Get-Conf $ws 'BindIP'))
 
     # These three carry the database password in LoginDatabaseInfo / WorldDatabaseInfo, and they
@@ -3129,11 +3021,14 @@ function Get-PythonCommand {
 }
 
 function Get-ItemDbcTool {
-    <# Get-ItemDbcTool - fetch the two Item.dbc tools at -SelfRef; '' when they cannot be fetched. #>
-    # Both, and in the repository's own layout: patch_item_dbc.py loads scripts/loot-bags/
+    <# Get-ItemDbcTool - fetch the Item.dbc tools at -SelfRef; '' when they cannot be fetched. #>
+    # All of them, and in the repository's own layout: patch_item_dbc.py loads scripts/loot-bags/
     # gen_loot_bags.py from its parent directory (GENERATOR = HERE.parent / 'loot-bags' / ...) to get
-    # the bag ids and display ids. Fetching only the patch script fails at run time with
-    # "FileNotFoundError: ...\loot-bags\gen_loot_bags.py".
+    # the bag ids and display ids, and reads the committed rune SQL from its grandparent
+    # (RUNEWORD_SQL = HERE.parents[1] / 'sql' / 'custom' / 'db_world' / ...) for the runes' records.
+    # Fetching only the patch script fails at run time with "FileNotFoundError: ...\loot-bags\..."
+    # or "…\sql\custom\db_world\runewords_10_items.sql is missing". The rune generator rides the
+    # same list because regenerating that SQL is a host-side step and the pinned core is not here.
     $dir = Join-Path $script:HostState 'tools'
     $tool = Join-Path (Join-Path $dir 'item-dbc') 'patch_item_dbc.py'
     # Objects, not nested arrays: @(@('a','b'), @('c','d')) is flattened by PowerShell into one
@@ -3142,7 +3037,8 @@ function Get-ItemDbcTool {
         [pscustomobject]@{ Rel = 'scripts/item-dbc/patch_item_dbc.py'; Path = $tool }
         [pscustomobject]@{ Rel = 'scripts/loot-bags/gen_loot_bags.py'; Path = (Join-Path (Join-Path $dir 'loot-bags') 'gen_loot_bags.py') }
         [pscustomobject]@{ Rel = 'scripts/lib/dbc_mpq.py'; Path = (Join-Path (Join-Path $dir 'lib') 'dbc_mpq.py') }
-        [pscustomobject]@{ Rel = 'scripts/skateboard/patch_deck_dbc.py'; Path = (Join-Path (Join-Path $dir 'skateboard') 'patch_deck_dbc.py') }
+        [pscustomobject]@{ Rel = 'scripts/runewords/gen_runewords.py'; Path = (Join-Path (Join-Path $dir 'runewords') 'gen_runewords.py') }
+        [pscustomobject]@{ Rel = 'sql/custom/db_world/runewords_10_items.sql'; Path = (Join-Path (Join-Path $dir 'sql/custom/db_world') 'runewords_10_items.sql') }
     )
     $missing = @($files | Where-Object { -not (Test-Path -LiteralPath $_.Path) })
     if ($script:DryRun) {
@@ -3183,11 +3079,7 @@ function Get-ServerDbcDir {
     }
     $dir = Join-Path $env:TEMP ('acore-itemdbc-' + [guid]::NewGuid().ToString('N'))
     [void][System.IO.Directory]::CreateDirectory($dir)
-    # Item.dbc for the bag records, and the two the deck rows need: the deck tool clones the stock
-    # log's rows out of CreatureModelData/CreatureDisplayInfo, so it cannot run from Item.dbc alone.
-    foreach ($name in @('Item.dbc', 'CreatureModelData.dbc', 'CreatureDisplayInfo.dbc')) {
-        $null = Invoke-Compose -Arguments @('cp', ('acore:/opt/acore/data/dbc/' + $name), $dir) -AllowFailure
-    }
+    $null = Invoke-Compose -Arguments @('cp', 'acore:/opt/acore/data/dbc/Item.dbc', $dir) -AllowFailure
     if (-not (Test-Path -LiteralPath (Join-Path $dir 'Item.dbc'))) { return '' }
     return $dir
 }
@@ -3213,7 +3105,7 @@ function Test-ServerDbc {
 function Show-ClientPatchStatus {
     <# Show-ClientPatchStatus - report the loot-bag client half; shared by -Status and -Docker -Status. #>
     # Reported, not fixed: the client folder is the player's, so the only automatic fix is -Repair,
-    # which runs Install-ClientPatch.
+    # which runs Install-ItemDbcPatch.
     $clientRoot = Read-ClientDataChoice
     if (-not $clientRoot) {
         Note 'client folder: none recorded (pass -ClientData DIR to write the loot-bag patch into it)'
@@ -3243,20 +3135,12 @@ function Show-ClientPatchStatus {
     }
 }
 
-function Install-ClientPatch {
-    <# Install-ClientPatch - the two client-data patches: Item.dbc (bags) then the deck DBCs. #>
-    # Two steps, one entry point: every caller (-Install, -Repair, -Docker and -Status's fix arm)
-    # wants both or neither, and the deck rows are the second thing a fresh client is missing.
-    Install-ItemDbcPatch
-    Install-DeckPatch
-}
-
 function Install-ItemDbcPatch {
     Step 'Loot-bag items in Item.dbc'
     if ($script:DryRun) {
         $where = $script:DataDir + '\dbc\Item.dbc'
         if ((Resolve-Mode) -eq 'docker') { $where = '/opt/acore/data/dbc/Item.dbc in the data volume' }
-        Note ("add the 64 bag records to {0}" -f $where)
+        Note ("add the bag and rune records to {0}" -f $where)
         $root = Get-ClientRoot
         if ($root) { Note ("write a patch archive into {0}" -f (Join-Path $root 'Data')) }
         $py = Get-PythonCommand
@@ -3306,7 +3190,7 @@ function Install-ItemDbcPatch {
     if ($clientData) { $argv += @('--client-data', $clientData) }
     # No dry-run arm here: the function returns at the top when -DryRun, and that block already says
     # what it would write.
-    Log ("running the Item.dbc patch ({0} of 64 bag records)" -f 'patch_item_dbc.py')
+    Log ("running the Item.dbc patch ({0} of the bag and rune records)" -f 'patch_item_dbc.py')
     $null = Invoke-Native -FilePath $py[0] -Arguments $argv
     if ($LASTEXITCODE -ne 0) {
         Warn ("the Item.dbc patch failed (exit {0}); the bags keep the red question mark until it runs" -f $LASTEXITCODE)
@@ -3319,9 +3203,9 @@ function Install-ItemDbcPatch {
         # below. Writing it back and restarting the realm, which this used to do, cost a second boot
         # of the world - and restarted the container mid-boot whenever the readiness marker had
         # survived the previous one, which is how a realm ended up with the authserver dead.
-        Ok 'server Item.dbc: the container adds the 64 bag records on every start, before the world reads it'
+        Ok 'server Item.dbc: the container adds the bag and rune records on every start, before the world reads it'
     } else {
-        Ok ("server Item.dbc: the 64 bag records are in {0}" -f (Join-Path $dbcDir 'Item.dbc'))
+        Ok ("server Item.dbc: the bag and rune records are in {0}" -f (Join-Path $dbcDir 'Item.dbc'))
     }
 
     if (-not $clientData) {
@@ -3337,87 +3221,6 @@ function Install-ItemDbcPatch {
         Ok ("client Item.dbc: {0} reads the patched file" -f $clientData)
     } else {
         Bad ("client Item.dbc: {0} does not read the patched file (run the patch by hand to see why)" -f $clientData)
-    }
-}
-
-function Install-DeckPatch {
-    <# Install-DeckPatch - put the two deck rows in CreatureDisplayInfo/CreatureModelData. #>
-    # Skateboard.Deck ships as `plank` (display 90001), a world doodad registered as a creature
-    # display - rows the stock DBCs do not have. A doodad, not a shield: an item model's skin comes
-    # from ItemDisplayInfo at draw time and its authored frame is "held", so as a creature it draws
-    # white and on edge. The module warns once and draws the stock
-    # log (26609) until the server's copy carries them, so this is a warning, not a failure. In
-    # docker mode the container patches its own copy on every start (entrypoint.sh,
-    # patch_deck_dbc), exactly like the bag records: the copy taken here is what builds the client
-    # archive.
-    Step 'Deck rows in CreatureDisplayInfo.dbc'
-    if ($script:DryRun) {
-        $where = $script:DataDir + '\dbc'
-        if ((Resolve-Mode) -eq 'docker') { $where = '/opt/acore/data/dbc in the data volume' }
-        Note ("add the two shield deck rows (90001, 90002) to {0}" -f $where)
-        $root = Get-ClientRoot
-        if ($root) { Note ("write a patch archive into {0}" -f (Join-Path $root 'Data')) }
-        $py = Get-PythonCommand
-        if (-not $py) { Note ("python 3 is missing ({0}), so the patch would be skipped" -f $script:PythonProblem) }
-        [void](Get-ItemDbcTool)
-        return
-    }
-    $clientRoot = Read-ClientDataChoice
-    $clientData = ''
-    if ($clientRoot -and $clientRoot -ne 'none' -and (Test-ClientDataDir $clientRoot)) {
-        $clientData = Join-Path $clientRoot 'Data'
-    }
-    $dbcDir = Get-ServerDbcDir
-    if (-not $dbcDir) {
-        Warn 'no server dbc directory yet, so the shield deck rows were not added (install the client data first)'
-        return
-    }
-    $surface = Join-Path $dbcDir 'CreatureDisplayInfo.dbc'
-    $model = Join-Path $dbcDir 'CreatureModelData.dbc'
-    if (-not (Test-Path -LiteralPath $surface) -or -not (Test-Path -LiteralPath $model)) {
-        Warn ("no CreatureDisplayInfo.dbc/CreatureModelData.dbc beside {0}, so the shield deck rows were not added" -f (Join-Path $dbcDir 'Item.dbc'))
-        return
-    }
-    $py = Get-PythonCommand
-    $tool = Get-ItemDbcTool
-    if (-not $py -or -not $tool) {
-        if (-not $py) {
-            Warn ("python 3 is missing ({0}), so the shield deck rows are skipped" -f $script:PythonProblem)
-        } else {
-            Warn 'the DBC tool could not be fetched, so the board keeps the stock log'
-        }
-        return
-    }
-    $deckTool = Join-Path (Join-Path (Join-Path $script:HostState 'tools') 'skateboard') 'patch_deck_dbc.py'
-    $py = @($py)
-    $pyPrefix = @()
-    if ($py.Count -gt 1) { $pyPrefix = @($py[1..($py.Count - 1)]) }
-    $out = Join-Path $script:StateDir 'deck-dbc'
-    $argv = $pyPrefix + @($deckTool, '--dbcs', $dbcDir, '--out', $out)
-    if ((Resolve-Mode) -ne 'docker') { $argv += @('--server-dbc', $dbcDir) }
-    if ($clientData) { $argv += @('--client-data', $clientData) }
-    Log 'running the deck DBC patch (patch_deck_dbc.py)'
-    $null = Invoke-Native -FilePath $py[0] -Arguments $argv
-    if ($LASTEXITCODE -ne 0) {
-        Warn ("the deck DBC patch failed (exit {0}); the board keeps the stock log until it runs" -f $LASTEXITCODE)
-        return
-    }
-    if ((Resolve-Mode) -eq 'docker') {
-        Ok 'server DBCs: the container adds the two shield deck rows on every start, before the world reads them'
-    } else {
-        Ok ("server DBCs: the shield decks (90001, 90002) are in {0}" -f $dbcDir)
-    }
-    if (-not $clientData) {
-        Warn 'no client folder was chosen, so the client half was not written: pass -ClientData DIR, or re-run -Repair to be asked'
-        Warn ("  (or copy {0}\deck-dbc.MPQ into the client's Data as patch-9.MPQ)" -f $out)
-        return
-    }
-    $verifyArgv = $pyPrefix + @($deckTool, '--verify', '--client-data', $clientData)
-    $null = Invoke-Native -FilePath $py[0] -Arguments $verifyArgv
-    if ($LASTEXITCODE -eq 0) {
-        Ok ("client CreatureDisplayInfo.dbc: {0} reads the patched file" -f $clientData)
-    } else {
-        Bad ("client CreatureDisplayInfo.dbc: {0} does not read the patched file (run the patch by hand to see why)" -f $clientData)
     }
 }
 
@@ -3489,18 +3292,17 @@ function Invoke-Checks {
     $pb = Join-Path $moduleConf 'playerbots.conf'
     $cg = Join-Path $moduleConf 'mod-creature-gear.conf'
     $hc = Join-Path $moduleConf 'mod_hardcore.conf'
-    $ei = Join-Path $moduleConf 'mod_e_interact.conf'
     $sv = Join-Path $moduleConf 'mod-survivor.conf'
+    $rw = Join-Path $moduleConf 'mod-runewords.conf'
     $ca = Join-Path $moduleConf 'mod-creature-affixes.conf'
     $pw = Join-Path $moduleConf 'mod-mercenaries.conf'
-    $sb = Join-Path $moduleConf 'mod-skateboard.conf'
-    $confFiles = @($ws, $as, $pb, $cg, $hc, $ei, $sv, $ca, $pw, $sb)
+    $confFiles = @($ws, $as, $pb, $cg, $hc, $sv, $rw, $ca, $pw)
     $confMissing = @()
     foreach ($file in $confFiles) {
         if (-not (Test-Path -LiteralPath $file)) { $confMissing += $file }
     }
     if ($confMissing.Count -eq 0) {
-        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod_e_interact.conf, modules\mod-survivor.conf, modules\mod-mercenaries.conf, modules\mod-skateboard.conf'
+        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod-survivor.conf, modules\mod-runewords.conf, modules\mod-creature-affixes.conf, modules\mod-mercenaries.conf'
     } else {
         Bad ("configs incomplete, missing: {0}" -f ($confMissing -join ', '))
         if ($Fix) {
@@ -3631,6 +3433,59 @@ function Invoke-Checks {
         }
     }
 
+    if (Test-Path -LiteralPath $rw) {
+        # Same contract as the survivor block above: one key per line the module reads, with the
+        # range it accepts. A sweep interval under the module's 200 ms floor is raised, not refused,
+        # so an out-of-range value here is a conf that says something the module will not take.
+        $rwAbsent = @()
+        $rwBad = @()
+        foreach ($default in $RunewordConfDefaults) {
+            $eq = $default.IndexOf('=')
+            $key = $default.Substring(0, $eq)
+            $value = Get-Conf $rw $key
+            if ($value -eq '') { $rwAbsent += $key }
+            elseif (-not (Test-RunewordValueOk -Key $key -Value $value)) { $rwBad += ("{0}={1}" -f $key, $value) }
+        }
+        if ($rwAbsent.Count -eq 0 -and $rwBad.Count -eq 0) {
+            Ok ("mod-runewords.conf: Enable={0} SweepIntervalMs={1} ApplyWhenDead={2} Announce={3}" -f `
+                (Get-Conf $rw 'Runewords.Enable'), (Get-Conf $rw 'Runewords.SweepIntervalMs'), `
+                (Get-Conf $rw 'Runewords.ApplyWhenDead'), (Get-Conf $rw 'Runewords.Announce'))
+        } else {
+            if ($rwBad.Count -gt 0) { Bad ("mod-runewords.conf: unusable value(s): {0}" -f ($rwBad -join ' ')) }
+            if ($rwAbsent.Count -gt 0) { Bad ("mod-runewords.conf: key(s) the live file predates: {0} (--Repair appends the shipped defaults)" -f ($rwAbsent -join ' ')) }
+            if ($Fix) {
+                $script:Fixes = $script:Fixes + 1
+                Set-ConfDefaults -File $rw -Check { param($k, $v) Test-RunewordValueOk -Key $k -Value $v } `
+                    -Label 'mod-runewords.conf' -Defaults $RunewordConfDefaults
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $ca) {
+        $caAbsent = @()
+        $caBad = @()
+        foreach ($default in $CreatureAffixesConfDefaults) {
+            $eq = $default.IndexOf('=')
+            $key = $default.Substring(0, $eq)
+            $value = Get-Conf $ca $key
+            if ($value -eq '') { $caAbsent += $key }
+            elseif (-not (Test-CreatureAffixesValueOk -Key $key -Value $value)) { $caBad += ("{0}={1}" -f $key, $value) }
+        }
+        if ($caAbsent.Count -eq 0 -and $caBad.Count -eq 0) {
+            Ok ("mod-creature-affixes.conf: Enable={0} Prefix={1}% Affix={2}% Size={3}%" -f `
+                (Get-Conf $ca 'CreatureAffixes.Enable'), (Get-Conf $ca 'CreatureAffixes.PrefixChance'), `
+                (Get-Conf $ca 'CreatureAffixes.AffixChance'), (Get-Conf $ca 'CreatureAffixes.SizeChance'))
+        } else {
+            if ($caBad.Count -gt 0) { Bad ("mod-creature-affixes.conf: unusable value(s): {0}" -f ($caBad -join ' ')) }
+            if ($caAbsent.Count -gt 0) { Bad ("mod-creature-affixes.conf: key(s) the live file predates: {0} (--Repair appends the shipped defaults)" -f ($caAbsent -join ' ')) }
+            if ($Fix) {
+                $script:Fixes = $script:Fixes + 1
+                Set-ConfDefaults -File $ca -Check { param($k, $v) Test-CreatureAffixesValueOk -Key $k -Value $v } `
+                    -Label 'mod-creature-affixes.conf' -Defaults $CreatureAffixesConfDefaults
+            }
+        }
+    }
+
     if ((Test-Path -LiteralPath $pw) -and ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-pawn.conf')) -or
         (Test-Path -LiteralPath (Join-Path $moduleConf 'mod-pawn.conf.dist')))) {
         # The core loads every modules\*.conf, so the old file from the module's previous name
@@ -3686,65 +3541,6 @@ function Invoke-Checks {
                 $script:Fixes = $script:Fixes + 1
                 Set-ConfDefaults -File $pw -Check { param($k, $v) Test-MercenaryValueOk -Key $k -Value $v } `
                     -Label 'mod-mercenaries.conf' -Defaults $MercenaryConfDefaults
-            }
-        }
-    }
-
-    if (Test-Path -LiteralPath $sb) {
-        # A missing key is filled with the module's own fallback at load and a bad one is ignored
-        # the same way, so a config that still starts the server can be wrong here without saying
-        # so. The two are reported apart: absent means the live conf is older than the artifact,
-        # bad means it says something the module will not take.
-        # Keys the module stopped reading: deleted by Write-Configs, reported here so an install
-        # that is never reinstalled loses them on its first -Repair instead.
-        $sbRetired = @(Get-ConfKeysMatching -File $sb -KeyPattern '^Skateboard\.(OffInCombat|MountedPose)$')
-        if ($sbRetired.Count -gt 0) {
-            Bad ("mod-skateboard.conf: retired key(s) still present: {0} (the hit rule and the mount render replaced them)" -f ($sbRetired -join ', '))
-            if ($Fix) {
-                $script:Fixes = $script:Fixes + 1
-                Remove-ConfMatch -File $sb -KeyPattern '^Skateboard\.(OffInCombat|MountedPose)$'
-                Ok 'retired skateboard key(s) removed'
-            }
-        }
-        $sbAbsent = @()
-        $sbBad = @()
-        foreach ($default in $SkateboardConfDefaults) {
-            $eq = $default.IndexOf('=')
-            $key = $default.Substring(0, $eq)
-            $value = Get-Conf $sb $key
-            if ($value -eq '') { $sbAbsent += $key }
-            elseif (-not (Test-SkateboardValueOk -Key $key -Value $value)) { $sbBad += ("{0}={1}" -f $key, $value) }
-        }
-        if ($sbAbsent.Count -eq 0 -and $sbBad.Count -eq 0) {
-            Ok ("mod-skateboard.conf: Enable={0} Deck={1} MaxSpeed={2} Crash.Enable={3}" -f `
-                (Get-Conf $sb 'Skateboard.Enable'), (Get-Conf $sb 'Skateboard.Deck'), `
-                (Get-Conf $sb 'Skateboard.MaxSpeed'), (Get-Conf $sb 'Skateboard.Crash.Enable'))
-        } else {
-            if ($sbBad.Count -gt 0) { Bad ("mod-skateboard.conf: unusable value(s): {0}" -f ($sbBad -join ' ')) }
-            if ($sbAbsent.Count -gt 0) { Bad ("mod-skateboard.conf: key(s) the live file predates: {0} (--Repair appends the shipped defaults)" -f ($sbAbsent -join ' ')) }
-            if ($Fix) {
-                $script:Fixes = $script:Fixes + 1
-                Set-ConfDefaults -File $sb -Check { param($k, $v) Test-SkateboardValueOk -Key $k -Value $v } `
-                    -Label 'mod-skateboard.conf' -Defaults $SkateboardConfDefaults
-            }
-        }
-    }
-
-    if (Test-Path -LiteralPath $ei) {
-        $off = @()
-        foreach ($key in @('Enable', 'Loot', 'Gather', 'Talk', 'Use')) {
-            # EInteract.Roll is not in this list: it is the one option a player may switch off on
-            # purpose, and restoring it would be the repair fighting the player.
-            if ((Get-Conf $ei ('EInteract.' + $key)) -ne '1') { $off += $key }
-        }
-        if ($off.Count -eq 0) {
-            Ok 'mod_e_interact.conf: Enable/Loot/Gather/Talk/Use = 1'
-        } else {
-            Bad ("mod_e_interact.conf: off: {0} (the key is on, those steps are not)" -f ($off -join ' '))
-            if ($Fix) {
-                foreach ($key in $off) { Set-Conf -File $ei -Key ('EInteract.' + $key) -Value 1 }
-                $script:Fixes = $script:Fixes + 1
-                Ok 'interact options set to 1'
             }
         }
     }
@@ -3871,7 +3667,6 @@ function Invoke-Checks {
         (Join-Path $script:SrcDir 'modules\mod-playerbots\data\sql')
         (Join-Path $script:SrcDir 'modules\mod-creature-gear\data\sql')
         (Join-Path $script:SrcDir 'modules\mod-survivor\data\sql')
-        (Join-Path $script:SrcDir 'modules\mod-creature-affixes\data\sql')
     )
     foreach ($path in $sqlSources) {
         if (Test-Path -LiteralPath $path) {
@@ -3886,7 +3681,7 @@ function Invoke-Checks {
     # Only the families that ship: the graveyard patch was reverted, so probing for it would report
     # a permanent failure.
     $customSql = Join-Path $script:SrcDir 'data\sql\custom\db_world'
-    foreach ($family in @(@('loot_bags', 'loot-bag patch'), @('travel_portals', 'travel-portal patch'))) {
+    foreach ($family in @(@('loot_bags', 'loot-bag patch'), @('runewords', 'runeword patch'), @('travel_portals', 'travel-portal patch'))) {
         $name = $family[0]
         $label = $family[1]
         $found = @()
@@ -4113,7 +3908,7 @@ function Invoke-Repair {
     # it, and the re-check below reports what it produced. The tool it runs comes from the commit the
     # install is pinned to, so the ref is resolved here too when this mode did not do it already.
     Resolve-SelfRef
-    Install-ClientPatch
+    Install-ItemDbcPatch
     $repaired = $script:Fixes
     $script:Problems = 0
     Log ''
@@ -4289,7 +4084,7 @@ function Invoke-Install {
     Write-Configs
     Invoke-FirstBoot
     Resolve-SelfRef
-    Install-ClientPatch
+    Install-ItemDbcPatch
     Write-Helpers
     Write-HostWrappers
     Enable-Firewall
@@ -4480,10 +4275,10 @@ function Install-DockerAssets {
     }
 
     # The whole list is fetched twice at most. A recorded pin cannot serve a file that shipped after
-    # it (the deck tool predates scripts/lib/dbc_mpq.py, so a realm installed before the lib existed
-    # 404s on it), and the first attempt's answer to that used to be "check the network". The second
-    # attempt resolves the ref again and starts over, because the files fetched before the failure
-    # came from the stale commit too.
+    # it (the Item.dbc tool predates scripts/lib/dbc_mpq.py, so a realm installed before the lib
+    # existed 404s on it), and the first attempt's answer to that used to be "check the network".
+    # The second attempt resolves the ref again and starts over, because the files fetched before
+    # the failure came from the stale commit too.
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         $base = $DockerRepoBase + (Get-FetchRef) + '/'
         $failed = ''
@@ -4717,7 +4512,7 @@ function Invoke-DockerInstall {
     # After the first boot, because the file the client archive is built from - the server's
     # data/dbc/Item.dbc - only exists once the entrypoint has unpacked the client data. The server
     # half needs nothing from here: the container patches its own copy before the world starts.
-    Install-ClientPatch
+    Install-ItemDbcPatch
     # -LanIp opens the same two rules as the native path, through the same helper and the same
     # manifest entries, so -Uninstall removes them whichever mode installed them.
     Enable-Firewall
@@ -4912,7 +4707,7 @@ function Invoke-DockerRepair {
         $script:FirstBootOk = $false
     }
     Set-DockerRealmPin
-    Install-ClientPatch
+    Install-ItemDbcPatch
     Save-Mode -Mode 'docker'
     Save-State
     Log ''
