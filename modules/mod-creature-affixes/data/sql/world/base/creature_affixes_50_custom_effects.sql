@@ -14,15 +14,15 @@ VALUES
 (100200, 384, 21,
  6, 0, -20, 138,
  6, 0, -20, 33,
- 0, 0, 0, 'Zombified Sluggishness', 0),
+ 0, 0, 1, 'Zombified Sluggishness', 0),
 (100201, 384, 21,
  6, 0, -20, 133,
  0, 0, 0, 0,
- 0, 0, 0, 'Zombified Frailty', 0),
+ 0, 0, 1, 'Zombified Frailty', 0),
 (100202, 384, 21,
  6, 0, 20, 138,
  0, 0, 0, 0,
- 0, 0, 0, 'Corrupted Haste', 0)
+ 0, 0, 1, 'Corrupted Haste', 0)
 ON DUPLICATE KEY UPDATE
 `Attributes` = VALUES(`Attributes`),
 `DurationIndex` = VALUES(`DurationIndex`),
