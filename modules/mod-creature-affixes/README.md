@@ -52,8 +52,9 @@ Size rolls only on outdoor maps by default.
 ## Client add-on
 
 The `CreatureAffixes` add-on composes the target name as
-`%prefix %name %affix`. It also attaches to TidyPlates' active theme and does
-the same for the target and mouseover nameplates only.
+`%prefix %name %affix`. When TidyPlates is present it polls that add-on's
+exported `VisibleNameplates` table and does the same for the target and
+mouseover nameplates only; it does not mutate a TidyPlates theme.
 
 Stock 3.3.5a has no `C_NamePlate` unit tokens, and TidyPlates resolves a GUID
 only for the target and mouseover plates. Other nameplates keep the stock name;
