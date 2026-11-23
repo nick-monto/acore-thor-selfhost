@@ -30,6 +30,9 @@ UI, so the add-on cannot read it. The add-on reads the names through
 `UnitAura` and hides the carriers' target-frame buttons; the data file must
 use the same names.
 
+`creature_affixes_30_visible_carriers.sql` moves a database that already applied
+the old hidden seed; its guards leave an operator's own carrier choice alone.
+
 The other design rows are intentionally absent until the first slice is proven.
 
 ## Hidden size layer
