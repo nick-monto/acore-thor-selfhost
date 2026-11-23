@@ -83,9 +83,26 @@ namespace
             effect = CreatureAffixes::Effect::Gilded;
         else if (text == "bear")
             effect = CreatureAffixes::Effect::Bear;
+        else if (text == "none")
+            effect = CreatureAffixes::Effect::None;
         else
             return false;
         return true;
+    }
+
+    bool ParseEffectRole(std::string const& text, CreatureAffixes::EffectRole& role)
+    {
+        if (text == "aura")
+        {
+            role = CreatureAffixes::EffectRole::Aura;
+            return true;
+        }
+        if (text == "visual")
+        {
+            role = CreatureAffixes::EffectRole::Visual;
+            return true;
+        }
+        return false;
     }
 
     std::string Lower(std::string text)
@@ -204,6 +221,78 @@ namespace CreatureAffixes
 
             loaded.push_back(std::move(modifier));
         } while (result->NextRow());
+
+        std::unordered_map<std::string, std::vector<EffectSpell>> effectSpells;
+        QueryResult effectsResult = WorldDatabase.Query(
+            "SELECT `modifier_key`, `role`, `spell_id` "
+            "FROM `mod_creature_affixes_modifier_effect` ORDER BY `modifier_key`, `sort_order`");
+        if (!effectsResult)
+        {
+            LOG_ERROR("module", "mod-creature-affixes: `mod_creature_affixes_modifier_effect` is missing; "
+                                "candidate modifiers will load without their effect auras.");
+        }
+        else
+        {
+            do
+            {
+                Field* fields = effectsResult->Fetch();
+                if (!fields)
+                    break;
+                std::string modifierKey = fields[0].Get<std::string>();
+                std::string roleText = fields[1].Get<std::string>();
+                uint32 spellId = fields[2].Get<uint32>();
+
+                EffectRole role;
+                if (!ParseEffectRole(roleText, role))
+                {
+                    LOG_ERROR("module", "mod-creature-affixes: effect for '{}' has unknown role '{}'; skipped",
+                              modifierKey, roleText);
+                    continue;
+                }
+                if (!spellId)
+                {
+                    LOG_ERROR("module", "mod-creature-affixes: effect for '{}' has no spell; skipped", modifierKey);
+                    continue;
+                }
+
+                SpellInfo const* effectSpell = sSpellMgr->GetSpellInfo(spellId);
+                if (!effectSpell)
+                {
+                    LOG_ERROR("module", "mod-creature-affixes: effect for '{}' references missing spell {}; skipped",
+                              modifierKey, spellId);
+                    continue;
+                }
+                if (effectSpell->IsPassive())
+                {
+                    LOG_ERROR("module", "mod-creature-affixes: effect for '{}' spell {} is passive; skipped",
+                              modifierKey, spellId);
+                    continue;
+                }
+                if (effectSpell->GetMaxDuration() >= 0)
+                {
+                    LOG_ERROR("module", "mod-creature-affixes: effect for '{}' spell {} is not permanent; skipped",
+                              modifierKey, spellId);
+                    continue;
+                }
+
+                effectSpells[modifierKey].push_back({ role, spellId });
+            } while (effectsResult->NextRow());
+        }
+
+        std::unordered_map<std::string, size_t> indexes;
+        for (size_t index = 0; index < loaded.size(); ++index)
+            indexes[loaded[index].key] = index;
+        for (auto& [modifierKey, effects] : effectSpells)
+        {
+            auto found = indexes.find(modifierKey);
+            if (found == indexes.end())
+            {
+                LOG_ERROR("module", "mod-creature-affixes: effect rows reference unknown modifier '{}'; skipped",
+                          modifierKey);
+                continue;
+            }
+            loaded[found->second].effects = std::move(effects);
+        }
 
         if (loaded.empty())
         {
@@ -399,6 +488,7 @@ namespace CreatureAffixes
             if (old.size != Size::None)
                 creature->SetObjectScale(creature->GetNativeObjectScale());
             RemoveMarkers(creature, old);
+            RemoveEffects(creature, old);
             if (!old.baseName.empty())
             {
                 State cleared;
@@ -455,6 +545,7 @@ namespace CreatureAffixes
 
         StoreState(creature->GetGUID(), state);
         RemoveMarkers(creature, old);
+        RemoveEffects(creature, old);
         Apply(creature, state);
         StoreState(creature->GetGUID(), state);
 
@@ -486,7 +577,10 @@ namespace CreatureAffixes
             state.sizePending = false;
         }
         if (creature->IsAlive())
+        {
             ApplyMarkers(creature, state);
+            ApplyEffects(creature, state);
+        }
         else
             MarkPending(creature->GetGUID(), state);
         StoreState(creature->GetGUID(), state);
@@ -511,11 +605,15 @@ namespace CreatureAffixes
         if (!creature)
             return;
         State state = GetState(creature->GetGUID());
-        if (!state.selectLevelApplied && !state.markersApplied && !state.markersPending)
+        if (!state.selectLevelApplied && !state.markersApplied && !state.markersPending &&
+            !state.effectsApplied && !state.effectsPending)
             return;
+        RemoveEffects(creature, state);
         state.selectLevelApplied = false;
         state.markersApplied = false;
         state.markersPending = false;
+        state.effectsApplied = false;
+        state.effectsPending = false;
         state.statsPending = false;
         state.sizePending = false;
         StoreState(creature->GetGUID(), state);
@@ -553,10 +651,12 @@ namespace CreatureAffixes
         }
         if (state.markersPending)
             ApplyMarkers(creature, state);
+        if (state.effectsPending)
+            ApplyEffects(creature, state);
         StoreState(creature->GetGUID(), state);
 
         std::lock_guard<std::mutex> lock(_mutex);
-        if (!state.statsPending && !state.sizePending && !state.markersPending &&
+        if (!state.statsPending && !state.sizePending && !state.markersPending && !state.effectsPending &&
             _pendingUpdates.erase(key))
             _pendingCount.fetch_sub(1, std::memory_order_relaxed);
     }
@@ -585,7 +685,10 @@ namespace CreatureAffixes
         if (state.size != Size::None)
             ApplySize(creature, state);
         if (creature->IsAlive() && creature->IsInWorld())
+        {
             ApplyMarkers(creature, state);
+            ApplyEffects(creature, state);
+        }
         else
             MarkPending(creature->GetGUID(), state);
     }
@@ -685,12 +788,64 @@ namespace CreatureAffixes
             creature->RemoveAura(affix->carrierSpell, creature->GetGUID());
     }
 
+    void Manager::ApplyEffects(Creature* creature, State& state)
+    {
+        if (!creature)
+            return;
+
+        bool applied = true;
+        std::unordered_set<uint32> seen;
+        auto apply = [&](Modifier const* modifier)
+        {
+            if (!modifier)
+                return;
+            for (EffectSpell const& effect : modifier->effects)
+            {
+                if (!seen.insert(effect.spellId).second)
+                    continue;
+                if (!creature->AddAura(effect.spellId, creature))
+                {
+                    LOG_WARN("module", "mod-creature-affixes: could not apply effect spell {} to {} ({})",
+                             effect.spellId, creature->GetName(), creature->GetGUID().ToString());
+                    applied = false;
+                }
+            }
+        };
+        apply(PrefixAt(state.prefix));
+        apply(AffixAt(state.affix));
+
+        state.effectsApplied = applied;
+        state.effectsPending = !applied;
+    }
+
+    void Manager::RemoveEffects(Creature* creature, State const& state) const
+    {
+        if (!creature)
+            return;
+
+        std::unordered_set<uint32> seen;
+        auto remove = [&](Modifier const* modifier)
+        {
+            if (!modifier)
+                return;
+            for (EffectSpell const& effect : modifier->effects)
+            {
+                if (seen.insert(effect.spellId).second)
+                    creature->RemoveAura(effect.spellId, creature->GetGUID());
+            }
+        };
+        remove(PrefixAt(state.prefix));
+        remove(AffixAt(state.affix));
+    }
+
     void Manager::MarkPending(ObjectGuid guid, State& state)
     {
         if (!PrefixAt(state.prefix) && !AffixAt(state.affix))
             return;
         state.markersApplied = false;
         state.markersPending = true;
+        state.effectsApplied = false;
+        state.effectsPending = true;
         QueueUpdate(guid);
     }
 
@@ -801,6 +956,7 @@ namespace CreatureAffixes
             creature->SetObjectScale(creature->GetNativeObjectScale());
 
         RemoveMarkers(creature, old);
+        RemoveEffects(creature, old);
         StoreState(creature->GetGUID(), state);
         Apply(creature, state);
         StoreState(creature->GetGUID(), state);

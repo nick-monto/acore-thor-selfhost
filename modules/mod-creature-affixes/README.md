@@ -13,7 +13,25 @@ ship in:
 The worldserver loads the table once at startup (`Manager::LoadModifiers`) and
 keeps per-spawn rolls in memory. The table is not written on spawn, death or
 respawn; editing a row requires a restart. A row is only rollable when its
-`effect` value is implemented in `CreatureAffixes.cpp`.
+`effect` value is implemented in `CreatureAffixes.cpp`, or when it uses
+`effect = 'none'` and gets its behavior from the effect-spell table below.
+
+## Effect spells
+
+`mod_creature_affixes_modifier_effect` attaches permanent spells to a modifier:
+
+- `role = 'aura'`: a stat, periodic damage, proc or transform aura.
+- `role = 'visual'`: a spell used only for its visual.
+
+`carrier_spell` remains the one visible dummy marker the add-on hides. Effect
+spells are applied with `AddAura` and removed by the creature's caster GUID,
+so a natural aura with the same spell id survives. The loader rejects passive
+or non-permanent effect rows at startup.
+
+Stock spells are preferred. The candidate stat auras (`100200`, `100201`,
+`100202`) are server-only `spell_dbc` rows: no visual, no icon, and
+`DO_NOT_DISPLAY|DO_NOT_LOG`, so the client has nothing to draw while the server
+applies the stat effect.
 
 ## Initial rows
 
@@ -22,6 +40,17 @@ respawn; editing a row requires a restart. A row is only rollable when its
 | `Vicious` | Prefix | `69737` CP Test Spell 2 | +12% physical damage |
 | `Gilded` | Prefix | `67828` Dummy Riding Aura | one extra creature loot roll |
 | `of the Bear` | Affix | `71432` Mote of Anger | +15% maximum health |
+
+## Candidate rows
+
+| Modifier | Kind | Carrier | Effect spells |
+| --- | --- | --- | --- |
+| `Zombified` | Prefix | `34463` Debug Debuff | `100200` attack/move −20%, `100201` health −20%, `12187` Disease Cloud (visual + 3 s shadow tick) |
+| `Corrupted` | Affix | `29479` Unscathed (DND) | `100202` attack speed +20%, `44537` Fel Lightning (40% shadow proc), `60451` Corruption of Time visual |
+
+`12187` periodically triggers stock `12188` (shadow, 8-yard enemy area) and
+carries its stock gas visual. `44537` has a 40% melee proc against `44536`
+shadow damage. Both are stock client data.
 
 The carriers are stock permanent dummy auras with Attributes `0`, no spell
 visual and no world-database references. They must stay client-visible:

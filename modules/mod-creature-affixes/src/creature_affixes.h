@@ -14,7 +14,9 @@
  * hide their target-frame buttons. Size never gets a marker or add-on data.
  *
  * Modifier definitions live in `mod_creature_affixes_modifier` and are loaded
- * once at world startup. Per-spawn state stays in memory.
+ * once at world startup. Effect spells (stats, periodic damage, procs, visual)
+ * live in `mod_creature_affixes_modifier_effect` and use the same permanent
+ * aura lifecycle. Per-spawn state stays in memory.
  */
 
 #ifndef MOD_CREATURE_AFFIXES_H
@@ -59,6 +61,18 @@ namespace CreatureAffixes
         Gilded,
     };
 
+    enum class EffectRole : uint8
+    {
+        Aura,
+        Visual,
+    };
+
+    struct EffectSpell
+    {
+        EffectRole role;
+        uint32 spellId;
+    };
+
     enum class Size : uint8
     {
         None,
@@ -75,6 +89,7 @@ namespace CreatureAffixes
         uint8 influence;
         Effect effect;
         float amount;
+        std::vector<EffectSpell> effects;
     };
 
     struct Settings
@@ -103,6 +118,8 @@ namespace CreatureAffixes
         bool selectLevelApplied = false;
         bool markersApplied = false;
         bool markersPending = false;
+        bool effectsApplied = false;
+        bool effectsPending = false;
         bool statsPending = false;
         bool sizePending = false;
     };
@@ -151,6 +168,8 @@ namespace CreatureAffixes
         void ApplySize(Creature* creature, State const& state) const;
         void ApplyMarkers(Creature* creature, State& state);
         void RemoveMarkers(Creature* creature, State const& state) const;
+        void ApplyEffects(Creature* creature, State& state);
+        void RemoveEffects(Creature* creature, State const& state) const;
         State GetState(ObjectGuid guid) const;
         void StoreState(ObjectGuid guid, State const& state);
         void QueueUpdate(ObjectGuid guid);
