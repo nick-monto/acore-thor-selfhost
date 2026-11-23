@@ -28,10 +28,13 @@ spells are applied with `AddAura` and removed by the creature's caster GUID,
 so a natural aura with the same spell id survives. The loader rejects passive
 or non-permanent effect rows at startup.
 
-Stock spells are preferred. The candidate stat auras (`100200`, `100201`,
-`100202`) are server-only `spell_dbc` rows: no visual, no icon, and
+Stock spells are preferred where they are already level-scaled. The candidate
+stat and trigger auras (`100200`, `100201`, `100202`, `100203`, `100205`) are
+server-only `spell_dbc` rows: no visual, no icon, and
 `DO_NOT_DISPLAY|DO_NOT_LOG`, so the client has nothing to draw while the server
-applies the stat effect.
+applies the effect. Damage spells `100204` and `100206` are server-only too,
+but use stock visuals so the client still shows the gas and Fel Lightning
+impacts.
 
 ## Initial rows
 
@@ -45,12 +48,15 @@ applies the stat effect.
 
 | Modifier | Kind | Carrier | Effect spells |
 | --- | --- | --- | --- |
-| `Zombified` | Prefix | `34463` Debug Debuff | `100200` attack/move −20%, `100201` health −20%, `12187` Disease Cloud (visual + 3 s shadow tick) |
-| `Corrupted` | Affix | `29479` Unscathed (DND) | `100202` attack speed +20%, `44537` Fel Lightning (40% shadow proc), `60451` Corruption of Time visual |
+| `Zombified` | Prefix | `34463` Debug Debuff | `100200` attack/move −20%, `100201` health −20%, `100203` miasma trigger, `25039` gas visual |
+| `Corrupted` | Affix | `29479` Unscathed (DND) | `100202` attack speed +20%, `100205` Fel Lightning proc, `60451` Corruption of Time visual |
 
-`12187` periodically triggers stock `12188` (shadow, 8-yard enemy area) and
-carries its stock gas visual. `44537` has a 40% melee proc against `44536`
-shadow damage. Both are stock client data.
+`100203` ticks every 3 seconds and triggers `100204`: `1 + 0.25 × (mob level − 1)`
+shadow damage in an 8-yard enemy area. `100205` is a 40% melee proc that
+triggers `100206`: `4 + 2 × (mob level − 1)` shadow/fire direct damage. Both
+use `EffectRealPointsPerLevel`, so a level 1 mob deals 1 (gas) and 4 (proc),
+while a level 80 mob deals 20 and 162. The old stock `12187`/`44537` damage
+spells are not used.
 
 The carriers are stock permanent dummy auras with Attributes `0`, no spell
 visual and no world-database references. They must stay client-visible:

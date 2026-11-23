@@ -8,7 +8,8 @@
 -- role = 'visual' same lifecycle, but the spell exists for its visual only.
 --
 -- The module rejects passive or non-permanent rows at startup. Stock spells
--- are preferred; a server-only custom spell must be hidden in the client.
+-- are preferred where they scale; a server-only custom spell must either be
+-- hidden or reuse a stock visual.
 
 CREATE TABLE IF NOT EXISTS `mod_creature_affixes_modifier_effect` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
