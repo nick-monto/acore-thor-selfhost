@@ -17,16 +17,18 @@ respawn; editing a row requires a restart. A row is only rollable when its
 
 ## Initial rows
 
-| Modifier | Kind | Hidden carrier | Effect |
+| Modifier | Kind | Client-visible carrier | Effect |
 | --- | --- | --- | --- |
-| `Vicious` | Prefix | `52370` Periodic Despawn Check | +12% physical damage |
-| `Gilded` | Prefix | `44360` Racing Crop Aura | one extra creature loot roll |
-| `of the Bear` | Affix | `51047` Have Knotroot | +15% maximum health |
+| `Vicious` | Prefix | `69737` CP Test Spell 2 | +12% physical damage |
+| `Gilded` | Prefix | `67828` Dummy Riding Aura | one extra creature loot roll |
+| `of the Bear` | Affix | `71432` Mote of Anger | +15% maximum health |
 
-The carriers are stock permanent dummy auras with Attributes `0x180`
-(`SPELL_ATTR0_DO_NOT_DISPLAY | SPELL_ATTR0_DO_NOT_LOG`). They are sent to the
-client but hidden from the aura bar and combat log; the add-on reads their
-names through `UnitAura`. The add-on data file must use the same names.
+The carriers are stock permanent dummy auras with Attributes `0`, no spell
+visual and no world-database references. They must stay client-visible:
+`SPELL_ATTR0_DO_NOT_DISPLAY` removes the aura from `UnitAura` as well as the
+UI, so the add-on cannot read it. The add-on reads the names through
+`UnitAura` and hides the carriers' target-frame buttons; the data file must
+use the same names.
 
 The other design rows are intentionally absent until the first slice is proven.
 
@@ -60,8 +62,8 @@ Stock 3.3.5a has no `C_NamePlate` unit tokens, and TidyPlates resolves a GUID
 only for the target and mouseover plates. Other nameplates keep the stock name;
 all-nameplate affixes need a client nameplate API or a client patch.
 
-The add-on has no aura tooltip hooks: hidden carriers never appear in the aura
-bar, and the name is the only displayed surface.
+The add-on hides the carriers' target-frame buttons and has no aura tooltip
+hooks: the name is the only displayed surface.
 
 ## Eligibility
 

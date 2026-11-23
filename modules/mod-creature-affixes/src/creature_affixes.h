@@ -7,10 +7,10 @@
  *   - Gilded (prefix)        one extra creature loot roll
  *   - Tiny / Giant           hidden size layer, outdoor world only
  *
- * The marker auras are stock client-known dummy spells with
- * SPELL_ATTR0_DO_NOT_DISPLAY. The client receives them but hides the aura bar
- * entry; the client add-on maps their spell names to the modifier labels. No
- * client patch is involved. Size never gets a marker or add-on data.
+ * The marker auras are stock client-visible permanent dummy spells with no
+ * visual or database references. The client add-on maps their spell names to
+ * the modifier labels and hides their target-frame buttons. No client patch is
+ * involved. Size never gets a marker or add-on data.
  *
  * Modifier definitions live in `mod_creature_affixes_modifier` and are loaded
  * once at world startup. Per-spawn state stays in memory.

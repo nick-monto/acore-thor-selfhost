@@ -5,9 +5,10 @@
 -- are written here. Adding a row makes the modifier rollable only after the
 -- matching effect is implemented in CreatureAffixes.cpp.
 --
--- `carrier_spell` is a stock client-known spell with SPELL_ATTR0_DO_NOT_DISPLAY.
--- The client receives the aura but hides it from the aura bar; the add-on reads
--- its name through UnitAura. Keep the name in CreatureAffixes_Data.lua in sync.
+-- `carrier_spell` is a stock client-known permanent dummy aura that is *not*
+-- passive and does not carry SPELL_ATTR0_DO_NOT_DISPLAY. The client exposes it
+-- through UnitAura, and the add-on both reads its name and hides its target-frame
+-- button. Keep the name in CreatureAffixes_Data.lua in sync.
 
 CREATE TABLE IF NOT EXISTS `mod_creature_affixes_modifier` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,

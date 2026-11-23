@@ -53,6 +53,28 @@ namespace
         return modifier && modifier->effect == CreatureAffixes::Effect::Gilded;
     }
 
+    // The add-on reads the marker through UnitAura, so the carrier must be a
+    // permanent, client-visible dummy. SPELL_ATTR0_DO_NOT_DISPLAY is not usable
+    // here: the client filters that aura out of UnitAura as well as the UI.
+    bool IsVisibleDummyCarrier(SpellInfo const* carrier)
+    {
+        if (!carrier || carrier->IsPassive() || carrier->HasAttribute(SPELL_ATTR0_DO_NOT_DISPLAY))
+            return false;
+        if (carrier->GetMaxDuration() >= 0)
+            return false;
+
+        bool dummy = false;
+        for (SpellEffectInfo const& effect : carrier->GetEffects())
+        {
+            if (effect.Effect == 0)
+                continue;
+            if (effect.Effect != SPELL_EFFECT_APPLY_AURA || effect.ApplyAuraName != SPELL_AURA_DUMMY)
+                return false;
+            dummy = true;
+        }
+        return dummy;
+    }
+
     bool ParseEffect(std::string const& text, CreatureAffixes::Effect& effect)
     {
         if (text == "vicious")
@@ -172,10 +194,10 @@ namespace CreatureAffixes
                 continue;
             }
 
-            if (!(carrier->Attributes & SPELL_ATTR0_DO_NOT_DISPLAY))
+            if (!IsVisibleDummyCarrier(carrier))
             {
-                LOG_ERROR("module", "mod-creature-affixes: modifier '{}' carrier spell {} is not hidden; "
-                                    "a hidden marker is required, row skipped",
+                LOG_ERROR("module", "mod-creature-affixes: modifier '{}' carrier spell {} is not a "
+                                    "client-visible permanent dummy; row skipped",
                           modifier.key, modifier.carrierSpell);
                 continue;
             }
@@ -596,7 +618,7 @@ namespace CreatureAffixes
             applied = creature->AddAura(affix->carrierSpell, creature) != nullptr;
         if (!applied)
         {
-            LOG_WARN("module", "mod-creature-affixes: could not apply hidden markers to {} ({})",
+            LOG_WARN("module", "mod-creature-affixes: could not apply markers to {} ({})",
                      creature->GetName(), creature->GetGUID().ToString());
             state.markersApplied = false;
             state.markersPending = false;

@@ -1,21 +1,22 @@
 -- mod-creature-affixes: the initial modifier rows.
 --
--- Hidden carriers:
---   52370 "Periodic Despawn Check"  (Vicious)
---   44360 "Racing Crop Aura"        (Gilded)
---   51047 "Have Knotroot"           (of the Bear)
+-- Client-visible carriers:
+--   69737 "CP Test Spell 2"   (Vicious)
+--   67828 "Dummy Riding Aura" (Gilded)
+--   71432 "Mote of Anger"     (of the Bear)
 --
--- All three are stock permanent dummy auras with Attributes 0x180
--- (SPELL_ATTR0_DO_NOT_DISPLAY | SPELL_ATTR0_DO_NOT_LOG). The client hides
--- them from the aura bar and combat log, while the add-on can still read the
--- aura name. Do not replace them with a visible dummy aura.
+-- All three are stock permanent dummy auras with Attributes 0, no spell
+-- visual and no world-database references. They must stay client-visible:
+-- SPELL_ATTR0_DO_NOT_DISPLAY also removes the aura from UnitAura, so the
+-- add-on cannot read a hidden carrier. The add-on hides these auras' buttons
+-- on the target frame instead.
 
 INSERT INTO `mod_creature_affixes_modifier`
 (`modifier_key`, `kind`, `label`, `carrier_spell`, `influence`, `effect`, `amount`)
 VALUES
-('vicious', 'prefix', 'Vicious',     52370, 2, 'vicious', 0.12),
-('gilded',  'prefix', 'Gilded',      44360, 1, 'gilded',  1.00),
-('bear',    'affix',  'of the Bear', 51047, 2, 'bear',    0.15)
+('vicious', 'prefix', 'Vicious',     69737, 2, 'vicious', 0.12),
+('gilded',  'prefix', 'Gilded',      67828, 1, 'gilded',  1.00),
+('bear',    'affix',  'of the Bear', 71432, 2, 'bear',    0.15)
 ON DUPLICATE KEY UPDATE
 `kind` = VALUES(`kind`),
 `label` = VALUES(`label`),

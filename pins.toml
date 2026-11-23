@@ -65,7 +65,7 @@ ref = "main"                                                # SELF_REF in thor-i
 # The pin is this repository's own commit/tag: server-aarch64.yml copies modules/mod-creature-affixes
 # out of its checkout of this repo, and thor-install.sh --from-source fetches the same tree as a
 # tarball from SELF_REPO ($SELF_REF, default main). It ships its definition table and seed rows in
-# data/sql/world/base; each spawn's roll stays in memory and the carriers are stock hidden dummy auras.
+# data/sql/world/base; each spawn's roll stays in memory and the carriers are stock visible dummies.
 
 [data.client_data]
 url = "https://github.com/wowgaming/client-data/releases/download/v20.0/data.zip"
