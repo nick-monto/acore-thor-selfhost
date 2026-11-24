@@ -4,14 +4,16 @@
 -- SPELL_ATTR0_DO_NOT_DISPLAY|DO_NOT_LOG. The server applies them; the client
 -- has no aura button to render.
 --
--- Damage is deliberately level-scaled instead of stock fixed damage:
---   100203 periodically triggers 100204: 1 + 0.25 per caster level, shadow,
---          8-yard enemy area, every 3 seconds.
+-- 100203 is a permanent enemy area aura: 2% of each victim's maximum health
+--        every 3 seconds in an 8-yard radius. Percent damage scales with the
+--        victim, so it stays relevant from level 1 to 80.
 --   100205 is a 40% melee proc that triggers 100206: 4 + 2 per caster level,
 --          shadow/fire, direct target damage.
 --
--- EffectRealPointsPerLevel is evaluated against the caster's level (the mob
--- carrying the modifier), with BaseLevel and SpellLevel both 1.
+-- 100206's EffectRealPointsPerLevel is evaluated against the caster's level
+-- (the mob carrying the modifier), with BaseLevel and SpellLevel both 1.
+-- All rows set EquippedItemClass=-1 in creature_affixes_72_percent_miasma.sql;
+-- the default 0 is an item-class requirement and breaks normal casts.
 
 INSERT INTO `spell_dbc`
 (`ID`, `Attributes`, `AttributesEx`, `ProcTypeMask`, `ProcChance`,
@@ -37,13 +39,9 @@ VALUES
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
  0, 0, 1, 'Corrupted Haste', 0),
 (100203, 384, 0, 0, 101, 0, 1, 1, 21,
- 6, 0, 0, 0, 1, 0, 0, 23, 3000, 100204,
+ 129, 0, 0, 2, 1, 0, 14, 89, 3000, 0,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
  0, 0, 32, 'Zombified Miasma', 0),
-(100204, 0, 0, 0, 101, 0, 1, 1, 0,
- 2, 0, 0.25, 1, 22, 15, 14, 0, 0, 0,
- 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
- 1713, 0, 32, 'Zombified Miasma', 0),
 (100205, 384, 0, 4, 40, 0, 1, 1, 21,
  6, 0, 0, 0, 1, 0, 0, 42, 0, 100206,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

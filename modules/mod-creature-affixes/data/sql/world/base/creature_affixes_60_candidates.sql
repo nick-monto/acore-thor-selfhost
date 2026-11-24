@@ -3,8 +3,8 @@
 -- Zombified:
 --   health -20%          custom hidden aura 100201
 --   attack/move -20%     custom hidden aura 100200 (two aura effects)
---   gaseous shadow tick  100203 periodically triggers 100204 (shadow school,
---                         8-yard enemy area), scaled from the mob's level.
+--   gaseous shadow tick  100203 enemy area aura, 2% of maximum health every
+--                         3 seconds, 8-yard radius.
 --   gas visual           25039 Green Ghost Visual; stock client data.
 --
 -- of the Corruption:
