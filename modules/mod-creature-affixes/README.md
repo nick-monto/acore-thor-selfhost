@@ -49,7 +49,7 @@ impacts.
 | Modifier | Kind | Carrier | Effect spells |
 | --- | --- | --- | --- |
 | `Zombified` | Prefix | `34463` Debug Debuff | `100200` attack/move −20%, `100201` health −20%, `100203` miasma trigger, `25039` gas visual |
-| `Corrupted` | Affix | `29479` Unscathed (DND) | `100202` attack speed +20%, `100205` Fel Lightning proc, `60451` Corruption of Time visual |
+| `of the Corruption` | Affix | `29479` Unscathed (DND) | `100202` attack speed +20%, `100205` Fel Lightning proc, `60451` Corruption of Time visual |
 
 `100203` ticks every 3 seconds and triggers `100204`: `1 + 0.25 × (mob level − 1)`
 shadow damage in an 8-yard enemy area. `100205` is a 40% melee proc that
@@ -91,14 +91,17 @@ Size rolls only on outdoor maps by default.
 
 ## Client add-on
 
-The server writes the chosen labels into the creature name as
-`%prefix %name %affix`. That is the create-block name the client uses for the
-target frame, TidyPlates and the stock nameplates, so every nameplate carries
-the same text. The add-on does not compose names.
+`Creature::SetName` changes the server-side name used by logs and scripts, but
+the 3.3.5a client resolves creature names from entry-keyed query data, so a
+live `SetName` does not update the target frame. The add-on composes the
+target/focus header from the carrier auras as `%prefix %name %affix`; the
+carrier auras themselves stay hidden. Stock nameplates still use the client's
+entry-keyed name and are not changed by this add-on.
 
 The add-on hides the carriers' target-frame buttons and has no aura tooltip
-hooks. Marker auras still exist so that suppression has a stable, client-visible
-name to match; they are not the displayed labels.
+hooks. Marker auras still exist so that suppression and the header labels have
+a stable, client-visible name to match; the carrier name maps to a display
+label in `CreatureAffixes_Data.lua`.
 
 ## Eligibility
 

@@ -1,4 +1,4 @@
--- mod-creature-affixes: candidate Zombified (prefix) and Corrupted (affix).
+-- mod-creature-affixes: candidate Zombified (prefix) and of the Corruption (affix).
 --
 -- Zombified:
 --   health -20%          custom hidden aura 100201
@@ -7,7 +7,7 @@
 --                         8-yard enemy area), scaled from the mob's level.
 --   gas visual           25039 Green Ghost Visual; stock client data.
 --
--- Corrupted:
+-- of the Corruption:
 --   attack speed +20%    custom hidden aura 100202
 --   shadow proc          100205 (40% on hit) triggers 100206, scaled from the
 --                         mob's level; hidden proc aura.
@@ -22,7 +22,7 @@ INSERT INTO `mod_creature_affixes_modifier`
 (`modifier_key`, `kind`, `label`, `carrier_spell`, `influence`, `effect`, `amount`)
 VALUES
 ('zombified', 'prefix', 'Zombified', 34463, 3, 'none', 0),
-('corrupted', 'affix',  'Corrupted', 29479, 3, 'none', 0)
+('corrupted', 'affix',  'of the Corruption', 29479, 3, 'none', 0)
 ON DUPLICATE KEY UPDATE
 `kind` = VALUES(`kind`),
 `label` = VALUES(`label`),
