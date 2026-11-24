@@ -151,6 +151,11 @@ namespace CreatureAffixes
                    std::string const& sizeKey, std::string& message);
         std::string Describe(Creature* creature) const;
 
+        // Client-side display labels for one spawn. The native nameplate bridge
+        // supplies the GUID; the add-on asks for the labels over an add-on
+        // whisper because 3.3.5a has no nameplate unit token.
+        bool Labels(ObjectGuid guid, std::string& prefix, std::string& affix) const;
+
         Modifier const* PrefixAt(int8 index) const;
         Modifier const* AffixAt(int8 index) const;
 

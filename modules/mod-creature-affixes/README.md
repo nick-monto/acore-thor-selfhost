@@ -113,8 +113,10 @@ Size rolls only on outdoor maps by default.
 the 3.3.5a client resolves creature names from entry-keyed query data, so a
 live `SetName` does not update the target frame. The add-on composes the
 target/focus header from the carrier auras as `%prefix %name %affix`; the
-carrier auras themselves stay hidden. Stock nameplates still use the client's
-entry-keyed name and are not changed by this add-on.
+carrier auras themselves stay hidden. For nameplates, the native adapter
+publishes each `CGNamePlateFrame` GUID and the add-on asks this module over a
+`CAFF labels` add-on whisper for the labels belonging to that GUID. Stock
+clients without the adapter keep the target/mouseover fallback.
 
 The add-on hides the carriers' target-frame buttons and has no aura tooltip
 hooks. Marker auras still exist so that suppression and the header labels have

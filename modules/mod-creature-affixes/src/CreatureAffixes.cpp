@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <string_view>
 
 #include "Chat.h"
 #include "ChatCommand.h"
@@ -24,8 +25,10 @@
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "PlayerScript.h"
 #include "Random.h"
 #include "ScriptMgr.h"
+#include "StringConvert.h"
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -989,6 +992,25 @@ namespace CreatureAffixes
             << " reach=" << creature->GetCombatReach();
         return out.str();
     }
+
+    bool Manager::Labels(ObjectGuid guid, std::string& prefix, std::string& affix) const
+    {
+        prefix.clear();
+        affix.clear();
+        if (!_settings.enabled || !guid)
+            return false;
+
+        State state = GetState(guid);
+        Modifier const* prefixModifier = PrefixAt(state.prefix);
+        Modifier const* affixModifier = AffixAt(state.affix);
+        if (!prefixModifier && !affixModifier)
+            return false;
+        if (prefixModifier)
+            prefix = prefixModifier->label;
+        if (affixModifier)
+            affix = affixModifier->label;
+        return true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1084,6 +1106,68 @@ namespace CreatureAffixes
     }
 }
 
+namespace
+{
+    constexpr char const* kAddonPrefix = "CAFF";
+
+    void SendAddon(Player* player, std::string const& what)
+    {
+        if (!player)
+            return;
+
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player,
+                                     std::string(kAddonPrefix) + "\t" + what);
+        player->SendDirectMessage(&data);
+    }
+
+    bool HandleAddonChat(Player* player, uint32 type, uint32 language, std::string& msg, Player* receiver)
+    {
+        if (!player || player != receiver || language != LANG_ADDON || type != CHAT_MSG_WHISPER)
+            return true;
+
+        constexpr char const* request = "CAFF\tlabels\t";
+        static constexpr size_t requestLength = sizeof("CAFF\tlabels\t") - 1;
+        if (msg.compare(0, requestLength, request) != 0)
+            return true;
+
+        std::string_view rest(msg);
+        rest.remove_prefix(requestLength);
+        unsigned replies = 0;
+        while (!rest.empty() && replies < 16)
+        {
+            size_t const tab = rest.find('\t');
+            std::string const token(rest.substr(0, tab));
+            rest.remove_prefix(tab == std::string_view::npos ? rest.size() : tab + 1);
+            if (token.empty())
+                continue;
+
+            Optional<uint64> raw = Acore::StringTo<uint64>(token, 0);
+            if (!raw || !*raw)
+                continue;
+
+            std::string prefix;
+            std::string affix;
+            CreatureAffixes::Manager::instance().Labels(ObjectGuid(*raw), prefix, affix);
+            SendAddon(player, Acore::StringFormat("label\t{}\t{}\t{}", token, prefix, affix));
+            ++replies;
+        }
+        return false;
+    }
+}
+
+class CreatureAffixesAddonScript : public PlayerScript
+{
+public:
+    CreatureAffixesAddonScript() : PlayerScript("CreatureAffixes_AddonScript") { }
+
+    [[nodiscard]] bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 language, std::string& msg,
+                                          Player* receiver) override
+    {
+        return HandleAddonChat(player, type, language, msg, receiver);
+    }
+};
+
 class ZombifiedMiasmaAuraScript : public AuraScript
 {
     PrepareAuraScript(ZombifiedMiasmaAuraScript);
@@ -1175,6 +1259,7 @@ void AddCreatureAffixesScripts()
     new CreatureAffixes::CombatScript();
     new CreatureAffixes::DisplayScript();
     new CreatureAffixes::LootScript();
+    new CreatureAffixesAddonScript();
     new creature_affixes_commandscript();
     RegisterSpellScript(ZombifiedMiasmaAuraScript);
 }

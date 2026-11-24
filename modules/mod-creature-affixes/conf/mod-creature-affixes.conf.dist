@@ -18,10 +18,12 @@
 # The server writes the prefix and affix labels into the creature's name for
 # logs and scripts, but the 3.3.5a client resolves creature names from its
 # entry-keyed data. The bundled add-on composes the target/focus labels from
-# the marker auras; stock nameplates keep the base name. Marker auras are stock
-# client-visible permanent dummy spells with no visual or database references;
-# the add-on uses their names only to hide their target-frame buttons. No client
-# patch is needed.
+# the marker auras. For nameplates, the native adapter supplies the GUID and
+# the add-on asks this module for the labels over a CAFF add-on whisper. Marker
+# auras are stock client-visible permanent dummy spells with no visual or
+# database references; the add-on uses their names only to hide their
+# target-frame buttons. No database row or client DBC patch is needed; the
+# native adapter that supplies nameplate GUIDs is an optional client-side DLL.
 #
 #    CreatureAffixes.Enable
 #        Master switch. 0 = no rolls, no markers, no size changes.
