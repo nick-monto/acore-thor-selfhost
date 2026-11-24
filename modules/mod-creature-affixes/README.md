@@ -103,9 +103,9 @@ effects. No new database schema or client DBC rows are introduced.
 | of the Wolf | Frenzied Bloodthirst Visual |
 | of the Falcon | Gusty Prison |
 | of the Turtle | Shield of the Lich King |
-| of the Serpent | Blight Spill |
+| of the Serpent | Tag: Green Glow |
 | of the Moon | Star Beam |
-| of the Boar | Spotlight |
+| of the Boar | Light Essence Aura |
 | of the Wraith | Cosmetic - Purple Ghost Aura |
 | of the Colossus | Wild Growth |
 

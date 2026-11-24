@@ -141,9 +141,9 @@ VALUES
 ('wolf',     1, 'visual', 71949), -- Frenzied Bloodthirst Visual
 ('falcon',   1, 'visual', 71348), -- Gusty Prison
 ('turtle',   1, 'visual', 70692), -- Shield of the Lich King
-('serpent',  1, 'visual', 52822), -- Blight Spill
+('serpent',  1, 'visual', 20371), -- Tag: Green Glow
 ('moon',     1, 'visual', 30888), -- Star Beam
-('boar',     1, 'visual', 25824), -- Spotlight
+('boar',     1, 'visual', 65712), -- Light Essence Aura
 ('wraith',   1, 'visual', 47840), -- Cosmetic - Purple Ghost Aura
 ('colossus', 1, 'visual', 52948) -- Wild Growth
 ON DUPLICATE KEY UPDATE
