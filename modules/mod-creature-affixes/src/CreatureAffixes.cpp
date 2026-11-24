@@ -930,7 +930,7 @@ namespace CreatureAffixes
         state.affix = affix ? static_cast<int8>(affix - _modifiers.data()) : -1;
         state.selectLevelApplied = true;
 
-        std::string size = Lower(sizeKey);
+        std::string size = sizeKey.empty() ? "none" : Lower(sizeKey);
         if (size == "tiny")
         {
             state.size = Size::Tiny;
@@ -972,6 +972,8 @@ namespace CreatureAffixes
         State state = GetState(creature->GetGUID());
         std::ostringstream out;
         out << "entry=" << creature->GetEntry()
+            << " name=\"" << creature->GetName() << "\""
+            << " baseName=\"" << state.baseName << "\""
             << " prefix=" << (PrefixAt(state.prefix) ? PrefixAt(state.prefix)->label : "none")
             << " affix=" << (AffixAt(state.affix) ? AffixAt(state.affix)->label : "none")
             << " size=" << (state.size == Size::Tiny ? "tiny" : state.size == Size::Giant ? "giant" : "none")
@@ -1115,16 +1117,17 @@ public:
 
         if (command != "set")
         {
-            handler->SendSysMessage("usage: .affix show | .affix set <prefix-key|none> <affix-key|none> <tiny|giant|none>");
+            handler->SendSysMessage("usage: .affix show | .affix set <prefix-key|none> <affix-key|none> [tiny|giant|none]");
             return false;
         }
 
         std::string prefix, affix, size;
-        if (!(input >> prefix >> affix >> size))
+        if (!(input >> prefix >> affix))
         {
-            handler->SendSysMessage("usage: .affix set <prefix-key|none> <affix-key|none> <tiny|giant|none>");
+            handler->SendSysMessage("usage: .affix set <prefix-key|none> <affix-key|none> [tiny|giant|none]");
             return false;
         }
+        input >> size;
 
         std::string message;
         if (!CreatureAffixes::Manager::instance().Force(creature, prefix, affix, size, message))
