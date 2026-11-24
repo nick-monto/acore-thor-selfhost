@@ -10,13 +10,18 @@ Pins: `pins.toml`. Gates referenced below: `docs/SERVER-STACK.md` §9.
 
 ## Fast path
 
-The whole install is one script. In Termux:
+The install is the installer and its config writer, which must sit beside it. In Termux:
 
 ```sh
 curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
+curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/write-confs.sh
 bash thor-install.sh --check     # preflight: rootfs, disk, release asset, no changes
 bash thor-install.sh             # do it: ~1.2 GB download, or --from-source to compile in place
 ```
+
+The second download is not optional: `thor-install.sh` sources `write-confs.sh` to create and repair
+every config. Fetching only the first file leaves an old writer in place, which is how a new module's
+`.conf.dist` can exist while its live `.conf` is never created.
 
 This runs for an hour or more — apt, the client-data download, then a first boot that imports the base SQL and updates and waits up to `--boot-timeout` (1800 s by default). Keep Termux in the foreground with the screen on while it runs: it takes a wake lock before entering the rootfs, but Android can still freeze or kill a backgrounded Termux, and a frozen install stops with no further output, which looks like a crash. `--check` first if you want to know what it will do without the wait.
 
@@ -30,13 +35,14 @@ Useful flags: `--bots N` (default 50), `--lan-ip <ip>` (bind to the LAN and pin 
 
 Afterwards:
 
-`--status` and `--repair` run *the copy you invoke*, not the one on GitHub: a `thor-install.sh` left
-over from an earlier install keeps doing what it did then. Re-download it first whenever a fix is
-supposed to reach the device — `curl -fLO …/main/scripts/thor-install.sh` overwrites in place — or a
-repair reports `ok` for work an older script did the older way.
+`--status` and `--repair` run *the copies you invoke*, not the ones on GitHub: a `thor-install.sh`
+or `write-confs.sh` left over from an earlier install keeps doing what it did then. Re-download both
+first whenever a fix is supposed to reach the device — the two `curl -fLO` lines below overwrite in
+place — or a repair reports `ok` for work an older script did the older way.
 
 ```sh
 curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
+curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/write-confs.sh
 bash thor-install.sh --status       # component-by-component report; exit 1 if something needs repair
 bash thor-install.sh --repair       # fix what it can, then re-check
 bash thor-install.sh --uninstall --keep-db   # dump the databases, then remove everything

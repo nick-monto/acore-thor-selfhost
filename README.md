@@ -58,17 +58,25 @@ Playing and hosting are separate here. Playing a self-hosted 3.3.5a realm needs 
 
 ## Install on the Thor
 
-The Thor pulls three things from GitHub: this script, the server artifact from a release, and the `sql/custom` tree (a few small files, fetched by the installer on every run so the CUSTOM SQL is never a stale build-time snapshot). All come from this public repository, so fetching needs no token:
+The Thor pulls the installer's two files from GitHub — `thor-install.sh` and the config writer
+`write-confs.sh` that runs beside it — plus the server artifact from a release and the `sql/custom`
+tree (a few small files, fetched by the installer on every run so the CUSTOM SQL is never a stale
+build-time snapshot). All come from this public repository, so fetching needs no token:
 
 ```sh
 curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/thor-install.sh
+curl -fLO https://raw.githubusercontent.com/nick-monto/acore-thor-selfhost/main/scripts/write-confs.sh
 bash thor-install.sh --check      # report what it would do, change nothing
 bash thor-install.sh              # do it (server download ~1.2 GB, or --from-source to compile)
 ```
 
-A token is needed only if you have forked this repository privately or are pulling from a private fork: fetch the script from that fork's raw URL with an `Authorization: Bearer` header, and pass `--github-token` (a fine-grained token with `contents: read`) or set `THOR_GH_TOKEN` in the environment.
+`write-confs.sh` is not optional: `thor-install.sh` sources it for every configuration write. Pull
+both again whenever a fix is meant to reach the device; fetching only the installer leaves an older
+config writer in place. Passing a commit URL instead of `main` avoids a stale branch fetch.
 
-`--github-token` (or `THOR_GH_TOKEN` in the environment) is used for the release probe, the artifact download and its checksum file, and is recorded in the mode-600 state file so `--repair` can re-download later. Copying the script over with `scp` works too.
+A token is needed only if you have forked this repository privately or are pulling from a private fork: fetch both files from that fork's raw URL with an `Authorization: Bearer` header, and pass `--github-token` (a fine-grained token with `contents: read`) or set `THOR_GH_TOKEN` in the environment.
+
+`--github-token` (or `THOR_GH_TOKEN` in the environment) is used for the release probe, the artifact download and its checksum file, and is recorded in the mode-600 state file so `--repair` can re-download later. Copying both files over with `scp` works too.
 
 The creature-gear dataset is committed as generated SQL, so a normal install (`--from-source` included) builds it as-is with no extra step. To change it, regenerate from a checkout of the pinned core (`pins.toml`) and rebuild:
 
