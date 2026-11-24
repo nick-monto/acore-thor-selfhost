@@ -1743,6 +1743,24 @@ refresh_custom_sql() {   # fetch only sql/custom from this repo into $SRC_DIR/da
     return 0
 }
 
+choose_conf_dir() {   # choose_conf_dir - use the directory the binary actually reads
+    # Extracting an artifact over an older source-build tree leaves both env/dist/etc and etc.
+    # The binary's compile-time _CONF_DIR decides which one its modules read; prefer that path
+    # when it lives inside this install, instead of blindly taking env/dist/etc.
+    local baked
+    baked=$(baked_conf_dir "$BIN_DIR/worldserver" 2>/dev/null || true)
+    case "$baked" in
+        "$ROOT"/*)
+            if [ -d "$baked" ]; then CONF_DIR="$baked"; return; fi
+            ;;
+    esac
+    if [ -d "$ROOT/etc" ]; then
+        CONF_DIR="$ROOT/etc"
+    else
+        CONF_DIR="$ROOT/env/dist/etc"
+    fi
+}
+
 layout_check() {
     step "Layout"
     if [ "$CHECK" = 1 ]; then
@@ -1755,7 +1773,7 @@ layout_check() {
         if [ -x "$candidate/worldserver" ]; then BIN_DIR="$candidate"; break; fi
     done
     [ -n "$BIN_DIR" ] || die "worldserver not found under $ROOT (expected bin/ or env/dist/bin/)"
-    if [ -d "$ROOT/env/dist/etc" ]; then CONF_DIR="$ROOT/env/dist/etc"; else CONF_DIR="$ROOT/etc"; fi
+    choose_conf_dir
     DATA_DIR="$ROOT/data"
     [ -n "$SRC_DIR" ] || SRC_DIR="$ROOT/src"
     log "binaries    : $BIN_DIR"
@@ -2622,7 +2640,7 @@ layout_dirs() {   # recover BIN_DIR/CONF_DIR/DATA_DIR/SRC_DIR from what exists o
     for candidate in "$ROOT/bin" "$ROOT/env/dist/bin"; do
         if [ -d "$candidate" ]; then BIN_DIR="$candidate"; break; fi
     done
-    if [ -d "$ROOT/env/dist/etc" ]; then CONF_DIR="$ROOT/env/dist/etc"; else CONF_DIR="$ROOT/etc"; fi
+    choose_conf_dir
     DATA_DIR="$ROOT/data"
     [ -n "$SRC_DIR" ] || SRC_DIR="$ROOT/src"
 }
