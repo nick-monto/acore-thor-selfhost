@@ -58,6 +58,12 @@ use `EffectRealPointsPerLevel`, so a level 1 mob deals 1 (gas) and 4 (proc),
 while a level 80 mob deals 20 and 162. The old stock `12187`/`44537` damage
 spells are not used.
 
+The custom effect spell ids are server-only: the client has no `Spell.dbc`
+rows for `100200`–`100206`, so the stock combat log has no name or tooltip for
+those ticks. Verify the miasma on the player health bar; a client `Spell.dbc`
+patch is needed for combat-log text. A stock-spell substitute would put the
+effect in client data at the cost of changing the spell ids.
+
 The carriers are stock permanent dummy auras with Attributes `0`, no spell
 visual and no world-database references. They must stay client-visible:
 `SPELL_ATTR0_DO_NOT_DISPLAY` removes the aura from `UnitAura` as well as the
