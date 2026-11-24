@@ -1,14 +1,15 @@
 # mod-creature-affixes
 
-The initial server slice for the creature prefix/affix system.
+The server-side creature prefix/affix system.
 
 ## Definitions
 
-`mod_creature_affixes_modifier` is the static pool. The table and initial rows
-ship in:
+`mod_creature_affixes_modifier` is the static pool. The table, the three proof
+rows and the expanded pool ship in:
 
 - `data/sql/world/base/creature_affixes_10_schema.sql`
 - `data/sql/world/base/creature_affixes_20_modifiers.sql`
+- `data/sql/world/base/creature_affixes_80_expanded_pool.sql`
 
 The worldserver loads the table once at startup (`Manager::LoadModifiers`) and
 keeps per-spawn rolls in memory. The table is not written on spawn, death or
@@ -48,7 +49,7 @@ spell `25039`, which the client already knows, in the modifier's `visual` row.
 | `Gilded` | Prefix | `67828` Dummy Riding Aura | one extra creature loot roll |
 | `of the Bear` | Affix | `71432` Mote of Anger | +15% maximum health |
 
-## Candidate rows
+## Complex proof rows
 
 | Modifier | Kind | Carrier | Effect spells |
 | --- | --- | --- | --- |
@@ -69,6 +70,45 @@ All custom `spell_dbc` rows set `EquippedItemClass = -1`; the column default
 `0` is an item-class requirement and breaks normal casts with
 `SPELL_FAILED_EQUIPPED_ITEM_CLASS`.
 
+## Expanded pool
+
+The pool now has fifteen prefixes and fifteen affixes. Five of each are complex
+rows made from two or three stat/area auras plus a stock visual:
+
+| Kind | Simple | Complex |
+| --- | --- | --- |
+| Prefix | Vicious, Gilded, Cruel, Sturdy, Frenzied, Sluggish, Arcane, Warded, Swift, Blessed | Zombified, Feral, Blazing, Frostbound, Venomous |
+| Affix | of the Bear, of the Ox, of the Wolf, of the Falcon, of the Turtle, of the Serpent, of the Moon, of the Boar, of the Wraith, of the Colossus | of the Corruption, of the Inferno, of the Glacier, of the Plague, of the Storm |
+
+Gilded gains the stock `57718` Harpoon Loot Sparkles visual. The other complex
+rows use `35471`, `45421`, `40158`, `35468`, `55928`, `47706`, `49702` and
+`45213`; all are stock permanent visuals, so the client needs no Spell.dbc
+patch. The data-driven simple rows use one hidden custom aura (100300–100312)
+plus one stock visual cue; Vicious, Gilded and of the Bear keep their native
+effects. No new database schema or client DBC rows are introduced.
+
+| Simple modifier | Stock visual cue |
+| --- | --- |
+| Vicious | Blood Orb State Visual |
+| Cruel | Display Blood Globe |
+| Sturdy | Stoneform |
+| Frenzied | Enrage |
+| Sluggish | Dazed and Confused |
+| Arcane | Arcane State |
+| Warded | Cosmetic - Arcane Force Shield (Blue) |
+| Swift | Cosmetic - Combat Whirlwind |
+| Blessed | Holy Zone Visual |
+| of the Bear | Icebound Fortitude |
+| of the Ox | Power Spark |
+| of the Wolf | Frenzied Bloodthirst Visual |
+| of the Falcon | Gusty Prison |
+| of the Turtle | Shield of the Lich King |
+| of the Serpent | Blight Spill |
+| of the Moon | Star Beam |
+| of the Boar | Spotlight |
+| of the Wraith | Cosmetic - Purple Ghost Aura |
+| of the Colossus | Wild Growth |
+
 The custom effect spell ids are server-only: the client has no `Spell.dbc`
 rows for `100200`–`100203` or `100205`–`100207`, so the stock combat log has
 no name or tooltip for those ticks. Verify the miasma on the player health
@@ -86,7 +126,9 @@ use the same names.
 `creature_affixes_30_visible_carriers.sql` moves a database that already applied
 the old hidden seed; its guards leave an operator's own carrier choice alone.
 
-The other design rows are intentionally absent until the first slice is proven.
+The carrier rows added by `creature_affixes_80_expanded_pool.sql` follow the
+same visibility rule. The add-on marker table contains all thirty carrier
+names and every stock visual name.
 
 ## Hidden size layer
 

@@ -1,10 +1,10 @@
 /*
- * mod-creature-affixes - initial implementation.
+ * mod-creature-affixes - implementation.
  *
- * This file deliberately contains only the three proof modifiers plus the
- * hidden size layer. The remaining modifiers from the design are not listed
- * here yet; adding a row to the modifier table and implementing its Effect is the
- * extension point.
+ * Vicious, Gilded and of the Bear have native hooks. The rest of the expanded
+ * pool is data-driven: rows in `mod_creature_affixes_modifier_effect` attach
+ * permanent stat, area and visual spells. Every row carries a stock client
+ * visual, so no client DBC patch is required.
  */
 
 #include "creature_affixes.h"

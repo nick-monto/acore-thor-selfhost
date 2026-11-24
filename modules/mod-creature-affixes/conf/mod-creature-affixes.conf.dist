@@ -5,11 +5,11 @@
 ########################################
 #
 # Every world spawn can carry one prefix and one affix, plus an independent
-# hidden size layer. The initial slice ships three proof modifiers:
-#
-#   Vicious      prefix   +12% physical damage
-#   Gilded       prefix   one extra creature loot roll
-#   of the Bear  affix    +15% maximum health
+# hidden size layer. The pool ships fifteen prefixes and fifteen affixes;
+# five of each are complex multi-effect rows. Simple rows carry one stock
+# visual cue; complex rows carry a stock visual as well. The native hooks
+# cover Vicious, Gilded and of the Bear; all other modifiers are loaded from
+# `mod_creature_affixes_modifier_effect`.
 #
 # The size layer is deliberately invisible to the client add-on: no marker
 # aura, no name, no tooltip. It scales the model, bounding radius and combat
@@ -58,8 +58,9 @@ CreatureAffixes.AffixChance = 10
 CreatureAffixes.SizeChance = 10
 
 #    CreatureAffixes.MaxCombinedInfluence
-#        Safety cap for a prefix + affix combination. The initial three rows
-#        never reach it; the remaining design rows use the same budget.
+#        Safety cap for a prefix + affix combination. Complex rows have
+#        influence 3; a complex prefix and complex affix fit in the default
+#        budget of 6.
 #        Default: 6
 #
 CreatureAffixes.MaxCombinedInfluence = 6

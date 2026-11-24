@@ -1,11 +1,14 @@
 /*
- * mod-creature-affixes - initial slice.
+ * mod-creature-affixes - expanded modifier pool.
  *
- * Three proof modifiers and the independent hidden size layer:
- *   - Vicious (prefix)       +12% physical damage
- *   - of the Bear (affix)    +15% maximum health
- *   - Gilded (prefix)        one extra creature loot roll
- *   - Tiny / Giant           hidden size layer, outdoor world only
+ * Fifteen prefix and fifteen affix definitions are loaded from the world
+ * database. Vicious, Gilded and of the Bear have native C++ effects; the
+ * rest use permanent effect spells. Five rows per kind combine several
+ * effects with a stock visual, including Zombified, Feral, Blazing,
+ * Frostbound and Venomous on the prefix side and of the Corruption,
+ * of the Inferno, of the Glacier, of the Plague and of the Storm on the
+ * affix side. Every simple row also carries one stock visual cue; Gilded
+ * uses a sparkle visual.
  *
  * The server writes the configured prefix and affix labels into the creature's
  * name, so the target frame and every nameplate carry them without a client
