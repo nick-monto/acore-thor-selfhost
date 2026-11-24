@@ -2193,6 +2193,7 @@ inside_repair() {
     echo
     log "re-checking after $repaired fix(es)"
     run_checks 0
+    state_save
     summary_status
 }
 
@@ -2201,7 +2202,9 @@ check_needs_root() { [ "$(id -u)" = "0" ]; }
 run_checks() {   # run_checks FIX(0|1)
     local fix="${1:-0}"
     step "Components"
-    if [ -z "$BIN_DIR" ]; then layout_dirs; fi
+    # --repair loads the old state file first; state written before the config-dir fix still points
+    # at env/dist/etc. Recover the layout from disk and ask the binary which _CONF_DIR it reads.
+    layout_dirs
 
     # 1. binaries
     local bin missing_any=0
