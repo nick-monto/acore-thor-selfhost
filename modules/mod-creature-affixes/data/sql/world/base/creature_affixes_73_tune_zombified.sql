@@ -75,5 +75,10 @@ ON DUPLICATE KEY UPDATE
 `role` = VALUES(`role`),
 `spell_id` = VALUES(`spell_id`);
 
-INSERT IGNORE INTO `spell_script_names` (`spell_id`, `ScriptName`)
-VALUES (100203, 'ZombifiedMiasmaAuraScript');
+DELETE FROM `spell_script_names`
+WHERE `spell_id` = 100203;
+
+INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`)
+VALUES (100203, 'ZombifiedMiasmaAuraScript')
+ON DUPLICATE KEY UPDATE
+`ScriptName` = VALUES(`ScriptName`);

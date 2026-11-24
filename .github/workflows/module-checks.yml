@@ -67,6 +67,16 @@ jobs:
         # scripts/check-pins.py so it can be run here without CI.
         run: python3 scripts/check-pins.py
 
+      - name: Every module is named by every build surface
+        # A module that no build copies is never compiled and a module thor-install.sh does not
+        # fetch never reaches the device, yet either looks correct in the source tree. The checker
+        # reads modules/ and requires each module in pins.toml, the three server workflows and
+        # thor-install.sh. It needs no checkout beyond this one.
+        run: python3 scripts/check-module-wiring.py
+
+      - name: Each module's SQL is re-appliable and its spell rows are explicit
+        run: python3 scripts/sql/check_module_sql.py --repo .
+
       - name: Dependency headers
         # Headers only. Nothing is compiled to an object file and nothing is linked, so
         # no library and no -dev package beyond the headers is needed.

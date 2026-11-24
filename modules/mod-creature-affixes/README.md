@@ -32,9 +32,13 @@ Stock spells are preferred where they are already level-scaled. The candidate
 stat and trigger auras (`100200`, `100201`, `100202`, `100203`, `100205`) are
 server-only `spell_dbc` rows: no visual, no icon, and
 `DO_NOT_DISPLAY|DO_NOT_LOG`, so the client has nothing to draw while the server
-applies the effect. The miasma is a server-only area aura; `100206` is a
-server-only damage spell too, but uses stock visuals so the client still shows
-the gas and Fel Lightning impacts.
+applies the effect. The miasma is a server-only area aura. `100206` is a
+server-only damage spell too: its row carries the stock `SpellVisualID` `9966`,
+but a visual id inside a custom `spell_dbc` row is server-side data only. The
+client has no `Spell.dbc` row for `100206`, so no gas and no Fel Lightning
+impact is proven or expected to draw; a client `Spell.dbc` row is required
+before either can be claimed. The visible gas comes from the separate stock
+spell `25039`, which the client already knows, in the modifier's `visual` row.
 
 ## Initial rows
 

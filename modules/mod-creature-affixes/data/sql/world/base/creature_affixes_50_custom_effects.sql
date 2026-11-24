@@ -15,48 +15,51 @@
 --
 -- 100206's EffectRealPointsPerLevel is evaluated against the caster's level
 -- (the mob carrying the modifier), with BaseLevel and SpellLevel both 1.
--- All rows set EquippedItemClass=-1 in creature_affixes_72_percent_miasma.sql;
--- the default 0 is an item-class requirement and breaks normal casts.
+-- All rows set EquippedItemClass=-1: the default 0 is an item-class
+-- requirement, not "none", and breaks normal casts. EffectMiscValue_1 is 0
+-- everywhere except 100207, where 1 selects SPELL_SCHOOL_MASK_NORMAL for its
+-- +30% physical damage aura.
 
 INSERT INTO `spell_dbc`
 (`ID`, `Attributes`, `AttributesEx`, `ProcTypeMask`, `ProcChance`,
  `MaxLevel`, `BaseLevel`, `SpellLevel`, `DurationIndex`,
  `Effect_1`, `EffectDieSides_1`, `EffectRealPointsPerLevel_1`, `EffectBasePoints_1`,
- `ImplicitTargetA_1`, `ImplicitTargetB_1`, `EffectRadiusIndex_1`, `EffectAura_1`,
- `EffectAuraPeriod_1`, `EffectTriggerSpell_1`,
+ `EffectMiscValue_1`, `ImplicitTargetA_1`, `ImplicitTargetB_1`, `EffectRadiusIndex_1`,
+ `EffectAura_1`, `EffectAuraPeriod_1`, `EffectTriggerSpell_1`,
  `Effect_2`, `EffectDieSides_2`, `EffectRealPointsPerLevel_2`, `EffectBasePoints_2`,
  `ImplicitTargetA_2`, `ImplicitTargetB_2`, `EffectRadiusIndex_2`, `EffectAura_2`,
  `EffectAuraPeriod_2`, `EffectTriggerSpell_2`,
- `SpellVisualID_1`, `SpellIconID`, `SchoolMask`, `Name_Lang_enUS`, `Name_Lang_Mask`)
+ `SpellVisualID_1`, `SpellIconID`, `SchoolMask`, `Name_Lang_enUS`, `Name_Lang_Mask`,
+ `EquippedItemClass`)
 VALUES
 (100200, 384, 0, 0, 101, 0, 1, 1, 21,
- 6, 0, 0, -20, 1, 0, 0, 138, 0, 0,
+ 6, 0, 0, -20, 0, 1, 0, 0, 138, 0, 0,
  6, 0, 0, -40, 1, 0, 0, 33, 0, 0,
- 0, 0, 1, 'Zombified Sluggishness', 0),
+ 0, 0, 1, 'Zombified Sluggishness', 0, -1),
 (100201, 384, 0, 0, 101, 0, 1, 1, 21,
- 6, 0, 0, -20, 1, 0, 0, 133, 0, 0,
+ 6, 0, 0, -20, 0, 1, 0, 0, 133, 0, 0,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
- 0, 0, 1, 'Zombified Frailty', 0),
+ 0, 0, 1, 'Zombified Frailty', 0, -1),
 (100202, 384, 0, 0, 101, 0, 1, 1, 21,
- 6, 0, 0, 20, 1, 0, 0, 138, 0, 0,
+ 6, 0, 0, 20, 0, 1, 0, 0, 138, 0, 0,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
- 0, 0, 1, 'Corrupted Haste', 0),
+ 0, 0, 1, 'Corrupted Haste', 0, -1),
 (100203, 384, 0, 0, 101, 0, 1, 1, 21,
- 129, 0, 0, 2, 1, 0, 7, 89, 3000, 0,
+ 129, 0, 0, 2, 0, 1, 0, 7, 89, 3000, 0,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
- 0, 0, 32, 'Zombified Miasma', 0),
+ 0, 0, 32, 'Zombified Miasma', 0, -1),
 (100205, 384, 0, 4, 40, 0, 1, 1, 21,
- 6, 0, 0, 0, 1, 0, 0, 42, 0, 100206,
+ 6, 0, 0, 0, 0, 1, 0, 0, 42, 0, 100206,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
- 0, 0, 40, 'Corrupted Fel Lightning', 0),
+ 0, 0, 40, 'Corrupted Fel Lightning', 0, -1),
 (100206, 0, 0, 0, 101, 0, 1, 1, 0,
- 2, 0, 2.0, 4, 6, 0, 0, 0, 0, 0,
+ 2, 0, 2.0, 4, 0, 6, 0, 0, 0, 0, 0,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
- 9966, 0, 40, 'Corrupted Fel Lightning', 0),
+ 9966, 0, 40, 'Corrupted Fel Lightning', 0, -1),
 (100207, 384, 0, 0, 101, 0, 1, 1, 21,
- 6, 0, 0, 30, 1, 0, 0, 79, 0, 0,
+ 6, 0, 0, 30, 1, 1, 0, 0, 79, 0, 0,
  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
- 0, 0, 1, 'Zombified Brutality', 0)
+ 0, 0, 1, 'Zombified Brutality', 0, -1)
 ON DUPLICATE KEY UPDATE
 `Attributes` = VALUES(`Attributes`),
 `AttributesEx` = VALUES(`AttributesEx`),
@@ -70,6 +73,7 @@ ON DUPLICATE KEY UPDATE
 `EffectDieSides_1` = VALUES(`EffectDieSides_1`),
 `EffectRealPointsPerLevel_1` = VALUES(`EffectRealPointsPerLevel_1`),
 `EffectBasePoints_1` = VALUES(`EffectBasePoints_1`),
+`EffectMiscValue_1` = VALUES(`EffectMiscValue_1`),
 `ImplicitTargetA_1` = VALUES(`ImplicitTargetA_1`),
 `ImplicitTargetB_1` = VALUES(`ImplicitTargetB_1`),
 `EffectRadiusIndex_1` = VALUES(`EffectRadiusIndex_1`),
@@ -90,4 +94,5 @@ ON DUPLICATE KEY UPDATE
 `SpellIconID` = VALUES(`SpellIconID`),
 `SchoolMask` = VALUES(`SchoolMask`),
 `Name_Lang_enUS` = VALUES(`Name_Lang_enUS`),
-`Name_Lang_Mask` = VALUES(`Name_Lang_Mask`);
+`Name_Lang_Mask` = VALUES(`Name_Lang_Mask`),
+`EquippedItemClass` = VALUES(`EquippedItemClass`);

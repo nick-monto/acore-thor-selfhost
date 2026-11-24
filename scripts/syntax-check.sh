@@ -61,6 +61,28 @@ fail() {
     exit 1
 }
 
+# The flags and headers come from this core checkout, and the modules include playerbots headers.
+# A checkout at another commit produces a confusing failure in a playerbots header instead of the
+# real cause. Compare git checkouts with pins.toml; a source tree without .git is left alone.
+check_pins() {
+    local pins="$ROOT/pins.toml" core_pin pb_pin head
+    [ -f "$pins" ] || return 0
+    if [ -d "$CORE/.git" ]; then
+        core_pin="$(awk -F'"' '/^commit[[:space:]]*=/{print $2; exit}' "$pins")"
+        head="$(git -C "$CORE" rev-parse HEAD 2>/dev/null || true)"
+        if [ -n "$core_pin" ] && [ -n "$head" ] && [ "$core_pin" != "$head" ]; then
+            fail "core is $head but pins.toml wants $core_pin; checkout the pinned core"
+        fi
+    fi
+    if [ -d "$PLAYERBOTS/.git" ]; then
+        pb_pin="$(awk -F'"' '/^\[module\.playerbots\]/{f=1; next} f && /^\[/{exit} f && /^commit[[:space:]]*=/{print $2; exit}' "$pins")"
+        head="$(git -C "$PLAYERBOTS" rev-parse HEAD 2>/dev/null || true)"
+        if [ -n "$pb_pin" ] && [ -n "$head" ] && [ "$pb_pin" != "$head" ]; then
+            fail "playerbots is $head but pins.toml wants $pb_pin; checkout the pinned playerbots"
+        fi
+    fi
+}
+
 # The flags for one module translation unit, NUL separated, with the three checkout
 # roots resolved for this machine. Works from a configured build or from the file.
 templated_flags() {
@@ -176,6 +198,7 @@ fi
 
 [ -d "$CORE" ] || skip "no core checkout in $CORE: set AC_CORE, or clone the pinned core beside this repository"
 [ -d "$PLAYERBOTS" ] || skip "no mod-playerbots checkout in $PLAYERBOTS: set AC_PLAYERBOTS"
+check_pins
 [ -d "$DEPS/usr/include/boost" ] || [ -d "$DEPS/boost" ] || skip "no core dependency headers in $DEPS: set AC_DEPS_ROOT (see the recipe at the bottom of this file)"
 
 if [ -f "$COMPILE_COMMANDS" ]; then
@@ -221,6 +244,19 @@ for source in "${SOURCES[@]}"; do
         printf 'FAIL  %s\n' "${source#"$ROOT"/}" >&2
         printf '%s\n' "$output" | grep -E 'error:|warning:' | head -20 >&2 || printf '%s\n' "$output" | head -20 >&2
         failed+=("$source")
+    fi
+done
+
+# The core compiles its own copy of each module at $CORE/modules/<name>, so a module edited here
+# but not copied into the core was checked against stale sources. This is advisory only: the
+# check's result and exit status are unchanged.
+for module_dir in "$ROOT"/modules/*/; do
+    [ -d "$module_dir" ] || continue
+    module_name="$(basename "$module_dir")"
+    [ -d "$CORE/modules/$module_name" ] || continue
+    if ! diff -qr "$module_dir" "$CORE/modules/$module_name" >/dev/null 2>&1; then
+        printf 'warning: modules/%s differs from %s/modules/%s; run scripts/dev-realm.sh sync %s --yes\n' \
+            "$module_name" "$CORE" "$module_name" "$module_name" >&2
     fi
 done
 
