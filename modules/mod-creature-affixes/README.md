@@ -120,12 +120,14 @@ restart. Modifier rows are loaded once at world startup; restart after editing
 .affix show
 .affix set vicious bear giant
 .affix set gilded none tiny
+.affix set zombified corrupted
 .affix set none none none
 ```
 
-`show` prints the selected creature's prefix, affix, size factor, maximum health,
-native/current scale, bounding radius and combat reach. `set` forces a state on
-the selected creature; it is for testing and is not the spawn roll.
+`show` prints the selected creature's current and base names, prefix, affix,
+size factor, maximum health, native/current scale, bounding radius and combat
+reach. `set` forces a state on the selected creature; the size argument is
+optional and defaults to `none`.
 
 ## Loader
 
