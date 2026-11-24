@@ -2,9 +2,11 @@
 --
 -- Zombified:
 --   health -20%          custom hidden aura 100201
---   attack/move -20%     custom hidden aura 100200 (two aura effects)
---   gaseous shadow tick  100203 enemy area aura, 2% of maximum health every
---                         3 seconds, 8-yard radius.
+--   melee haste -20%     custom hidden aura 100200, effect 1
+--   movement -40%        custom hidden aura 100200, effect 2
+--   attack damage +30%   custom hidden aura 100207 (physical)
+--   gaseous shadow tick  100203 enemy area aura: 2% max health per 3 seconds
+--                         below level 10, 4% at 10-19, 6% at 20+, 10-yard radius.
 --   gas visual           25039 Green Ghost Visual; stock client data.
 --
 -- of the Corruption:
@@ -38,6 +40,7 @@ VALUES
 ('zombified', 1, 'aura', 100201),
 ('zombified', 2, 'aura', 100203),
 ('zombified', 3, 'visual', 25039),
+('zombified', 4, 'aura', 100207),
 ('corrupted', 0, 'aura', 100202),
 ('corrupted', 1, 'aura', 100205),
 ('corrupted', 2, 'visual', 60451)

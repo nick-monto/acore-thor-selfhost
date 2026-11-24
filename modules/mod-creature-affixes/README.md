@@ -48,22 +48,25 @@ the gas and Fel Lightning impacts.
 
 | Modifier | Kind | Carrier | Effect spells |
 | --- | --- | --- | --- |
-| `Zombified` | Prefix | `34463` Debug Debuff | `100200` attack/move −20%, `100201` health −20%, `100203` miasma area aura, `25039` gas visual |
+| `Zombified` | Prefix | `34463` Debug Debuff | `100200` melee haste −20%, movement −40%; `100201` health −20%; `100203` miasma area aura; `100207` attack damage +30%; `25039` gas visual |
 | `of the Corruption` | Affix | `29479` Unscathed (DND) | `100202` attack speed +20%, `100205` Fel Lightning proc, `60451` Corruption of Time visual |
 
-`100203` is a permanent 8-yard enemy area aura that deals 2% of each victim's
-maximum health every 3 seconds. Percent damage scales with the target, so it
-stays meaningful from level 1 to 80. `100205` is a 40% melee proc that
-triggers `100206`: `4 + 2 × (mob level − 1)` shadow/fire direct damage. A
-level 1 mob deals 4 (proc) and a level 80 mob deals 162. The old stock
-`12187`/`44537` damage spells are not used.
+`100203` is a permanent 10-yard enemy area aura. It deals 2% of each victim's
+maximum health every 3 seconds below level 10, 4% at levels 10–19, and 6% at
+level 20 and above. `ZombifiedMiasmaAuraScript` sets that step from the victim's
+level before each tick; the row's base amount is the 2% fallback. `100200` slows
+movement by 40% and melee haste by 20%; `100207` adds 30% physical attack
+damage to offset those penalties. `100205` is a 40% melee proc that triggers
+`100206`: `4 + 2 × (mob level − 1)` shadow/fire direct damage. A level 1 mob
+deals 4 (proc) and a level 80 mob deals 162. The old stock `12187`/`44537`
+damage spells are not used.
 
 All custom `spell_dbc` rows set `EquippedItemClass = -1`; the column default
 `0` is an item-class requirement and breaks normal casts with
 `SPELL_FAILED_EQUIPPED_ITEM_CLASS`.
 
 The custom effect spell ids are server-only: the client has no `Spell.dbc`
-rows for `100200`–`100203` or `100205`–`100206`, so the stock combat log has
+rows for `100200`–`100203` or `100205`–`100207`, so the stock combat log has
 no name or tooltip for those ticks. Verify the miasma on the player health
 bar; a client `Spell.dbc` patch is needed for combat-log text. A stock-spell
 substitute would put the effect in client data at the cost of changing the

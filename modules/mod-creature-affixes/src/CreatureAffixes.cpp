@@ -25,8 +25,11 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
+#include "ScriptMgr.h"
+#include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "SpellScript.h"
 #include "Unit.h"
 
 using namespace Acore::ChatCommands;
@@ -1081,6 +1084,29 @@ namespace CreatureAffixes
     }
 }
 
+class ZombifiedMiasmaAuraScript : public AuraScript
+{
+    PrepareAuraScript(ZombifiedMiasmaAuraScript);
+
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        Unit* target = GetTarget();
+        if (!target)
+            return;
+
+        uint32 level = target->GetLevel();
+        uint32 percent = level >= 20 ? 6 : level >= 10 ? 4 : 2;
+
+        if (AuraEffect* effect = GetEffect(aurEff->GetEffIndex()))
+            effect->ChangeAmount(int32(percent), false);
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(ZombifiedMiasmaAuraScript::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE_PERCENT);
+    }
+};
+
 class creature_affixes_commandscript : public CommandScript
 {
 public:
@@ -1150,4 +1176,5 @@ void AddCreatureAffixesScripts()
     new CreatureAffixes::DisplayScript();
     new CreatureAffixes::LootScript();
     new creature_affixes_commandscript();
+    RegisterSpellScript(ZombifiedMiasmaAuraScript);
 }
