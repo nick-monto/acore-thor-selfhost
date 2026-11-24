@@ -60,11 +60,14 @@ namespace
     }
 
     // The add-on reads the marker through UnitAura, so the carrier must be a
-    // permanent, client-visible dummy. SPELL_ATTR0_DO_NOT_DISPLAY is not usable
-    // here: the client filters that aura out of UnitAura as well as the UI.
+    // permanent, client-visible dummy. Both DO_NOT_DISPLAY (Attributes 0x80)
+    // and NO_AURA_ICON (AttributesEx 0x10000000) hide the spell from UnitAura
+    // as well as the UI.
     bool IsVisibleDummyCarrier(SpellInfo const* carrier)
     {
-        if (!carrier || carrier->IsPassive() || carrier->HasAttribute(SPELL_ATTR0_DO_NOT_DISPLAY))
+        if (!carrier || carrier->IsPassive()
+            || carrier->HasAttribute(SPELL_ATTR0_DO_NOT_DISPLAY)
+            || carrier->HasAttribute(SPELL_ATTR1_NO_AURA_ICON))
             return false;
         if (carrier->GetMaxDuration() >= 0)
             return false;

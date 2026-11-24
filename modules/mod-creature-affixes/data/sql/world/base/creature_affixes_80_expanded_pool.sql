@@ -29,27 +29,27 @@ VALUES
 ('frostbound',  'prefix', 'Frostbound',     26563, 3, 'none', 0),
 ('venomous',    'prefix', 'Venomous',       41033, 3, 'none', 0),
 ('cruel',       'prefix', 'Cruel',          41522, 1, 'none', 0),
-('sturdy',      'prefix', 'Sturdy',         41557, 2, 'none', 0),
-('frenzied',    'prefix', 'Frenzied',       41575, 2, 'none', 0),
+('sturdy',      'prefix', 'Sturdy',         58167, 2, 'none', 0),
+('frenzied',    'prefix', 'Frenzied',       58169, 2, 'none', 0),
 ('sluggish',    'prefix', 'Sluggish',       43300, 2, 'none', 0),
 ('arcane',      'prefix', 'Arcane',         43685, 2, 'none', 0),
-('warded',      'prefix', 'Warded',         43691, 2, 'none', 0),
+('warded',      'prefix', 'Warded',         58174, 2, 'none', 0),
 ('swift',       'prefix', 'Swift',          43827, 1, 'none', 0),
-('blessed',     'prefix', 'Blessed',        44683, 1, 'none', 0),
+('blessed',     'prefix', 'Blessed',        58175, 1, 'none', 0),
 -- Affixes
-('inferno',     'affix',  'of the Inferno',  44684, 3, 'none', 0),
+('inferno',     'affix',  'of the Inferno',  58176, 3, 'none', 0),
 ('glacier',     'affix',  'of the Glacier',  45062, 3, 'none', 0),
-('plague',      'affix',  'of the Plague',   45086, 3, 'none', 0),
+('plague',      'affix',  'of the Plague',   58177, 3, 'none', 0),
 ('storm',       'affix',  'of the Storm',    46340, 3, 'none', 0),
 ('ox',          'affix',  'of the Ox',       49444, 2, 'none', 0),
 ('wolf',        'affix',  'of the Wolf',     50797, 1, 'none', 0),
 ('falcon',      'affix',  'of the Falcon',   51176, 2, 'none', 0),
 ('turtle',      'affix',  'of the Turtle',   51217, 2, 'none', 0),
 ('serpent',     'affix',  'of the Serpent',  51624, 2, 'none', 0),
-('moon',        'affix',  'of the Moon',     51971, 1, 'none', 0),
-('boar',        'affix',  'of the Boar',     52172, 1, 'none', 0),
-('wraith',      'affix',  'of the Wraith',   52422, 2, 'none', 0),
-('colossus',    'affix',  'of the Colossus', 52646, 2, 'none', 0)
+('moon',        'affix',  'of the Moon',     61793, 1, 'none', 0),
+('boar',        'affix',  'of the Boar',     61794, 1, 'none', 0),
+('wraith',      'affix',  'of the Wraith',   61795, 2, 'none', 0),
+('colossus',    'affix',  'of the Colossus', 61796, 2, 'none', 0)
 ON DUPLICATE KEY UPDATE
 `kind` = VALUES(`kind`),
 `label` = VALUES(`label`),
@@ -135,7 +135,7 @@ VALUES
 ('arcane',   1, 'visual', 44347), -- Arcane State
 ('warded',   1, 'visual', 46933), -- Cosmetic - Arcane Force Shield (Blue)
 ('swift',    1, 'visual', 42901), -- Cosmetic - Combat Whirlwind
-('blessed',  1, 'visual', 70571), -- Holy Zone Visual
+('blessed',  1, 'visual', 65712), -- Light Essence Aura
 ('bear',     0, 'visual', 58837), -- Icebound Fortitude
 ('ox',       1, 'visual', 55845), -- Power Spark
 ('wolf',     1, 'visual', 71949), -- Frenzied Bloodthirst Visual

@@ -97,7 +97,7 @@ effects. No new database schema or client DBC rows are introduced.
 | Arcane | Arcane State |
 | Warded | Cosmetic - Arcane Force Shield (Blue) |
 | Swift | Cosmetic - Combat Whirlwind |
-| Blessed | Holy Zone Visual |
+| Blessed | Light Essence Aura |
 | of the Bear | Icebound Fortitude |
 | of the Ox | Power Spark |
 | of the Wolf | Frenzied Bloodthirst Visual |
@@ -116,12 +116,13 @@ bar; a client `Spell.dbc` patch is needed for combat-log text. A stock-spell
 substitute would put the effect in client data at the cost of changing the
 spell ids.
 
-The carriers are stock permanent dummy auras with Attributes `0`, no spell
-visual and no world-database references. They must stay client-visible:
-`SPELL_ATTR0_DO_NOT_DISPLAY` removes the aura from `UnitAura` as well as the
-UI, so the add-on cannot read it. The add-on reads the names through
-`UnitAura` and hides the carriers' target-frame buttons; the data file must
-use the same names.
+The carriers are stock permanent dummy auras with no spell visual and no
+world-database references. They must stay client-visible:
+`SPELL_ATTR0_DO_NOT_DISPLAY` (Attributes `0x80`) and
+`SPELL_ATTR1_NO_AURA_ICON` (AttributesEx `0x10000000`) both remove the aura
+from `UnitAura` as well as the UI, so the add-on cannot read it. The add-on
+reads the names through `UnitAura` and hides the carriers' target-frame
+buttons; the data file must use the same names.
 
 `creature_affixes_30_visible_carriers.sql` moves a database that already applied
 the old hidden seed; its guards leave an operator's own carrier choice alone.
