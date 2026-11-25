@@ -222,9 +222,33 @@ the mount and pet each mercenary ends up with on the roster. The study is
 | Offline checks | `python3 scripts/mercenaries/check_mercenaries.py`, run by the workflow before the build: conf keys read by the code are defined, the installer's `MERCENARY_CONF_DEFAULTS` and the shipped conf agree in both directions, the picker is a `CreatureScript` gated on the innkeeper flag with action codes clear of the core's option range, the pool reads the playerbots account table rather than the addclass cache, nothing still refers to `Mercenary.ObeliskEntry`, the roster schema matches the columns written, the loader symbol matches the folder name, every personality dial is a name playerbots registers as a *strategy* (read from the base, class, raid and dungeon `Strategy` contexts only, so a trigger, action or value of that name fails), and pins/workflow/installer mention the module | `scripts/mercenaries/check_mercenaries.py`, `server-aarch64.yml` "Check the mercenary module's files agree" [V] |
 | Verified | the offline checker passes and every module translation unit compiles (`scripts/syntax-check.sh`, `-fsyntax-only` against the pinned core's flags); the module has **not** been run on the Thor. The compile gate is `server-aarch64.yml`; the in-game steps are the plan's verification list | **not a build or Thor run** |
 
-## 15. The same stack for a Windows host
+## 15. Faction invasions (`mod-faction-invasion`)
 
-The pins in §1 and the five modules of §10-§14 ride a second artifact as well: `server-win64.yml`
+`modules/mod-faction-invasion` is an in-repo module (pinned by this repository's own ref in
+`pins.toml`) and is compiled into the artifact as one target of `libmodules.a`. The generated
+`ModulesLoader.cpp` calls `Addmod_faction_invasionScripts()`.
+
+The world tick chooses a real player, their zone and a curated anchor, then hands the start to
+`AllMapScript::OnMapUpdate`; summoning, despawning and GameObject deletion never run on the world
+thread. The wave is 15-18 stock entries at the player's level +/-2, with at most three elites. Each
+elite slot uses a generated rank-1 clone at `base + 700000` (the client's dragon frame is
+entry-keyed), and the per-spawn `CreatureStatScale` supplies the real level, health, damage, armour,
+spell power and healing. The mob loot is replaced in `OnAfterLootTemplateProcess`; the last killing
+blow picks the winner, and the owner-only chest is filled by hand (`lootId=0`) and gated in the
+inverted `OnAllowedToLootContainerCheck`.
+
+| Item | Value | Evidence |
+|---|---|---|
+| Core patch | `patches/invasion-stat-scale.patch`: `CreatureStatScale`, `OnCreatureCalculateStatScale` in `Creature::SelectLevel`, `GetZoneMapBounds` | all three server workflows and `module-checks.yml` apply it; `scripts/thor-install.sh --from-source` uses `apply_core_patch` [V] |
+| Config | `$PREFIX/etc/modules/mod-faction-invasion.conf`, created from the shipped `.dist`: `Enable`, `CheckIntervalSec`, `MinPlayers`, `ChancePercent`, `CooldownMinutes`, `DurationMinutes`, `ChestEntry`, `GroundCarrierEntry`, `ChestLifetimeMinutes`, `WinnerGraceMinutes`, `Announce`, `Debug` | `write-confs.sh` and both installers validate the same ranges [V] |
+| SQL | `data/sql/world/base/faction_invasion_10_schema.sql` (seven world tables), `_20_themes`, `_30_creatures`, `_40_areas`, `_50_ground`, `_60_loot`, `_70_elite_clones` (267 rank-1 clones and companions), `_80_objects` (chest 5000100). Packed as `$PREFIX/src/modules/mod-faction-invasion/data/sql`; the updater applies it with state `MODULE` | `server-aarch64.yml`/`server-x86_64.yml`/`server-win64.yml` SQL steps [V] |
+| Generator | `scripts/faction-invasion/gen_invasion.py --core <core>`; `--check` is in `module-checks.yml` | the generator reproduces the committed files [V] |
+| Add-on | `Invasion` (`INVS`): zone alert, zone-map circle from the event's `WorldMapArea` bounds, minimap edge arrow. Installed by the launcher; `/inv` opens the zone map | `acore-thor-launcher` assets + `installLocalAddons` [V] |
+| Verified | core patch applies to the pin; all module translation units compile; module SQL is re-runnable; the generator `--check` passes; wiring check passes; Lua syntax compiles. **Not** exercised: a live realm spawn/loot/chest run and a real 3.3.5a client map/minimap render | local checks [V]; live/client unverified |
+
+## 16. The same stack for a Windows host
+
+The pins in §1 and the modules of §10-§15 ride a second artifact as well: `server-win64.yml`
 builds the same core commit, the same module commits and the same custom SQL with MSVC on a
 Windows x64 host, and `scripts/windows-install.ps1` installs them. Nothing in this document changes
 for it; what changes is the host, and it is written up in [`WINDOWS-HOST.md`](WINDOWS-HOST.md).

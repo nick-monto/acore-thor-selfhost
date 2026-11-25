@@ -66,6 +66,24 @@ CREATURE_AFFIXES_CONF_DEFAULTS=(
     "CreatureAffixes.Size.GiantMin=1.15"
     "CreatureAffixes.Size.GiantMax=1.30"
 )
+# mod-faction-invasion's conf keys with the values its shipped .dist carries. Same contract as
+# survivor: a key the module cannot use is silently replaced by its own fallback, so the installer
+# restores only the values outside their ranges. ChancePercent=0 is deliberate (random starts off,
+# the GM command still works) and is not a drift.
+FACTION_INVASION_CONF_DEFAULTS=(
+    "FactionInvasion.Enable=1"
+    "FactionInvasion.CheckIntervalSec=60"
+    "FactionInvasion.MinPlayers=1"
+    "FactionInvasion.ChancePercent=5"
+    "FactionInvasion.CooldownMinutes=15"
+    "FactionInvasion.DurationMinutes=10"
+    "FactionInvasion.ChestEntry=5000100"
+    "FactionInvasion.GroundCarrierEntry=15214"
+    "FactionInvasion.ChestLifetimeMinutes=30"
+    "FactionInvasion.WinnerGraceMinutes=10"
+    "FactionInvasion.Announce=1"
+    "FactionInvasion.Debug=0"
+)
 # mod-mercenaries's conf keys with the values its shipped .dist carries, as KEY=DEFAULT. Same
 # contract as the survivor list: a key outside its range is silently replaced by the module's own
 # fallback, so wc_write_all() restores it from here.
@@ -255,6 +273,30 @@ creature_affixes_value_ok() {   # creature_affixes_value_ok KEY VALUE - true whe
         CreatureAffixes.Size.GiantMin|CreatureAffixes.Size.GiantMax)
             case "$val" in ''|*[!0-9.]*) return 1 ;; esac
             awk -v v="$val" 'BEGIN { exit !(v >= 1 && v <= 2) }' ;;
+        *) return 1 ;;
+    esac
+}
+
+faction_invasion_value_ok() {   # faction_invasion_value_ok KEY VALUE - true when VALUE is one the module accepts
+    local key="$1" val="$2"
+    case "$val" in ''|*[!0-9]*) return 1 ;; esac
+    case "$key" in
+        FactionInvasion.Enable|FactionInvasion.Announce|FactionInvasion.Debug)
+            [ "$val" -eq 0 ] || [ "$val" -eq 1 ] ;;
+        FactionInvasion.ChancePercent)
+            [ "$val" -ge 0 ] && [ "$val" -le 100 ] ;;
+        FactionInvasion.CheckIntervalSec)
+            [ "$val" -ge 1 ] && [ "$val" -le 3600 ] ;;
+        FactionInvasion.MinPlayers)
+            [ "$val" -ge 1 ] && [ "$val" -le 40 ] ;;
+        FactionInvasion.CooldownMinutes)
+            [ "$val" -ge 0 ] && [ "$val" -le 1440 ] ;;
+        FactionInvasion.DurationMinutes)
+            [ "$val" -ge 1 ] && [ "$val" -le 120 ] ;;
+        FactionInvasion.ChestEntry|FactionInvasion.GroundCarrierEntry)
+            [ "$val" -ge 1 ] && [ "$val" -le 10000000 ] ;;
+        FactionInvasion.ChestLifetimeMinutes|FactionInvasion.WinnerGraceMinutes)
+            [ "$val" -ge 0 ] && [ "$val" -le 1440 ] ;;
         *) return 1 ;;
     esac
 }
@@ -526,6 +568,16 @@ wc_write_all() {
         wc_log "mod-creature-affixes.conf: Enable=$(wc_get_conf "$ca" CreatureAffixes.Enable) Prefix=$(wc_get_conf "$ca" CreatureAffixes.PrefixChance)% Affix=$(wc_get_conf "$ca" CreatureAffixes.AffixChance)% Size=$(wc_get_conf "$ca" CreatureAffixes.SizeChance)%"
     else
         wc_warn "no $WC_CONF_DIR/modules/mod-creature-affixes.conf.dist - the artifact was built without the module, creature affixes are unavailable"
+    fi
+    if [ -f "$WC_CONF_DIR/modules/mod-faction-invasion.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-faction-invasion.conf" ]; then
+        fvi="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-faction-invasion)"
+        # The shipped .dist already holds these values; each is read back because a key the module
+        # cannot use is silently replaced by its own fallback. Only an out-of-range value is
+        # rewritten, so a deliberate ChancePercent=0 (random starts off) survives a repair.
+        conf_defaults "$fvi" faction_invasion_value_ok mod-faction-invasion.conf "${FACTION_INVASION_CONF_DEFAULTS[@]}"
+        wc_log "mod-faction-invasion.conf: Enable=$(wc_get_conf "$fvi" FactionInvasion.Enable) Chance=$(wc_get_conf "$fvi" FactionInvasion.ChancePercent)% Duration=$(wc_get_conf "$fvi" FactionInvasion.DurationMinutes)m Cooldown=$(wc_get_conf "$fvi" FactionInvasion.CooldownMinutes)m"
+    else
+        wc_warn "no $WC_CONF_DIR/modules/mod-faction-invasion.conf.dist - the artifact was built without the module, faction invasions are unavailable"
     fi
     if [ -f "$WC_CONF_DIR/modules/mod-mercenaries.conf.dist" ] || [ -f "$WC_CONF_DIR/modules/mod-mercenaries.conf" ]; then
         pw="$(wc_conf_pair "$WC_CONF_DIR" modules/mod-mercenaries)"

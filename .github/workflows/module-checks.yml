@@ -100,6 +100,13 @@ jobs:
           git fetch -q --depth 1 origin "$PB_COMMIT"
           git checkout -q FETCH_HEAD
 
+      - name: Apply the invasion stat-scale core patch
+        # mod-faction-invasion includes Creature.h and overrides
+        # OnCreatureCalculateStatScale, which does not exist at the bare core pin. Apply the same
+        # patch the server workflows apply before the compile-check; a patch that stops applying is
+        # exactly the failure this gate is for.
+        run: git -C core apply "$GITHUB_WORKSPACE/patches/invasion-stat-scale.patch"
+
       - name: Compile-check the modules
         env:
           AC_CORE: ${{ github.workspace }}/core
@@ -126,6 +133,13 @@ jobs:
         # Item.dbc as input (--dbc), and this runner has no game files: it is checked on a host with
         # a 3.3.5a client, where --verify can also name the archive the client actually reads.
         run: python3 scripts/runewords/gen_runewords.py --core "$GITHUB_WORKSPACE/core" --check
+
+      - name: Check the generated invasion SQL is what its generator writes
+        # The theme roster, elite clones, areas, ground spells and loot rows are committed because
+        # the realm applies them from data/sql/world/base, so a run whose output differs from the
+        # committed files is a data patch that has drifted from the pinned dumps. The generator
+        # reuses gen_loot_bags.py, so it needs the same core checkout.
+        run: python3 scripts/faction-invasion/gen_invasion.py --core "$GITHUB_WORKSPACE/core" --check
 
       - name: No module commits a characters transaction synchronously
         # CharacterDatabase.DirectCommitTransaction runs the transaction on the synchronous

@@ -1,0 +1,113 @@
+[worldserver]
+
+########################################
+# mod-faction-invasion configuration
+########################################
+#
+# A random open-world event. A themed faction (Scourge, Burning Legion,
+# Scarlet Crusade, ...) spawns a 15-18 mob wave in the zone a real player is
+# already in. The mobs are that player's level +/-2, with at most three elites.
+# Killing the whole wave summons one owner-only reward chest; the contents
+# scale with the wave difficulty and the elite count. A short-lived ground
+# effect marks the area, and the client add-on draws the zone and minimap
+# markers from the INVS add-on messages.
+#
+# Data lives in mod_faction_invasion_* world tables. The module ships no
+# creatures or items of its own except the chest template and the invisible
+# ground carrier (the stock Invisible Stalker, entry 15214).
+#
+
+#
+#    FactionInvasion.Enable
+#        Master on/off switch. 0 = the module loads, the command still exists,
+#        and no event starts.
+#        Default: 1
+#
+FactionInvasion.Enable = 1
+
+#
+#    FactionInvasion.CheckIntervalSec
+#        How often the world tick asks whether a new event should start.
+#        Default: 60
+#
+FactionInvasion.CheckIntervalSec = 60
+
+#
+#    FactionInvasion.MinPlayers
+#        Minimum number of non-headless players in a zone before an event can
+#        start there. The trigger is one of those players.
+#        Default: 1
+#
+FactionInvasion.MinPlayers = 1
+
+#
+#    FactionInvasion.ChancePercent
+#        Chance per check to start an event, once the cooldown has expired.
+#        0 disables random starts while leaving the GM command usable.
+#        Default: 5
+#
+FactionInvasion.ChancePercent = 5
+
+#
+#    FactionInvasion.CooldownMinutes
+#        Minimum time between the end of one event and the start of the next.
+#        Default: 15
+#
+FactionInvasion.CooldownMinutes = 15
+
+#
+#    FactionInvasion.DurationMinutes
+#        How long the wave stands before it is declared a failure and the
+#        remaining mobs despawn without a chest.
+#        Default: 10
+#
+FactionInvasion.DurationMinutes = 10
+
+#
+#    FactionInvasion.ChestEntry
+#        The gameobject template used for the reward chest. 5000100 is the row
+#        created by faction_invasion_80_objects.sql: type 3, lootId 0 (the
+#        module fills the loot), consumable 1, zero add-on gold.
+#        Default: 5000100
+#
+FactionInvasion.ChestEntry = 5000100
+
+#
+#    FactionInvasion.GroundCarrierEntry
+#        The invisible creature that carries the area aura. 15214 is the stock
+#        Invisible Stalker; the module sets its faction, display and flags.
+#        Default: 15214
+#
+FactionInvasion.GroundCarrierEntry = 15214
+
+#
+#    FactionInvasion.ChestLifetimeMinutes
+#        How long an unopened chest stands before it is removed. The winner
+#        can still open it for this whole time.
+#        Default: 30
+#
+FactionInvasion.ChestLifetimeMinutes = 30
+
+#
+#    FactionInvasion.WinnerGraceMinutes
+#        If the winning player is offline, the chest opens to everyone after
+#        this many minutes instead of being wasted.
+#        Default: 10
+#
+FactionInvasion.WinnerGraceMinutes = 10
+
+#
+#    FactionInvasion.Announce
+#        1 = announce the start and end of an event to the players in the
+#        zone. 0 = the add-on marker still works, the chat line is silent.
+#        Default: 1
+#
+FactionInvasion.Announce = 1
+
+#
+#    FactionInvasion.Debug
+#        1 = log every spawn, loot replacement and chest decision at debug
+#        level.
+#        Default: 0
+#
+FactionInvasion.Debug = 0

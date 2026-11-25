@@ -17,11 +17,12 @@ One artifact, one installer, one host.
 - **Same core.** `github.com/mod-playerbots/azerothcore-wotlk` at the commit in `pins.toml`,
   branch `Playerbot`, with `patches/playerbots-player-centric.patch` applied before configure -
   the same pin and the same patch the arm64 build uses.
-- **Same five modules.** `mod-playerbots`, `mod-creature-gear`, `mod-hardcore`,
-  `mod-survivor` and `mod-mercenaries`, all pinned in `pins.toml`, all compiled
-  statically into the server (`-DMODULES=static`), exactly as on the Thor.
+- **Same modules.** `mod-playerbots`, `mod-creature-gear`, `mod-hardcore`, `mod-survivor`,
+  `mod-runewords`, `mod-creature-affixes`, `mod-faction-invasion` and `mod-mercenaries`, all pinned
+  in `pins.toml`, all compiled statically into the server (`-DMODULES=static`), exactly as on the
+  Thor. `mod-faction-invasion` additionally requires `patches/invasion-stat-scale.patch`.
 - **Same custom SQL.** The loot-bag and portal patches under `sql/custom/db_world/`, the
-  creature-gear dataset, and `mod-survivor`'s container template ride the artifact's `src/` tree,
+  creature-gear dataset, `mod-survivor`'s container template and `mod-faction-invasion`'s theme/roster/loot tables ride the artifact's `src/` tree,
   where the core's DB updater finds them under `SourceDirectory`.
 - **Same client data.** `wowgaming/client-data` v20.0, sha256
   `a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610`, fetched and verified by the

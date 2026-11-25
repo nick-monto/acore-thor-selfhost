@@ -1,0 +1,253 @@
+diff --git a/src/server/game/DataStores/DBCStores.cpp b/src/server/game/DataStores/DBCStores.cpp
+index 5a3c9514b..55b092fb9 100644
+--- a/src/server/game/DataStores/DBCStores.cpp
++++ b/src/server/game/DataStores/DBCStores.cpp
+@@ -770,6 +770,19 @@ void Map2ZoneCoordinates(float& x, float& y, uint32 zone)
+     std::swap(x, y);                                         // client have map coords swapped
+ }
+ 
++bool GetZoneMapBounds(uint32 zoneId, float& left, float& right, float& top, float& bottom)
++{
++    WorldMapAreaEntry const* maEntry = sWorldMapAreaStore.LookupEntry(zoneId);
++    if (!maEntry)
++        return false;
++
++    left = maEntry->y1;
++    right = maEntry->y2;
++    top = maEntry->x1;
++    bottom = maEntry->x2;
++    return true;
++}
++
+ MapDifficulty const* GetMapDifficultyData(uint32 mapId, Difficulty difficulty)
+ {
+     MapDifficultyMap::const_iterator itr = sMapDifficultyMap.find(MAKE_PAIR32(mapId, difficulty));
+diff --git a/src/server/game/DataStores/DBCStores.h b/src/server/game/DataStores/DBCStores.h
+index b39434991..ba74c2dbd 100644
+--- a/src/server/game/DataStores/DBCStores.h
++++ b/src/server/game/DataStores/DBCStores.h
+@@ -48,6 +48,10 @@ ContentLevels GetContentLevelsForMapAndZone(uint32 mapid, uint32 zoneId);
+ void Zone2MapCoordinates(float& x, float& y, uint32 zone);
+ void Map2ZoneCoordinates(float& x, float& y, uint32 zone);
+ 
++// World-space bounds of a zone's own map: left = max world Y, right = min world Y,
++// top = max world X, bottom = min world X. False when the zone has no WorldMapArea row.
++bool GetZoneMapBounds(uint32 zoneId, float& left, float& right, float& top, float& bottom);
++
+ typedef std::map<uint32/*pair32(map, diff)*/, MapDifficulty> MapDifficultyMap;
+ MapDifficulty const* GetMapDifficultyData(uint32 mapId, Difficulty difficulty);
+ MapDifficulty const* GetDownscaledMapDifficultyData(uint32 mapId, Difficulty& difficulty);
+diff --git a/src/server/game/Entities/Creature/Creature.cpp b/src/server/game/Entities/Creature/Creature.cpp
+index 2182bd8d0..8f55dea0d 100644
+--- a/src/server/game/Entities/Creature/Creature.cpp
++++ b/src/server/game/Entities/Creature/Creature.cpp
+@@ -645,7 +645,7 @@ bool Creature::UpdateEntry(uint32 Entry, CreatureData const* data, bool changele
+ 
+     SetMeleeDamageSchool(SpellSchools(cInfo->dmgschool));
+     CreatureBaseStats const* stats = sObjectMgr->GetCreatureBaseStats(GetLevel(), cInfo->unit_class);
+-    float armor = stats->GenerateArmor(cInfo);
++    float armor = stats->GenerateArmor(cInfo) * m_statScale.armor;
+     SetStatFlatModifier(UNIT_MOD_ARMOR,             BASE_VALUE, armor);
+     SetStatFlatModifier(UNIT_MOD_RESISTANCE_HOLY,   BASE_VALUE, float(cInfo->resistance[SPELL_SCHOOL_HOLY]));
+     SetStatFlatModifier(UNIT_MOD_RESISTANCE_FIRE,   BASE_VALUE, float(cInfo->resistance[SPELL_SCHOOL_FIRE]));
+@@ -1522,6 +1522,12 @@ void Creature::SelectLevel(bool changelevel)
+ 
+     sScriptMgr->OnBeforeCreatureSelectLevel(cInfo, this, level);
+ 
++    CreatureStatScale scale;
++    sScriptMgr->OnCreatureCalculateStatScale(this, scale);
++    m_statScale = scale;
++    if (scale.level)
++        level = scale.level;
++
+     if (changelevel)
+         SetLevel(level);
+ 
+@@ -1531,7 +1537,7 @@ void Creature::SelectLevel(bool changelevel)
+     float healthmod = _GetHealthMod(rank);
+ 
+     uint32 basehp = std::max<uint32>(1, stats->GenerateHealth(cInfo));
+-    uint32 health = uint32(basehp * healthmod);
++    uint32 health = uint32(basehp * healthmod * m_statScale.health);
+ 
+     SetCreateHealth(health);
+     SetMaxHealth(health);
+@@ -1539,7 +1545,7 @@ void Creature::SelectLevel(bool changelevel)
+     ResetPlayerDamageReq();
+ 
+     // mana
+-    uint32 mana = stats->GenerateMana(cInfo);
++    uint32 mana = uint32(stats->GenerateMana(cInfo) * m_statScale.mana);
+ 
+     SetCreateMana(mana);
+     SetMaxPower(POWER_MANA, mana);                          //MAX Mana
+@@ -1552,7 +1558,7 @@ void Creature::SelectLevel(bool changelevel)
+ 
+     // damage
+ 
+-    float basedamage = stats->GenerateBaseDamage(cInfo);
++    float basedamage = stats->GenerateBaseDamage(cInfo) * m_statScale.damage;
+ 
+     float weaponBaseMinDamage = basedamage;
+     float weaponBaseMaxDamage = basedamage * 1.5;
+@@ -1566,8 +1572,8 @@ void Creature::SelectLevel(bool changelevel)
+     SetBaseWeaponDamage(RANGED_ATTACK, MINDAMAGE, weaponBaseMinDamage);
+     SetBaseWeaponDamage(RANGED_ATTACK, MAXDAMAGE, weaponBaseMaxDamage);
+ 
+-    SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, stats->AttackPower);
+-    SetStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, stats->RangedAttackPower);
++    SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, stats->AttackPower * m_statScale.damage);
++    SetStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, stats->RangedAttackPower * m_statScale.damage);
+ 
+     sScriptMgr->OnCreatureSelectLevel(cInfo, this);
+ }
+@@ -1612,21 +1618,30 @@ float Creature::_GetDamageMod(int32 Rank)
+ 
+ float Creature::GetSpellDamageMod(int32 Rank)
+ {
++    float rate;
+     switch (Rank)                                           // define rates for each elite rank
+     {
+         case CREATURE_ELITE_NORMAL:
+-            return sWorld->getRate(RATE_CREATURE_NORMAL_SPELLDAMAGE);
++            rate = sWorld->getRate(RATE_CREATURE_NORMAL_SPELLDAMAGE);
++            break;
+         case CREATURE_ELITE_ELITE:
+-            return sWorld->getRate(RATE_CREATURE_ELITE_ELITE_SPELLDAMAGE);
++            rate = sWorld->getRate(RATE_CREATURE_ELITE_ELITE_SPELLDAMAGE);
++            break;
+         case CREATURE_ELITE_RAREELITE:
+-            return sWorld->getRate(RATE_CREATURE_ELITE_RAREELITE_SPELLDAMAGE);
++            rate = sWorld->getRate(RATE_CREATURE_ELITE_RAREELITE_SPELLDAMAGE);
++            break;
+         case CREATURE_ELITE_WORLDBOSS:
+-            return sWorld->getRate(RATE_CREATURE_ELITE_WORLDBOSS_SPELLDAMAGE);
++            rate = sWorld->getRate(RATE_CREATURE_ELITE_WORLDBOSS_SPELLDAMAGE);
++            break;
+         case CREATURE_ELITE_RARE:
+-            return sWorld->getRate(RATE_CREATURE_ELITE_RARE_SPELLDAMAGE);
++            rate = sWorld->getRate(RATE_CREATURE_ELITE_RARE_SPELLDAMAGE);
++            break;
+         default:
+-            return sWorld->getRate(RATE_CREATURE_ELITE_ELITE_SPELLDAMAGE);
++            rate = sWorld->getRate(RATE_CREATURE_ELITE_ELITE_SPELLDAMAGE);
++            break;
+     }
++
++    return rate * m_statScale.spellDamage;
+ }
+ 
+ bool Creature::CreateFromProto(ObjectGuid::LowType guidlow, uint32 Entry, uint32 vehId, CreatureData const* data)
+diff --git a/src/server/game/Entities/Creature/Creature.h b/src/server/game/Entities/Creature/Creature.h
+index b8b3701e5..85c870a75 100644
+--- a/src/server/game/Entities/Creature/Creature.h
++++ b/src/server/game/Entities/Creature/Creature.h
+@@ -43,6 +43,21 @@ class CreatureGroup;
+ typedef std::vector<uint8> CreatureTextRepeatIds;
+ typedef std::unordered_map<uint8, CreatureTextRepeatIds> CreatureTextRepeatGroup;
+ 
++// Per-spawn stat multipliers resolved once in Creature::SelectLevel. A null
++// (all-default) scale is the normal template path; a non-default scale is how
++// dynamic spawns (world events, summons) get level-appropriate health, damage,
++// armor and spell power without changing the creature entry.
++struct CreatureStatScale
++{
++    float health = 1.0f;
++    float mana = 1.0f;
++    float damage = 1.0f;
++    float armor = 1.0f;
++    float spellDamage = 1.0f;
++    float healing = 1.0f;
++    uint8 level = 0;            // 0 = keep the template-rolled level
++};
++
+ class Creature : public Unit, public GridObject<Creature>, public MovableMapObject, public UpdatableMapObject
+ {
+ public:
+@@ -199,6 +214,7 @@ public:
+     void SetCurrentEquipmentId(uint8 id) { m_equipmentId = id; }
+ 
+     float GetSpellDamageMod(int32 Rank);
++    [[nodiscard]] CreatureStatScale const& GetStatScale() const { return m_statScale; }
+ 
+     [[nodiscard]] VendorItemData const* GetVendorItems() const;
+     uint32 GetVendorItemCurrentCount(VendorItem const* vItem);
+@@ -523,6 +539,7 @@ protected:
+ 
+     float m_detectionDistance;
+     uint16 m_LootMode;  // bitmask, default LOOT_MODE_DEFAULT, determines what loot will be lootable
++    CreatureStatScale m_statScale;
+ 
+     float _sparringPct;
+ 
+diff --git a/src/server/game/Entities/Unit/Unit.cpp b/src/server/game/Entities/Unit/Unit.cpp
+index ce188c543..f4c6944de 100644
+--- a/src/server/game/Entities/Unit/Unit.cpp
++++ b/src/server/game/Entities/Unit/Unit.cpp
+@@ -9433,6 +9433,8 @@ uint32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, ui
+ 
+     // use float as more appropriate for negative values and percent applying
+     float heal = float(int32(healamount) + DoneTotal) * DoneTotalMod;
++    if (IsCreature() && !ToCreature()->IsPet())
++        heal *= ToCreature()->GetStatScale().healing;
+     // apply spellmod to Done amount
+ 
+     if (Player* modOwner = GetSpellModOwner())
+diff --git a/src/server/game/Scripting/ScriptDefines/AllCreatureScript.cpp b/src/server/game/Scripting/ScriptDefines/AllCreatureScript.cpp
+index 119809d48..805b9f382 100644
+--- a/src/server/game/Scripting/ScriptDefines/AllCreatureScript.cpp
++++ b/src/server/game/Scripting/ScriptDefines/AllCreatureScript.cpp
+@@ -65,6 +65,16 @@ void ScriptMgr::OnCreatureSelectLevel(CreatureTemplate const* cinfo, Creature* c
+     });
+ }
+ 
++void ScriptMgr::OnCreatureCalculateStatScale(Creature* creature, CreatureStatScale& scale)
++{
++    ASSERT(creature);
++
++    ExecuteScript<AllCreatureScript>([&](AllCreatureScript* script)
++    {
++        script->OnCreatureCalculateStatScale(creature, scale);
++    });
++}
++
+ //bool ScriptMgr::CanCreatureSendListInventory(Player* player, Creature* creature, uint32 vendorEntry)
+ //{
+ //    auto ret = IsValidBoolScript<AllCreatureScript>([&](AllCreatureScript* script)
+diff --git a/src/server/game/Scripting/ScriptDefines/AllCreatureScript.h b/src/server/game/Scripting/ScriptDefines/AllCreatureScript.h
+index 30d1e187a..4aeb22b92 100644
+--- a/src/server/game/Scripting/ScriptDefines/AllCreatureScript.h
++++ b/src/server/game/Scripting/ScriptDefines/AllCreatureScript.h
+@@ -20,6 +20,8 @@
+ 
+ #include "ScriptObject.h"
+ 
++struct CreatureStatScale;
++
+ class AllCreatureScript : public ScriptObject
+ {
+ protected:
+@@ -35,6 +37,11 @@ public:
+     // Called from End of Creature SelectLevel.
+     virtual void OnCreatureSelectLevel(CreatureTemplate const* /*cinfo*/, Creature* /*creature*/) { }
+ 
++    // Called inside Creature::SelectLevel before the level is applied. Fill
++    // `scale` to multiply the template stats for this spawn, or set `level` to
++    // force one. Defaults leave the creature on its template path.
++    virtual void OnCreatureCalculateStatScale(Creature* /*creature*/, CreatureStatScale& /*scale*/) { }
++
+     /**
+      * @brief This hook runs after add creature in world
+      *
+diff --git a/src/server/game/Scripting/ScriptMgr.h b/src/server/game/Scripting/ScriptMgr.h
+index 7f0f30d3c..92093aff6 100644
+--- a/src/server/game/Scripting/ScriptMgr.h
++++ b/src/server/game/Scripting/ScriptMgr.h
+@@ -591,6 +591,7 @@ public: /* AllCreatureScript */
+     //void OnAllCreatureUpdate(Creature* creature, uint32 diff);
+     void OnBeforeCreatureSelectLevel(CreatureTemplate const* cinfo, Creature* creature, uint8& level);
+     void OnCreatureSelectLevel(CreatureTemplate const* cinfo, Creature* creature);
++    void OnCreatureCalculateStatScale(Creature* creature, CreatureStatScale& scale);
+     void OnCreatureSaveToDB(Creature* creature);
+ 
+ public: /* AllGameobjectScript */

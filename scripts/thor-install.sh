@@ -1544,7 +1544,7 @@ fetch_server() {
         step "Building from source (hours - the prebuilt artifact exists to avoid this)"
         if [ "$CHECK" = 1 ]; then
             log "would clone $CORE_REPO@$CORE_COMMIT + $PB_REPO@$PB_COMMIT into $ROOT/src-build and install into $ROOT"
-            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords, modules/mod-creature-affixes, sql/custom/db_world and patches/playerbots-player-centric.patch"
+            log "would fetch $SELF_REPO@$SELF_REF as a tarball for modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords, modules/mod-creature-affixes, modules/mod-faction-invasion, sql/custom/db_world, patches/playerbots-player-centric.patch and patches/invasion-stat-scale.patch"
             return 0
         fi
         local src="$ROOT/src-build"
@@ -1554,6 +1554,7 @@ fetch_server() {
         fetch_self_module "$src/modules" "$src/data/sql"
         apply_playerbots_patch "$src/modules/mod-playerbots" \
             "$src/.thor-patches/playerbots-player-centric.patch"
+        apply_core_patch "$src" "$src/.thor-patches/invasion-stat-scale.patch"
         # -Wno-psabi: GCC >= 10.1 notes every function that passes or returns a class with a
         # zero-sized subobject (a homogeneous aggregate such as std::pair<float, float>), because
         # the C++17 ABI for those changed to match C++14 and objects from older C++17 builds
@@ -1632,6 +1633,15 @@ apply_playerbots_patch() {   # apply_playerbots_patch MODULE-DIR PATCH-FILE
     log "applied player-centric bot distribution patch"
 }
 
+apply_core_patch() {   # apply_core_patch CORE-DIR PATCH-FILE
+    local dest="$1" patch_file="$2"
+    have patch || die "patch is needed to apply the invasion stat-scale patch"
+    [ -f "$patch_file" ] || die "missing invasion stat-scale patch: $patch_file"
+    patch -p1 --batch -d "$dest" < "$patch_file" >/dev/null \
+        || die "cannot apply $patch_file to $dest (core pin changed?)"
+    log "applied invasion stat-scale patch"
+}
+
 fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's module and custom SQL
     local parent="$1" sql_parent="${2:-}"
     have curl || die "curl is needed to fetch the module source (apt-get install curl)"
@@ -1654,8 +1664,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
     tar -xzf "$tarball" --wildcards --strip-components=2 -C "$parent" \
         '*/modules/mod-creature-gear*' '*/modules/mod-hardcore*' \
         '*/modules/mod-survivor*' '*/modules/mod-mercenaries*' '*/modules/mod-runewords*' \
-        '*/modules/mod-creature-affixes*' \
-        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords and modules/mod-creature-affixes out of $SELF_REPO@$SELF_REF"; }
+        '*/modules/mod-creature-affixes*' '*/modules/mod-faction-invasion*' \
+        || { rm -f "$tarball"; die "cannot extract modules/mod-creature-gear, modules/mod-hardcore, modules/mod-survivor, modules/mod-mercenaries, modules/mod-runewords, modules/mod-creature-affixes and modules/mod-faction-invasion out of $SELF_REPO@$SELF_REF"; }
     if [ -n "$sql_parent" ]; then
         # Same strip: "<repo>-<ref>/sql/custom/db_world/..." becomes
         # "<sql_parent>/custom/db_world/...", which is the CUSTOM include the base
@@ -1677,6 +1687,8 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || { rm -f "$tarball"; die "cannot extract patches/ out of $SELF_REPO@$SELF_REF"; }
     [ -f "$patch_parent/playerbots-player-centric.patch" ] \
         || { rm -f "$tarball"; die "$SELF_REPO@$SELF_REF carries no patches/playerbots-player-centric.patch"; }
+    [ -f "$patch_parent/invasion-stat-scale.patch" ] \
+        || { rm -f "$tarball"; die "$SELF_REPO@$SELF_REF carries no patches/invasion-stat-scale.patch"; }
     rm -f "$tarball"
     [ -d "$parent/mod-creature-gear" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-gear (wrong SELF_REF?)"
@@ -1690,7 +1702,9 @@ fetch_self_module() {   # fetch_self_module DEST-PARENT SQL-PARENT - this repo's
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-runewords (wrong SELF_REF?)"
     [ -d "$parent/mod-creature-affixes" ] \
         || die "$SELF_REPO@$SELF_REF carries no modules/mod-creature-affixes (wrong SELF_REF?)"
-    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-survivor, $parent/mod-mercenaries, $parent/mod-runewords and $parent/mod-creature-affixes"
+    [ -d "$parent/mod-faction-invasion" ] \
+        || die "$SELF_REPO@$SELF_REF carries no modules/mod-faction-invasion (wrong SELF_REF?)"
+    log "source at $parent/mod-creature-gear, $parent/mod-hardcore, $parent/mod-survivor, $parent/mod-mercenaries, $parent/mod-runewords, $parent/mod-creature-affixes and $parent/mod-faction-invasion"
     [ -n "$sql_parent" ] && log "custom sql at $sql_parent/custom/db_world"
     return 0
 }
@@ -1885,7 +1899,7 @@ SQL
 write_configs() {
     step "Configuration"
     if [ "$CHECK" = 1 ]; then
-        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-creature-affixes,mod-mercenaries}.conf and $ROOT/logs"
+        log "would write $CONF_DIR/{authserver,worldserver}.conf, $CONF_DIR/modules/{playerbots,mod-creature-gear,mod_hardcore,mod-survivor,mod-runewords,mod-creature-affixes,mod-faction-invasion,mod-mercenaries}.conf and $ROOT/logs"
         return 0
     fi
     [ -n "$BIN_DIR" ] || layout_check
@@ -2241,11 +2255,12 @@ run_checks() {   # run_checks FIX(0|1)
     local sv="$CONF_DIR/modules/mod-survivor.conf"
     local rw="$CONF_DIR/modules/mod-runewords.conf"
     local ca="$CONF_DIR/modules/mod-creature-affixes.conf"
+    local fvi="$CONF_DIR/modules/mod-faction-invasion.conf"
     local pw="$CONF_DIR/modules/mod-mercenaries.conf"
-    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$sv" ] && [ -f "$rw" ] && [ -f "$ca" ] && [ -f "$pw" ]; then
-        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod-survivor.conf, modules/mod-runewords.conf, modules/mod-creature-affixes.conf, modules/mod-mercenaries.conf"
+    if [ -f "$ws" ] && [ -f "$as" ] && [ -f "$pb" ] && [ -f "$cg" ] && [ -f "$hc" ] && [ -f "$sv" ] && [ -f "$rw" ] && [ -f "$ca" ] && [ -f "$fvi" ] && [ -f "$pw" ]; then
+        ok "configs present: worldserver.conf, authserver.conf, modules/playerbots.conf, modules/mod-creature-gear.conf, modules/mod_hardcore.conf, modules/mod-survivor.conf, modules/mod-runewords.conf, modules/mod-creature-affixes.conf, modules/mod-faction-invasion.conf, modules/mod-mercenaries.conf"
     else
-        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod-survivor.conf/modules/mod-runewords.conf/modules/mod-creature-affixes.conf/modules/mod-mercenaries.conf)"
+        bad "configs incomplete (worldserver.conf/authserver.conf/modules/playerbots.conf/modules/mod-creature-gear.conf/modules/mod_hardcore.conf/modules/mod-survivor.conf/modules/mod-runewords.conf/modules/mod-creature-affixes.conf/modules/mod-faction-invasion.conf/modules/mod-mercenaries.conf)"
         if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); warn "rewriting the configs"; write_configs || true; fi
     fi
     local key problems=0
@@ -2409,6 +2424,25 @@ run_checks() {   # run_checks FIX(0|1)
             fi
         fi
     fi
+    if [ -f "$fvi" ] && load_conf_lib 1; then
+        local fvi_default fvi_key fvi_val fvi_bad="" fvi_absent=""
+        for fvi_default in "${FACTION_INVASION_CONF_DEFAULTS[@]}"; do
+            fvi_key="${fvi_default%%=*}"
+            fvi_val="$(conf_get "$fvi" "$fvi_key")"
+            if [ -z "$fvi_val" ]; then fvi_absent="$fvi_absent $fvi_key"
+            elif ! faction_invasion_value_ok "$fvi_key" "$fvi_val"; then fvi_bad="$fvi_bad $fvi_key=$fvi_val"; fi
+        done
+        if [ -z "$fvi_bad" ] && [ -z "$fvi_absent" ]; then
+            ok "mod-faction-invasion.conf: Enable=$(conf_get "$fvi" FactionInvasion.Enable) Chance=$(conf_get "$fvi" FactionInvasion.ChancePercent)% Duration=$(conf_get "$fvi" FactionInvasion.DurationMinutes)m Cooldown=$(conf_get "$fvi" FactionInvasion.CooldownMinutes)m"
+        else
+            if [ -n "$fvi_bad" ]; then bad "mod-faction-invasion.conf: unusable value(s):$fvi_bad"; fi
+            if [ -n "$fvi_absent" ]; then bad "mod-faction-invasion.conf: key(s) the live file predates:$fvi_absent (the artifact ships them; --repair appends the shipped defaults)"; fi
+            if [ "$fix" = 1 ]; then
+                FIXES=$((FIXES + 1))
+                conf_defaults "$fvi" faction_invasion_value_ok mod-faction-invasion.conf "${FACTION_INVASION_CONF_DEFAULTS[@]}"
+            fi
+        fi
+    fi
     if [ -f "$CONF_DIR/modules/mod-mercenaries.conf" ] &&
        { [ -f "$CONF_DIR/modules/mod-pawn.conf" ] || [ -f "$CONF_DIR/modules/mod-pawn.conf.dist" ]; }; then
         # The module was mod-pawn before it was mod-mercenaries. The core loads every modules/*.conf,
@@ -2556,7 +2590,7 @@ run_checks() {   # run_checks FIX(0|1)
             if [ "$fix" = 1 ]; then FIXES=$((FIXES + 1)); ensure_client_data || true; fi
         fi
     done
-    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql" "$SRC_DIR/modules/mod-creature-affixes/data/sql"; do
+    for d in "$SRC_DIR/data/sql" "$SRC_DIR/modules/mod-playerbots/data/sql" "$SRC_DIR/modules/mod-creature-gear/data/sql" "$SRC_DIR/modules/mod-survivor/data/sql" "$SRC_DIR/modules/mod-creature-affixes/data/sql" "$SRC_DIR/modules/mod-faction-invasion/data/sql"; do
         if [ -d "$d" ]; then ok "sql sources: $d"; else
             bad "sql sources missing: $d (the DB updater cannot run)"
             if [ "$fix" = 1 ]; then warn "re-run the install to restore them: bash thor-install.sh --force"; fi

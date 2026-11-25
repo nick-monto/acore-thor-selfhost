@@ -552,6 +552,31 @@ core, so the expected answer is "granted again" with the roll stable), and how t
 reads for a body with one word and one broken pattern. None of it has been exercised in a client or
 on the Thor.
 
+## Part 5e — Prove the faction-invasion module is live
+
+`bash thor-install.sh --status` reports `mod-faction-invasion.conf` with its `Enable`, chance,
+duration and cooldown. The module's SQL is applied with state `MODULE` on the first boot; the
+worldserver log carries `mod-faction-invasion: loaded 10 themes, 20 areas, ... creature-theme entries` when
+the definition tables loaded. If that line is missing, the SQL tree did not reach
+`src/modules/mod-faction-invasion/data/sql`.
+
+In game, a GM can force an event in the current zone:
+
+```
+.invasion start
+.invasion status
+.invasion stop
+```
+
+The start is handed to the map thread, so `start` answers "invasion is starting in <zone>" and the
+mobs appear a tick later. The `Invasion` add-on (installed by the launcher) prints the zone alert
+and draws the circle when the zone map is open; `/inv` jumps the map to the event zone. What
+needs a real client and has not been run: the world-map circle's placement and the minimap arrow's
+rotation at both windowed and full-screen map sizes, the clone's elite dragon frame, and the
+chest's loot window. The server-side acceptance checks are `.invasion status` showing a live wave,
+the log line `wave <id> started`, the mobs conning at the player's level +/-2, the wave emptying
+on death, and the chest at the anchor with the winner's name on it.
+
 ## Part 6 — Prove it with a client before touching the launcher
 
 On a PC with the same 3.3.5a client: set `Data/<locale>/realmlist.wtf` to `set realmlist <thor-lan-ip>`, log in with the account from Part 5. This closes **G3** without any Android-specific risk.

@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     The Windows counterpart of scripts/thor-install.sh: the same realm - the same AzerothCore
-    and mod-playerbots pins, and the five modules that live in this repository - installed
+    and mod-playerbots pins, and the modules that live in this repository - installed
     from acore-server-win64.zip, the artifact .github/workflows/server-win64.yml publishes.
     The client data is fetched and sha256-verified, a portable MySQL 8.4 is unpacked beside it,
     and the configs, the three schemas and the GM account are written exactly the way the Thor
@@ -304,6 +304,24 @@ $CreatureAffixesConfDefaults = @(
     'CreatureAffixes.Size.TinyMax=0.85'
     'CreatureAffixes.Size.GiantMin=1.15'
     'CreatureAffixes.Size.GiantMax=1.30'
+)
+
+# mod-faction-invasion's conf keys with the values its shipped .dist carries. Same contract as the
+# survivor list: only a value outside its range is rewritten, so a deliberate ChancePercent=0
+# (random starts off, the GM command still works) survives a repair.
+$FactionInvasionConfDefaults = @(
+    'FactionInvasion.Enable=1'
+    'FactionInvasion.CheckIntervalSec=60'
+    'FactionInvasion.MinPlayers=1'
+    'FactionInvasion.ChancePercent=5'
+    'FactionInvasion.CooldownMinutes=15'
+    'FactionInvasion.DurationMinutes=10'
+    'FactionInvasion.ChestEntry=5000100'
+    'FactionInvasion.GroundCarrierEntry=15214'
+    'FactionInvasion.ChestLifetimeMinutes=30'
+    'FactionInvasion.WinnerGraceMinutes=10'
+    'FactionInvasion.Announce=1'
+    'FactionInvasion.Debug=0'
 )
 
 # mod-mercenaries's conf keys with the values its shipped .dist carries. Same contract as the
@@ -1358,6 +1376,33 @@ function Test-CreatureAffixesValueOk {
     }
 }
 
+function Test-FactionInvasionValueOk {
+    <# Test-FactionInvasionValueOk KEY VALUE - true when mod-faction-invasion accepts VALUE. #>
+    param(
+        [string]$Key,
+        [string]$Value
+    )
+    if ($Value -notmatch '^[0-9]+$') { return $false }
+    $n = [int64]$Value
+    switch -CaseSensitive ($Key) {
+        { $_ -in @('FactionInvasion.Enable', 'FactionInvasion.Announce', 'FactionInvasion.Debug') } {
+            return ($n -eq 0 -or $n -eq 1)
+        }
+        'FactionInvasion.ChancePercent' { return ($n -ge 0 -and $n -le 100) }
+        'FactionInvasion.CheckIntervalSec' { return ($n -ge 1 -and $n -le 3600) }
+        'FactionInvasion.MinPlayers' { return ($n -ge 1 -and $n -le 40) }
+        'FactionInvasion.CooldownMinutes' { return ($n -ge 0 -and $n -le 1440) }
+        'FactionInvasion.DurationMinutes' { return ($n -ge 1 -and $n -le 120) }
+        { $_ -in @('FactionInvasion.ChestEntry', 'FactionInvasion.GroundCarrierEntry') } {
+            return ($n -ge 1 -and $n -le 10000000)
+        }
+        { $_ -in @('FactionInvasion.ChestLifetimeMinutes', 'FactionInvasion.WinnerGraceMinutes') } {
+            return ($n -ge 0 -and $n -le 1440)
+        }
+        default { return $false }
+    }
+}
+
 function Add-MercenaryPoolKeys {
     <# Add-MercenaryPoolKeys -Live F -Dist F - append the shipped pool keys the live file lacks. #>
     # The pool keys are lists, not scalars, so they stay out of the defaults list: Set-Conf would
@@ -2205,6 +2250,21 @@ function Write-Configs {
             (Get-Conf $ca 'CreatureAffixes.AffixChance'), (Get-Conf $ca 'CreatureAffixes.SizeChance'))
     } else {
         Warn "no $moduleConf\mod-creature-affixes.conf.dist - the artifact was built without the module, creature affixes are unavailable"
+    }
+
+    if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-faction-invasion.conf.dist')) -or
+        (Test-Path -LiteralPath (Join-Path $moduleConf 'mod-faction-invasion.conf'))) {
+        $fvi = Get-ConfPair 'modules\mod-faction-invasion'
+        # The shipped .dist already holds these values; each one is still read back, because a key
+        # the module cannot use is silently replaced by the module's own fallback. Only an
+        # out-of-range value is rewritten, so a deliberate ChancePercent=0 survives a repair.
+        Set-ConfDefaults -File $fvi -Check { param($k, $v) Test-FactionInvasionValueOk -Key $k -Value $v } `
+            -Label 'mod-faction-invasion.conf' -Defaults $FactionInvasionConfDefaults
+        Log ("mod-faction-invasion.conf: Enable={0} Chance={1}% Duration={2}m Cooldown={3}m" -f `
+            (Get-Conf $fvi 'FactionInvasion.Enable'), (Get-Conf $fvi 'FactionInvasion.ChancePercent'), `
+            (Get-Conf $fvi 'FactionInvasion.DurationMinutes'), (Get-Conf $fvi 'FactionInvasion.CooldownMinutes'))
+    } else {
+        Warn "no $moduleConf\mod-faction-invasion.conf.dist - the artifact was built without the module, faction invasions are unavailable"
     }
 
     if ((Test-Path -LiteralPath (Join-Path $moduleConf 'mod-mercenaries.conf.dist')) -or
@@ -3295,14 +3355,15 @@ function Invoke-Checks {
     $sv = Join-Path $moduleConf 'mod-survivor.conf'
     $rw = Join-Path $moduleConf 'mod-runewords.conf'
     $ca = Join-Path $moduleConf 'mod-creature-affixes.conf'
+    $fvi = Join-Path $moduleConf 'mod-faction-invasion.conf'
     $pw = Join-Path $moduleConf 'mod-mercenaries.conf'
-    $confFiles = @($ws, $as, $pb, $cg, $hc, $sv, $rw, $ca, $pw)
+    $confFiles = @($ws, $as, $pb, $cg, $hc, $sv, $rw, $ca, $fvi, $pw)
     $confMissing = @()
     foreach ($file in $confFiles) {
         if (-not (Test-Path -LiteralPath $file)) { $confMissing += $file }
     }
     if ($confMissing.Count -eq 0) {
-        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod-survivor.conf, modules\mod-runewords.conf, modules\mod-creature-affixes.conf, modules\mod-mercenaries.conf'
+        Ok 'configs present: worldserver.conf, authserver.conf, modules\playerbots.conf, modules\mod-creature-gear.conf, modules\mod_hardcore.conf, modules\mod-survivor.conf, modules\mod-runewords.conf, modules\mod-creature-affixes.conf, modules\mod-faction-invasion.conf, modules\mod-mercenaries.conf'
     } else {
         Bad ("configs incomplete, missing: {0}" -f ($confMissing -join ', '))
         if ($Fix) {
@@ -3482,6 +3543,31 @@ function Invoke-Checks {
                 $script:Fixes = $script:Fixes + 1
                 Set-ConfDefaults -File $ca -Check { param($k, $v) Test-CreatureAffixesValueOk -Key $k -Value $v } `
                     -Label 'mod-creature-affixes.conf' -Defaults $CreatureAffixesConfDefaults
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $fvi) {
+        $fviAbsent = @()
+        $fviBad = @()
+        foreach ($default in $FactionInvasionConfDefaults) {
+            $eq = $default.IndexOf('=')
+            $key = $default.Substring(0, $eq)
+            $value = Get-Conf $fvi $key
+            if ($value -eq '') { $fviAbsent += $key }
+            elseif (-not (Test-FactionInvasionValueOk -Key $key -Value $value)) { $fviBad += ("{0}={1}" -f $key, $value) }
+        }
+        if ($fviAbsent.Count -eq 0 -and $fviBad.Count -eq 0) {
+            Ok ("mod-faction-invasion.conf: Enable={0} Chance={1}% Duration={2}m Cooldown={3}m" -f `
+                (Get-Conf $fvi 'FactionInvasion.Enable'), (Get-Conf $fvi 'FactionInvasion.ChancePercent'), `
+                (Get-Conf $fvi 'FactionInvasion.DurationMinutes'), (Get-Conf $fvi 'FactionInvasion.CooldownMinutes'))
+        } else {
+            if ($fviBad.Count -gt 0) { Bad ("mod-faction-invasion.conf: unusable value(s): {0}" -f ($fviBad -join ' ')) }
+            if ($fviAbsent.Count -gt 0) { Bad ("mod-faction-invasion.conf: key(s) the live file predates: {0} (--Repair appends the shipped defaults)" -f ($fviAbsent -join ' ')) }
+            if ($Fix) {
+                $script:Fixes = $script:Fixes + 1
+                Set-ConfDefaults -File $fvi -Check { param($k, $v) Test-FactionInvasionValueOk -Key $k -Value $v } `
+                    -Label 'mod-faction-invasion.conf' -Defaults $FactionInvasionConfDefaults
             }
         }
     }
@@ -3668,6 +3754,7 @@ function Invoke-Checks {
         (Join-Path $script:SrcDir 'modules\mod-creature-gear\data\sql')
         (Join-Path $script:SrcDir 'modules\mod-survivor\data\sql')
         (Join-Path $script:SrcDir 'modules\mod-creature-affixes\data\sql')
+        (Join-Path $script:SrcDir 'modules\mod-faction-invasion\data\sql')
     )
     foreach ($path in $sqlSources) {
         if (Test-Path -LiteralPath $path) {
