@@ -842,10 +842,10 @@ namespace
         return true;
     }
 
-    // -------------------------------------------------------------------
-    // GM surface
-    // -------------------------------------------------------------------
+}
 
+namespace FactionInvasion
+{
     std::string Status()
     {
         std::lock_guard<std::mutex> guard(_mutex);
@@ -858,10 +858,7 @@ namespace
                                    event.themeName, event.zoneId, event.mapId,
                                    event.totalMobs, event.totalElites, event.alive.size(), remaining);
     }
-}
 
-namespace FactionInvasion
-{
     Config& GetConfig()
     {
         return _config;
